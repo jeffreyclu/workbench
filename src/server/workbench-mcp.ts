@@ -22,7 +22,7 @@ import { LOGQL_PRESETS, type ConnectorLogsInput, type FailureSummaryInput, type 
 import { summarizeWorkItemChanges } from './activity-log.js';
 import { projectKey } from '../shared/project-name.js';
 import { sharedTurnKindForMessage } from './shared-room.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, selectDurableMemoryEvidence } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, isPersonalLongTermMemoryRequest, selectDurableMemoryEvidence } from './memory-retrieval.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
 
@@ -35,7 +35,7 @@ const plannedTaskSchema = z.object({
   description: z.string().max(20_000),
   workspacePath: z.string().trim().max(1_000).nullable().default(null),
 });
-const memorySourceSchema = z.enum(['conversation', 'message', 'activity', 'run_instructions', 'run_output', 'run_error', 'work_item', 'doc', 'audit']);
+const memorySourceSchema = z.enum(['conversation', 'message', 'activity', 'run_instructions', 'run_output', 'run_error', 'work_item', 'artifact', 'doc', 'audit']);
 
 const readOnlyAnnotations = {
   readOnlyHint: true,
@@ -244,10 +244,10 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       query: z.string().trim().min(2).max(1_000).describe('A focused semantic query describing the decision, implementation, failure, constraint, preference, or related work to recall.'),
       scope: z.enum(['auto', 'conversation', 'task', 'project', 'all']).default('auto').describe('auto prefers project-wide history when a project can be inferred, then conversation/task context, then all memory. Choose all for genuinely cross-project recall.'),
       conversationId: z.string().uuid().optional().describe('Current conversation handle from the task prompt. Required for conversation scope.'),
-      messageId: z.string().uuid().optional().describe('Current assistant reply handle from the task prompt. Pass this for a conversation reply so Workbench can show the query and results in that bubble\'s RAG badge.'),
+      messageId: z.string().uuid().optional().describe('Current assistant reply handle from the task prompt. Pass this for a conversation reply so Workbench can show the query and results in that bubble\'s memory badge.'),
       workItemId: z.string().uuid().optional().describe('Current work-item handle from the task prompt. Required for task scope and usable to infer project scope.'),
       projectName: z.string().trim().min(1).max(200).optional().describe('Current project name from the task prompt. Required for project scope unless workItemId or a linked conversation supplies it.'),
-      sources: z.array(memorySourceSchema).min(1).max(9).optional().describe('Optional source restriction. Omit for the normal durable corpus; include audit only when operational mutation history specifically matters.'),
+      sources: z.array(memorySourceSchema).min(1).max(10).optional().describe('Optional source restriction. Omit for the normal durable corpus; include audit only when operational mutation history specifically matters.'),
       limit: z.number().int().min(1).max(50).default(8),
     },
     annotations: readOnlyAnnotations,
@@ -276,12 +276,13 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       conversationId: appliedScope === 'conversation' ? conversationId : undefined,
       workItemId: appliedScope === 'task' ? contextualItem?.id : undefined,
       sources: sources ?? [...DEFAULT_DURABLE_MEMORY_SOURCES],
+      importanceProfile: isPersonalLongTermMemoryRequest(query) ? 'personal' : 'default',
     });
     const results = selectDurableMemoryEvidence(candidates, conversationId, limit);
     if (message) {
       repository.updateSharedMessage(message.id, {
         retrievedMemoryCount: results.length,
-        retrievedMemoryDetail: { query, items: results.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })) },
+        retrievedMemoryDetail: { query, items: results.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })) },
       });
     }
     return {

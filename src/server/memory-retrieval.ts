@@ -8,6 +8,7 @@ export const DEFAULT_DURABLE_MEMORY_SOURCES = [
   'run_output',
   'run_error',
   'work_item',
+  'artifact',
   'doc',
 ] as const;
 
@@ -20,6 +21,7 @@ export interface DurableMemoryEvidence {
   conversationId: string | null;
   workItemId: string | null;
   actor: string | null;
+  retrievalPath?: string[];
 }
 
 const EXPLICIT_MEMORY_REQUEST = /\b(?:memory|memories|remember|recall|recalled|prior context|previous context|conversation history|what (?:do|did) you know about|know about me|about jeffrey|my (?:background|bio(?:graphy)?|profile|preferences|history)|self[- ]review|performance review|staff promo(?:tion)?|promotion (?:case|packet|review)|accomplishments?|career (?:history|story)|impact (?:summary|over time)|(?:intro(?:duction)?|introduce).*(?:me|jeffrey))\b/i;

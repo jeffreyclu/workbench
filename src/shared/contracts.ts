@@ -1210,7 +1210,7 @@ export interface SharedMessage {
   queuePriority?: number;
   /** Activity-feed boundary captured when this interjection reached a live reply. */
   interjectionStreamOffset?: number | null;
-  /** Number of memory matches retrieved from RAG for this reply's prompt, or null if retrieval was not run (e.g. the human's own message). */
+  /** Number of memory matches retrieved through hybrid search and graph expansion, or null when retrieval did not run. */
   retrievedMemoryCount: number | null;
   /** Execution type this reply was dispatched under (research/analysis/strategy/execute/review/bugfix), set for both linked and standalone conversations. Null for messages created before this field existed, or for non-agent messages (e.g. jeffrey's own turns, system notices). */
   kind?: z.infer<typeof runKindSchema> | null;
@@ -1247,10 +1247,10 @@ export const createSessionFeedbackSchema = z.object({
   rating: z.enum(['positive', 'neutral', 'negative']),
 }).refine((input) => input.conversationId || input.workItemId, { message: 'A conversation or task is required.' });
 
-/** The exact RAG query and matches behind a reply's retrievedMemoryCount, fetched on demand when the memory badge is clicked. */
+/** The exact memory query and matches behind a reply's retrievedMemoryCount, fetched on demand when the memory badge is clicked. */
 export interface RetrievedMemoryDetail {
   query: string;
-  items: Array<{ source: string; title: string; body: string; createdAt: string }>;
+  items: Array<{ source: string; title: string; body: string; createdAt: string; retrievalPath?: string[] }>;
 }
 export interface PublishedArtifact { id: string; url: string; title: string; }
 

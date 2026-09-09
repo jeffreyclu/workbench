@@ -132,7 +132,7 @@ async function preflightCandidate(): Promise<void> {
   const backup = spawnSync('sqlite3', [databasePath, `.backup ${copiedDatabase}`], { encoding: 'utf8' });
   if (backup.status !== 0) throw new Error(`Could not copy the live database for promotion preflight: ${backup.stderr || backup.stdout}`);
   const port = 46_000 + (process.pid % 1_000);
-  const child = spawn(join(root, 'node_modules/.bin/tsx'), [join(root, 'src/server/index.ts')], {
+  const child = spawn(join(root, 'node_modules/.bin/tsx'), [join(root, 'scripts/runtime-preflight-api.ts')], {
     cwd: root,
     env: { ...process.env, PORT: String(port), DATABASE_PATH: copiedDatabase, WORKBENCH_CLIENT_PATH: join(root, 'dist/client') },
     stdio: 'ignore',

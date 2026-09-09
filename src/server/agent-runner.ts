@@ -18,7 +18,7 @@ import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
 
 export type CliAgent = Exclude<AgentRun['agent'], 'palmyra'>;
@@ -1914,6 +1914,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         refresh: false,
         projectKey: !isExplicitMemoryRequest(run.instructions) && item.projectName ? projectKey(item.projectName) || undefined : undefined,
         sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
+        importanceProfile: isPersonalLongTermMemoryRequest(run.instructions) ? 'personal' : 'default',
       }).then((candidates) => selectDurableMemoryEvidence(candidates, run.conversationId, memoryPlan.evidenceLimit)).catch((error) => {
         console.error('[agent-runner] automatic durable-memory retrieval failed; continuing without it', error);
         return [];
@@ -1942,7 +1943,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       retrievedMemoryCount: memoryEvidence.length,
       retrievedMemoryDetail: memoryEvidence.length ? {
         query: memoryQuery,
-        items: memoryEvidence.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })),
+        items: memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
       } : null,
     });
     if (resumesSession) repository.addActivity(item.id, 'system', 'progress', `Resuming ${run.agent === 'palmyra' ? 'Palmyra context' : 'Claude session'} with bounded continuation context.`);

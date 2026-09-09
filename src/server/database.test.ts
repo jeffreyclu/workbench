@@ -91,6 +91,7 @@ const EXPECTED_MIGRATIONS = [
   '075_shared_conversation_ai_provider',
   '076_palmyra_agent_records',
   '077_shared_conversation_palmyra_context',
+  '078_knowledge_graph',
 ];
 
 describe('openDatabase', () => {
@@ -128,7 +129,7 @@ describe('openDatabase', () => {
     const path = join(directory, 'workbench.db');
     const first = openDatabase(path);
     const second = openDatabase(path);
-    expect(first.prepare('PRAGMA busy_timeout').get()).toEqual({ timeout: 1000 });
+    expect(first.prepare('PRAGMA busy_timeout').get()).toEqual({ timeout: 5000 });
     first.exec('BEGIN IMMEDIATE');
     second.exec('PRAGMA busy_timeout = 1');
     expect(() => second.prepare("UPDATE queue_versions SET version = version + 1 WHERE stack = 'attention'").run()).toThrow(/busy|locked/i);
@@ -839,6 +840,32 @@ describe('openDatabase', () => {
     const conversation = repository.createConversation('Persistent Palmyra context');
     repository.setConversationPalmyraContext(conversation.id, '[{"role":"user","content":"resume me"}]');
     expect(repository.getConversationPalmyraContext(conversation.id)).toContain('resume me');
+    upgraded.close();
+  });
+
+  it('adds and backfills the knowledge graph when upgrading from migration 077', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    const repository = new WorkItemRepository(current);
+    const task = repository.create({ title: 'Knowledge graph migration', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Knowledge graph migration', task.id);
+    const message = repository.createSharedMessage('jeffrey', 'Preserve canonical truth.', 'completed', conversation.id);
+    const triggers = current.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'knowledge_graph_%'").all() as Array<{ name: string }>;
+    for (const trigger of triggers) current.exec(`DROP TRIGGER ${trigger.name};`);
+    current.exec('DROP TABLE knowledge_graph_edges; DROP TABLE knowledge_graph_nodes;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '078_knowledge_graph'").run();
+    expect(current.prepare("SELECT id FROM schema_migrations WHERE id = '077_shared_conversation_palmyra_context'").get()).toBeTruthy();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT source_table, source_id FROM knowledge_graph_nodes WHERE id = ?").get(`message:${message.id}`))
+      .toEqual({ source_table: 'shared_messages', source_id: message.id });
+    expect(upgraded.prepare("SELECT relation FROM knowledge_graph_edges WHERE from_node_id = ? AND to_node_id = ?").get(`message:${message.id}`, `conversation:${conversation.id}`))
+      .toEqual({ relation: 'in_conversation' });
+    expect(upgraded.prepare("SELECT relation FROM knowledge_graph_edges WHERE from_node_id = ? AND to_node_id = ?").get(`conversation:${conversation.id}`, `work_item:${task.id}`))
+      .toEqual({ relation: 'linked_to_task' });
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '078_knowledge_graph'").get()).toBeTruthy();
     upgraded.close();
   });
 

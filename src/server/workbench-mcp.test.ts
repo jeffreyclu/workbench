@@ -190,7 +190,7 @@ describe('Workbench MCP', () => {
       repository.createSharedMessage('jeffrey', 'The RAG badge must show the retrieved result.', 'completed', conversation.id);
       const reply = repository.createSharedMessage('codex', '', 'running', conversation.id);
 
-      const recalled = await callData<{ results: Array<{ source: string; title: string; body: string; createdAt: string }> }>('recall_context', {
+      const recalled = await callData<{ results: Array<{ source: string; title: string; body: string; createdAt: string; retrievalPath?: string[] }> }>('recall_context', {
         query: 'RAG badge retrieved result',
         scope: 'conversation',
         conversationId: conversation.id,
@@ -202,7 +202,7 @@ describe('Workbench MCP', () => {
       expect(repository.getSharedMessageById(reply.id)?.retrievedMemoryCount).toBe(recalled.results.length);
       expect(repository.getRetrievedMemoryDetail(reply.id)).toEqual({
         query: 'RAG badge retrieved result',
-        items: recalled.results.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })),
+        items: recalled.results.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
       });
     } finally {
       setEmbedder(null);

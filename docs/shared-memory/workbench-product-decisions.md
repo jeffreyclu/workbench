@@ -1297,6 +1297,35 @@ window than routine RAG so work executed over time is represented instead of
 being cut down to the ordinary eight-result prompt. This policy applies equally
 to Codex, Claude/Opus, and Palmyra.
 
+### The knowledge graph is a derived SQLite index, never a second source of truth
+
+*Decision from Jeffrey, 2026-09-09.* Workbench's canonical task, project,
+conversation, message, activity, run, audit, and artifact rows remain the only
+durable truth. `knowledge_graph_nodes` stores stable references to those rows,
+not copied bodies, and `knowledge_graph_edges` stores deterministic typed
+relationships. SQLite triggers update canonical rows and graph relationships
+in the same transaction, so there is no sequential dual-write gap.
+
+Memory reads combine the existing FTS5/vector result set with a bounded
+two-hop graph expansion. Graph candidates resolve back through
+`memory_documents`; graph failure returns the original hybrid results. The
+retrieval-detail dialog shows the relationship path that caused each result to
+be included. Active-conversation files remain the first, bounded short-term
+context layer and are not copied into durable graph truth.
+
+Lexical and semantic candidate generation apply source, project, task, and
+conversation scope before either top-candidate cutoff. BM25 ranks significant
+request/context terms instead of requiring every appended context word, while
+semantic ranking preserves both the primary request and the enriched query.
+Direct results use
+reciprocal-rank fusion plus bounded source-authority, lexical-coverage,
+recency, structured-corroboration, and personal-memory weights. Relationship
+expansion prefers task evidence and conversation links over broad same-project
+links, decays at every hop, and retains only the best path to a node. Final
+selection reserves the strongest direct matches, then reduces repetition by
+task, conversation, source, and calendar quarter so historical reviews cover
+distinct work instead of returning many versions of one event.
+
 ### Response-formatting mechanics stay internal
 
 *Correction from Jeffrey, 2026-09-08.* Formatting is internal runtime state and

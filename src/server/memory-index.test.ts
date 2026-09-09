@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
-import { chunkText, indexPendingMemory, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, reciprocalRankFusion, searchMemory, setEmbedder } from './memory-index.js';
+import { buildMemoryFtsMatchQuery, chunkText, collectMemoryDocuments, diversifyMemoryResults, indexPendingMemory, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, reciprocalRankFusion, searchMemory, setEmbedder, type MemorySearchResult } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
+import { WorkItemRepository } from './repository.js';
 
 describe('chunkText', () => {
   it('returns no chunks for empty or whitespace-only text', () => {
@@ -66,6 +67,13 @@ describe('memory retrieval candidate pool', () => {
   });
 });
 
+describe('buildMemoryFtsMatchQuery', () => {
+  it('lets BM25 rank significant terms instead of requiring every context word', () => {
+    expect(buildMemoryFtsMatchQuery('quartz rollout\nRelevant prior decisions constraints and preferences'))
+      .toBe('"quartz" OR "rollout" OR "decisions" OR "constraints" OR "preferences"');
+  });
+});
+
 describe('indexPendingMemory / searchMemory (stubbed embedder, no model download)', () => {
   let database: WorkbenchDatabase;
 
@@ -79,11 +87,18 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     setEmbedder(null);
   });
 
-  function insertDocument(id: string, source: string, title: string, body: string, workItemId: string | null = null): void {
+  function insertDocument(
+    id: string,
+    source: string,
+    title: string,
+    body: string,
+    workItemId: string | null = null,
+    options: { conversationId?: string | null; actor?: string | null; createdAt?: string } = {},
+  ): void {
     database.prepare(`
       INSERT INTO memory_documents (id, source, source_id, conversation_id, work_item_id, actor, title, body, created_at, content_hash, indexed_at)
-      VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, NULL)
-    `).run(id, source, id, workItemId, title, body, new Date().toISOString(), `hash-${id}`);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    `).run(id, source, id, options.conversationId ?? null, workItemId, options.actor ?? null, title, body, options.createdAt ?? new Date().toISOString(), `hash-${id}`);
   }
 
   it('chunks, embeds, and marks pending documents as indexed', async () => {
@@ -115,6 +130,73 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     expect(results[0]?.sourceId).toBe('doc-1');
   });
 
+  it('retrieves lexically when an expanded durable query contains unmatched context words', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setEmbedder(async () => { throw new Error('semantic retrieval unavailable'); });
+    try {
+      insertDocument('lexical-only', 'doc', 'Quartz rollout', 'The quartz rollout shipped safely.');
+      await indexPendingMemory(database);
+
+      const results = await searchMemory(database, 'quartz rollout\nRelevant prior decisions constraints preferences ownership');
+
+      expect(results[0]?.sourceId).toBe('lexical-only');
+    } finally {
+      logged.mockRestore();
+      setEmbedder(deterministicTestEmbedder);
+    }
+  });
+
+  it('falls back to hybrid results when graph expansion is unavailable', async () => {
+    insertDocument('doc-1', 'message', 'Runbook', 'Restart the scheduler safely.');
+    await indexPendingMemory(database);
+    database.exec('DROP TABLE knowledge_graph_edges; DROP TABLE knowledge_graph_nodes;');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const results = await searchMemory(database, 'restart scheduler');
+
+    expect(results[0]?.sourceId).toBe('doc-1');
+    expect(logged).toHaveBeenCalledWith('[knowledge-graph] expansion unavailable; using hybrid retrieval only', expect.anything());
+    logged.mockRestore();
+  });
+
+  it('merges graph neighbors with hybrid matches while returning canonical memory content', async () => {
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Graph-assisted retrieval', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Graph-assisted retrieval', task.id);
+    const seed = repository.createSharedMessage('jeffrey', 'Investigate nebulafalcon failures.', 'completed', conversation.id);
+    const related = repository.createSharedMessage('claude', 'Use the cursor-pagination decision.', 'completed', conversation.id);
+    collectMemoryDocuments(database, { docRoots: [] });
+    await indexPendingMemory(database);
+    database.prepare("DELETE FROM memory_chunks WHERE document_id = (SELECT id FROM memory_documents WHERE source = 'message' AND source_id = ?)").run(related.id);
+
+    const results = await searchMemory(database, 'nebulafalcon', { sources: ['message'], limit: 10 });
+    const graphResult = results.find((result) => result.sourceId === related.id);
+
+    expect(results.find((result) => result.sourceId === seed.id)?.retrievalPath).toEqual(['Matched request']);
+    expect(graphResult?.snippet).toContain('cursor-pagination');
+    expect(graphResult?.retrievalPath).toEqual(['Matched request', 'Same conversation']);
+  });
+
+  it('removes revoked artifacts from the memory index on the next collection', async () => {
+    const publishedAt = '2026-09-09T12:00:00.000Z';
+    database.prepare(`
+      INSERT INTO published_artifacts (id, source_path, title, public_url, published_at)
+      VALUES ('artifact-1', '/tmp/review.md', 'Promotion evidence', 'https://example.test/review', ?)
+    `).run(publishedAt);
+    collectMemoryDocuments(database, { docRoots: [] });
+    await indexPendingMemory(database);
+
+    expect(database.prepare("SELECT source_id FROM memory_documents WHERE source = 'artifact'").get())
+      .toMatchObject({ source_id: 'artifact-1' });
+
+    database.prepare('UPDATE published_artifacts SET revoked_at = ? WHERE id = ?').run('2026-09-09T13:00:00.000Z', 'artifact-1');
+    collectMemoryDocuments(database, { docRoots: [] });
+
+    expect(database.prepare("SELECT source_id FROM memory_documents WHERE source = 'artifact'").get()).toBeUndefined();
+    expect(database.prepare("SELECT COUNT(*) AS count FROM memory_chunks WHERE document_id NOT IN (SELECT id FROM memory_documents)").get())
+      .toEqual({ count: 0 });
+  });
+
   it('filters results down to the requested sources', async () => {
     insertDocument('doc-1', 'doc', 'Runbook', 'Restart the scheduler by running npm run runtime:start.');
     insertDocument('msg-1', 'message', 'Chat', 'Please restart the scheduler now.');
@@ -138,6 +220,124 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     const results = await searchMemory(database, 'duplicate fetches', { projectKey: 'connectors' });
 
     expect(results.map((result) => result.sourceId)).toEqual(['connectors-memory']);
+  });
+
+  it('applies project scope before the lexical and semantic top-400 candidate cutoffs', async () => {
+    const timestamp = '2026-09-09T00:00:00.000Z';
+    database.prepare(`INSERT INTO work_items (id, title, queue_position, project_name, project_key, created_at, updated_at, last_touched_at)
+      VALUES ('target-task', 'Target task', 1, 'Target', 'target', ?, ?, ?),
+             ('noise-task', 'Noise task', 2, 'Noise', 'noise', ?, ?, ?)`)
+      .run(timestamp, timestamp, timestamp, timestamp, timestamp, timestamp);
+    for (let index = 0; index <= MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE; index += 1) {
+      insertDocument(`noise-${index}`, 'message', 'Outside project', 'rare scoped needle', 'noise-task');
+    }
+    insertDocument('inside-project', 'message', 'Inside project', 'rare scoped needle', 'target-task');
+    await indexPendingMemory(database, { limit: 5_000 });
+
+    const results = await searchMemory(database, 'rare scoped needle', { projectKey: 'target', limit: 10 });
+
+    expect(results.map((result) => result.sourceId)).toEqual(['inside-project']);
+  });
+
+  it('applies hard scope before semantic ranking when lexical search has no matches', async () => {
+    setEmbedder(async (texts) => texts.map(() => Float32Array.from([1, 0])));
+    try {
+      const timestamp = '2026-09-09T00:00:00.000Z';
+      database.prepare(`INSERT INTO work_items (id, title, queue_position, project_name, project_key, created_at, updated_at, last_touched_at)
+        VALUES ('semantic-target-task', 'Semantic target', 1, 'Semantic Target', 'semantic-target', ?, ?, ?),
+               ('semantic-noise-task', 'Semantic noise', 2, 'Semantic Noise', 'semantic-noise', ?, ?, ?)`)
+        .run(timestamp, timestamp, timestamp, timestamp, timestamp, timestamp);
+      for (let index = 0; index <= MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE; index += 1) {
+        insertDocument(`semantic-noise-${index}`, 'message', 'Outside project', `unrelated outside evidence ${index}`, 'semantic-noise-task');
+      }
+      insertDocument('semantic-inside-project', 'message', 'Inside project', 'the remembered material', 'semantic-target-task');
+      await indexPendingMemory(database, { limit: 5_000 });
+
+      const results = await searchMemory(database, 'find remembered outcome', { projectKey: 'semantic-target', limit: 10 });
+
+      expect(results.map((result) => result.sourceId)).toEqual(['semantic-inside-project']);
+    } finally {
+      setEmbedder(deterministicTestEmbedder);
+    }
+  });
+
+  it('keeps the primary request stronger than appended semantic context', async () => {
+    setEmbedder(async (texts) => texts.map((text) => {
+      if (text === 'first payload' || text === 'remember outcome') return Float32Array.from([1, 0]);
+      return Float32Array.from([0, 1]);
+    }));
+    try {
+      insertDocument('primary-evidence', 'message', 'Primary evidence', 'first payload');
+      insertDocument('context-evidence', 'message', 'Context evidence', 'second payload');
+      await indexPendingMemory(database);
+
+      const results = await searchMemory(database, 'remember outcome\nsecondary context expansion', { limit: 10 });
+
+      expect(results[0]?.sourceId).toBe('primary-evidence');
+    } finally {
+      setEmbedder(deterministicTestEmbedder);
+    }
+  });
+
+  it('prioritizes Jeffrey-authored evidence for personal-memory questions', async () => {
+    insertDocument('agent-claim', 'run_output', 'Career history', 'Led the connector reliability launch.', null, {
+      actor: 'claude', createdAt: '2026-09-09T00:00:00.000Z',
+    });
+    insertDocument('jeffrey-claim', 'message', 'Career history', 'Led the connector reliability launch.', null, {
+      actor: 'jeffrey', createdAt: '2024-09-09T00:00:00.000Z',
+    });
+    await indexPendingMemory(database);
+
+    const results = await searchMemory(database, 'connector reliability launch', { importanceProfile: 'personal', limit: 10 });
+
+    expect(results[0]?.sourceId).toBe('jeffrey-claim');
+    expect(results[0]!.score).toBeGreaterThan(results.find((result) => result.sourceId === 'agent-claim')!.score);
+  });
+
+  it('uses recency to break otherwise comparable evidence rankings', async () => {
+    insertDocument('old-evidence', 'message', 'Rollout evidence', 'Shipped the atlas rollout.', null, { createdAt: '2019-01-01T00:00:00.000Z' });
+    insertDocument('new-evidence', 'message', 'Rollout evidence', 'Shipped the atlas rollout.', null, { createdAt: new Date().toISOString() });
+    await indexPendingMemory(database);
+
+    const results = await searchMemory(database, 'atlas rollout', { limit: 10 });
+
+    expect(results[0]?.sourceId).toBe('new-evidence');
+  });
+
+  it('boosts evidence corroborated by another source on the same task', async () => {
+    const timestamp = new Date().toISOString();
+    database.prepare(`INSERT INTO work_items (id, title, queue_position, project_name, project_key, created_at, updated_at, last_touched_at)
+      VALUES ('solo-task', 'Solo evidence', 1, 'Workbench', 'workbench', ?, ?, ?),
+             ('corroborated-task', 'Corroborated evidence', 2, 'Workbench', 'workbench', ?, ?, ?)`)
+      .run(timestamp, timestamp, timestamp, timestamp, timestamp, timestamp);
+    insertDocument('solo-message', 'message', 'Launch evidence', 'Delivered the quartz launch.', 'solo-task');
+    insertDocument('corroborated-message', 'message', 'Launch evidence', 'Delivered the quartz launch.', 'corroborated-task');
+    insertDocument('corroborating-activity', 'activity', 'Launch evidence', 'Validated the quartz launch.', 'corroborated-task');
+    await indexPendingMemory(database);
+
+    const results = await searchMemory(database, 'quartz launch', { limit: 10 });
+    const solo = results.find((result) => result.sourceId === 'solo-message');
+    const corroborated = results.find((result) => result.sourceId === 'corroborated-message');
+
+    expect(corroborated!.score).toBeGreaterThan(solo!.score);
+  });
+
+  it('protects direct matches while diversifying the remaining results across task and time', () => {
+    const result = (sourceId: string, score: number, overrides: Partial<MemorySearchResult> = {}): MemorySearchResult => ({
+      source: 'message', sourceId, title: sourceId, snippet: sourceId, createdAt: '2026-09-01T00:00:00.000Z',
+      conversationId: 'conversation-a', workItemId: 'task-a', actor: 'jeffrey', score, retrievalPath: ['Matched request'],
+      ...overrides,
+    });
+    const diversified = diversifyMemoryResults([
+      result('graph-result', 2, { retrievalPath: ['Matched request', 'Same project'] }),
+      result('strong-direct', 1),
+      result('same-task', 0.99),
+      result('different-period', 0.97, {
+        source: 'artifact', conversationId: 'conversation-b', workItemId: 'task-b', createdAt: '2024-01-01T00:00:00.000Z',
+      }),
+    ], 3);
+
+    expect(diversified.map(({ sourceId }) => sourceId)).toEqual(['strong-direct', 'graph-result', 'different-period']);
   });
 
   it('returns no results for a query shorter than the minimum length', async () => {

@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { pipeline } from '@huggingface/transformers';
 import type { WorkbenchDatabase } from './database.js';
 import { buildFtsMatchQuery } from './fts-query.js';
+import { expandKnowledgeGraph } from './knowledge-graph.js';
 
 /**
  * Vectorized, hybrid retrieval over the complete durable Workbench record
@@ -12,7 +13,8 @@ import { buildFtsMatchQuery } from './fts-query.js';
  *
  *  1. `collectMemoryDocuments` upserts one row per durable record (a message,
  *     an activity entry, an agent-run prompt/response/error, an audit entry,
- *     a work item, a doc page) into `memory_documents`, keyed by
+ *     a work item, a published artifact, or a doc page) into
+ *     `memory_documents`, keyed by
  *     (source, source_id) with a content hash so unchanged rows are a no-op.
  *  2. `indexPendingMemory` chunks and embeds whatever has never been embedded
  *     or just changed (`indexed_at IS NULL`), writing `memory_chunks` (+ the
@@ -28,6 +30,15 @@ const EMBED_BATCH_SIZE = 32;
 // occupy many high-ranking chunks; document-level dedup needs enough candidates
 // to still surface distinct conversations, activities, and docs.
 export const MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE = 400;
+
+export type MemorySearchOptions = {
+  limit?: number;
+  sources?: string[];
+  projectKey?: string;
+  conversationId?: string;
+  workItemId?: string;
+  importanceProfile?: 'default' | 'personal';
+};
 
 export type Embedder = (texts: string[]) => Promise<Float32Array[]>;
 
@@ -165,6 +176,32 @@ function nonEmpty(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function memoryScopeClause(options: MemorySearchOptions, alias: string): { sql: string; parameters: string[] } {
+  const clauses: string[] = [];
+  const parameters: string[] = [];
+  const projectKey = options.projectKey?.trim();
+  const conversationId = options.conversationId?.trim();
+  const workItemId = options.workItemId?.trim();
+  const sources = [...new Set(options.sources?.filter(nonEmpty) ?? [])];
+  if (projectKey) {
+    clauses.push(`${alias}.work_item_id IN (SELECT id FROM work_items WHERE project_key = ? AND deleted_at IS NULL)`);
+    parameters.push(projectKey);
+  }
+  if (conversationId) {
+    clauses.push(`${alias}.conversation_id = ?`);
+    parameters.push(conversationId);
+  }
+  if (workItemId) {
+    clauses.push(`${alias}.work_item_id = ?`);
+    parameters.push(workItemId);
+  }
+  if (sources.length) {
+    clauses.push(`${alias}.source IN (${sources.map(() => '?').join(',')})`);
+    parameters.push(...sources);
+  }
+  return { sql: clauses.length ? `AND ${clauses.join(' AND ')}` : '', parameters };
+}
+
 function listMarkdownFiles(root: string): string[] {
   if (!existsSync(root)) return [];
   const found: string[] = [];
@@ -292,18 +329,31 @@ export function collectMemoryDocuments(
     });
   }
 
+  const artifactRows = database.prepare(`
+    SELECT id, title, source_path, public_url, published_at, work_item_id, conversation_id
+    FROM published_artifacts WHERE revoked_at IS NULL
+  `).all() as Array<{ id: string; title: string; source_path: string; public_url: string; published_at: string; work_item_id: string | null; conversation_id: string | null }>;
+  for (const row of artifactRows) {
+    candidates.push({
+      source: 'artifact', sourceId: row.id, conversationId: row.conversation_id, workItemId: row.work_item_id, actor: null,
+      title: row.title, body: [row.title, row.source_path, row.public_url].filter(Boolean).join('\n'), createdAt: row.published_at,
+    });
+  }
+
   const roots = options.docRoots ?? [
     { label: 'workbench-docs', path: options.docsRoot ?? resolve(process.cwd(), 'docs') },
     { label: 'notes', path: resolve(homedir(), 'notes') },
   ];
   for (const root of roots) candidates.push(...collectDocCandidates(root.label, root.path));
 
-  return upsertMemoryDocuments(database, candidates);
+  return upsertMemoryDocuments(database, candidates, new Set(['artifact']));
 }
 
-function upsertMemoryDocuments(database: WorkbenchDatabase, candidates: CandidateDocument[]): { upserted: number } {
-  if (!candidates.length) return { upserted: 0 };
-
+function upsertMemoryDocuments(
+  database: WorkbenchDatabase,
+  candidates: CandidateDocument[],
+  pruneSources: ReadonlySet<string> = new Set(),
+): { upserted: number } {
   const existing = database.prepare('SELECT source, source_id, content_hash, conversation_id, work_item_id, actor, created_at FROM memory_documents').all() as Array<{
     source: string; source_id: string; content_hash: string; conversation_id: string | null; work_item_id: string | null; actor: string | null; created_at: string;
   }>;
@@ -328,6 +378,7 @@ function upsertMemoryDocuments(database: WorkbenchDatabase, candidates: Candidat
   // first since the document row itself is not being deleted (ON DELETE
   // CASCADE does not fire on an UPDATE).
   const clearChunks = database.prepare('DELETE FROM memory_chunks WHERE document_id = (SELECT id FROM memory_documents WHERE source = ? AND source_id = ?)');
+  const deleteDocument = database.prepare('DELETE FROM memory_documents WHERE source = ? AND source_id = ?');
   const updateMetadata = database.prepare(`
     UPDATE memory_documents SET conversation_id = ?, work_item_id = ?, actor = ?, created_at = ?
     WHERE source = ? AND source_id = ?
@@ -336,6 +387,12 @@ function upsertMemoryDocuments(database: WorkbenchDatabase, candidates: Candidat
   let upserted = 0;
   database.exec('BEGIN IMMEDIATE;');
   try {
+    const candidateKeys = new Set(candidates.map((candidate) => `${candidate.source}::${candidate.sourceId}`));
+    for (const row of existing) {
+      if (pruneSources.has(row.source) && !candidateKeys.has(`${row.source}::${row.source_id}`)) {
+        deleteDocument.run(row.source, row.source_id);
+      }
+    }
     for (const candidate of candidates) {
       const hash = createHash('sha256').update(`${candidate.title}::${candidate.body}`).digest('hex');
       const key = `${candidate.source}::${candidate.sourceId}`;
@@ -430,12 +487,160 @@ export type MemorySearchResult = {
   workItemId: string | null;
   actor: string | null;
   score: number;
+  retrievalPath: string[];
 };
 
 type MemoryDocumentRow = {
   id: string; source: string; source_id: string; conversation_id: string | null; work_item_id: string | null;
   actor: string | null; title: string; body: string; created_at: string;
 };
+
+const SOURCE_AUTHORITY: Readonly<Record<string, number>> = {
+  artifact: 1.12,
+  doc: 1.1,
+  activity: 1.08,
+  work_item: 1.08,
+  message: 1.04,
+  conversation: 1,
+  run_output: 0.98,
+  run_instructions: 0.95,
+  run_error: 0.92,
+  audit: 0.9,
+};
+
+const QUERY_STOP_WORDS = new Set([
+  'about', 'after', 'again', 'also', 'and', 'are', 'because', 'been', 'before', 'but', 'can', 'context',
+  'did', 'does', 'for', 'from', 'has', 'have', 'into', 'its', 'more', 'most', 'not', 'our', 'prior',
+  'relevant', 'should', 'that', 'the', 'their', 'then', 'there', 'these', 'this', 'through', 'use', 'was',
+  'were', 'what', 'when', 'where', 'which', 'with', 'work', 'would', 'your',
+]);
+
+function significantTerms(value: string): Set<string> {
+  return new Set((value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+    .filter((term) => term.length >= 3 && !QUERY_STOP_WORDS.has(term)));
+}
+
+/**
+ * Durable-memory queries include the user's words plus task/project context
+ * and a short recall hint. Requiring every word would make FTS nearly empty;
+ * OR lets BM25 reward chunks that match several significant terms while the
+ * database scope remains an independent hard boundary.
+ */
+export function buildMemoryFtsMatchQuery(query: string): string | null {
+  const terms = [...significantTerms(query)].slice(0, 32);
+  if (!terms.length) return buildFtsMatchQuery(query);
+  return terms.map((term) => buildFtsMatchQuery(term)).filter(nonEmpty).join(' OR ') || null;
+}
+
+function lexicalImportanceMultiplier(document: MemoryDocumentRow, query: string): number {
+  const primaryQuery = query.split('\n', 1)[0]?.trim().toLocaleLowerCase() ?? '';
+  if (!primaryQuery) return 1;
+  const searchable = `${document.title}\n${document.body}`.toLocaleLowerCase();
+  const queryTerms = significantTerms(primaryQuery);
+  const documentTerms = significantTerms(searchable);
+  let overlap = 0;
+  for (const term of queryTerms) if (documentTerms.has(term)) overlap += 1;
+  const coverageBoost = queryTerms.size ? Math.min(0.12, (overlap / queryTerms.size) * 0.12) : 0;
+  const phraseBoost = primaryQuery.length >= 8 && searchable.includes(primaryQuery) ? 0.08 : 0;
+  return 1 + coverageBoost + phraseBoost;
+}
+
+function recencyMultiplier(createdAt: string): number {
+  const timestamp = Date.parse(createdAt);
+  if (!Number.isFinite(timestamp)) return 0.96;
+  const ageDays = Math.max(0, (Date.now() - timestamp) / 86_400_000);
+  return 0.92 + (0.08 * Math.exp(-ageDays / 365));
+}
+
+function personalImportanceMultiplier(document: MemoryDocumentRow, profile: MemorySearchOptions['importanceProfile']): number {
+  if (profile !== 'personal') return 1;
+  if (document.actor?.toLocaleLowerCase() === 'jeffrey') return 1.2;
+  if (document.source === 'doc') return 1.15;
+  if (document.source === 'artifact' || document.source === 'activity' || document.source === 'work_item') return 1.1;
+  if (document.source === 'run_output' || document.source === 'run_error') return 0.94;
+  return 1;
+}
+
+function corroborationMultipliers(documents: MemoryDocumentRow[]): Map<string, number> {
+  const sourcesByScope = new Map<string, Set<string>>();
+  for (const document of documents) {
+    const scopes = [
+      document.work_item_id ? `work_item:${document.work_item_id}` : null,
+      document.conversation_id ? `conversation:${document.conversation_id}` : null,
+    ].filter(nonEmpty);
+    for (const scope of scopes) {
+      const sources = sourcesByScope.get(scope) ?? new Set<string>();
+      sources.add(document.source);
+      sourcesByScope.set(scope, sources);
+    }
+  }
+  const multipliers = new Map<string, number>();
+  for (const document of documents) {
+    const counts = [
+      document.work_item_id ? sourcesByScope.get(`work_item:${document.work_item_id}`)?.size ?? 1 : 1,
+      document.conversation_id ? sourcesByScope.get(`conversation:${document.conversation_id}`)?.size ?? 1 : 1,
+    ];
+    multipliers.set(document.id, 1 + Math.min(0.12, (Math.max(...counts) - 1) * 0.04));
+  }
+  return multipliers;
+}
+
+function timeBucket(createdAt: string): string | null {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getUTCFullYear()}-Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
+}
+
+/**
+ * Preserve the strongest direct matches, then reduce repetition by task,
+ * conversation, source, and quarter. Scores stay visible and comparable; the
+ * diversity pass changes only selection order.
+ */
+export function diversifyMemoryResults(results: MemorySearchResult[], limit: number): MemorySearchResult[] {
+  const safeLimit = Math.max(0, Math.min(limit, results.length));
+  if (!safeLimit) return [];
+  const ranked = [...results].sort((left, right) => right.score - left.score || right.createdAt.localeCompare(left.createdAt));
+  const direct = ranked.filter((result) => result.retrievalPath.length === 1);
+  const protectedCount = Math.min(direct.length, Math.min(6, Math.max(1, Math.ceil(safeLimit * 0.15))));
+  const selected = direct.slice(0, protectedCount);
+  const selectedKeys = new Set(selected.map((result) => `${result.source}:${result.sourceId}`));
+  const remaining = ranked.filter((result) => !selectedKeys.has(`${result.source}:${result.sourceId}`));
+  const workItemCounts = new Map<string, number>();
+  const conversationCounts = new Map<string, number>();
+  const sourceCounts = new Map<string, number>();
+  const timeCounts = new Map<string, number>();
+  const recordSelection = (result: MemorySearchResult) => {
+    if (result.workItemId) workItemCounts.set(result.workItemId, (workItemCounts.get(result.workItemId) ?? 0) + 1);
+    if (result.conversationId) conversationCounts.set(result.conversationId, (conversationCounts.get(result.conversationId) ?? 0) + 1);
+    sourceCounts.set(result.source, (sourceCounts.get(result.source) ?? 0) + 1);
+    const bucket = timeBucket(result.createdAt);
+    if (bucket) timeCounts.set(bucket, (timeCounts.get(bucket) ?? 0) + 1);
+  };
+  selected.forEach(recordSelection);
+
+  while (selected.length < safeLimit && remaining.length) {
+    let bestIndex = 0;
+    let bestAdjustedScore = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < remaining.length; index += 1) {
+      const candidate = remaining[index];
+      const bucket = timeBucket(candidate.createdAt);
+      const adjustedScore = candidate.score
+        * Math.pow(0.82, candidate.workItemId ? workItemCounts.get(candidate.workItemId) ?? 0 : 0)
+        * Math.pow(0.86, candidate.conversationId ? conversationCounts.get(candidate.conversationId) ?? 0 : 0)
+        * Math.pow(0.96, sourceCounts.get(candidate.source) ?? 0)
+        * Math.pow(0.92, bucket ? timeCounts.get(bucket) ?? 0 : 0);
+      if (adjustedScore > bestAdjustedScore
+        || (adjustedScore === bestAdjustedScore && candidate.createdAt > remaining[bestIndex].createdAt)) {
+        bestAdjustedScore = adjustedScore;
+        bestIndex = index;
+      }
+    }
+    const [next] = remaining.splice(bestIndex, 1);
+    selected.push(next);
+    recordSelection(next);
+  }
+  return selected;
+}
 
 /**
  * Hybrid retrieval: FTS5 BM25 (top 400) fused with brute-force cosine
@@ -444,33 +649,48 @@ type MemoryDocumentRow = {
  * Never throws on the embedding side -- a model failure or an empty
  * embeddings table just falls back to the FTS ranking alone.
  */
-export async function searchMemory(database: WorkbenchDatabase, query: string, options: { limit?: number; sources?: string[]; projectKey?: string; conversationId?: string; workItemId?: string } = {}): Promise<MemorySearchResult[]> {
+export async function searchMemory(database: WorkbenchDatabase, query: string, options: MemorySearchOptions = {}): Promise<MemorySearchResult[]> {
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
   // API consumers can request a single lookahead row to report whether the
   // visible result set is truncated while preserving the public 100-row cap.
   const limit = Math.max(1, Math.min(101, options.limit ?? 20));
   const sourceFilter = options.sources && options.sources.length ? new Set(options.sources) : null;
+  const scope = memoryScopeClause(options, 'md');
 
-  const matchQuery = buildFtsMatchQuery(trimmed);
+  const matchQuery = buildMemoryFtsMatchQuery(trimmed);
   const ftsRows = matchQuery
     ? database.prepare(`
         SELECT memory_chunks.id AS chunk_id, memory_chunks.document_id AS document_id, memory_chunks.text AS text
         FROM memory_chunks_fts
         JOIN memory_chunks ON memory_chunks.id = memory_chunks_fts.chunk_id
+        JOIN memory_documents md ON md.id = memory_chunks.document_id
         WHERE memory_chunks_fts MATCH ?
+          ${scope.sql}
         ORDER BY bm25(memory_chunks_fts)
         LIMIT ${MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE}
-      `).all(matchQuery) as Array<{ chunk_id: number; document_id: string; text: string }>
+      `).all(matchQuery, ...scope.parameters) as Array<{ chunk_id: number; document_id: string; text: string }>
     : [];
 
   let vectorRows: Array<{ chunk_id: number; document_id: string; text: string; score: number }> = [];
   try {
-    const [queryVector] = await embedTexts([trimmed]);
-    if (queryVector) {
-      const embedded = database.prepare('SELECT id, document_id, text, embedding FROM memory_chunks WHERE embedding IS NOT NULL').all() as Array<{ id: number; document_id: string; text: string; embedding: Uint8Array }>;
+    const primaryQuery = trimmed.split('\n', 1)[0]?.trim() || trimmed;
+    const semanticQueries = primaryQuery === trimmed ? [trimmed] : [primaryQuery, trimmed];
+    const queryVectors = await embedTexts(semanticQueries);
+    if (queryVectors.length) {
+      const embedded = database.prepare(`
+        SELECT memory_chunks.id, memory_chunks.document_id, memory_chunks.text, memory_chunks.embedding
+        FROM memory_chunks
+        JOIN memory_documents md ON md.id = memory_chunks.document_id
+        WHERE memory_chunks.embedding IS NOT NULL
+          ${scope.sql}
+      `).all(...scope.parameters) as Array<{ id: number; document_id: string; text: string; embedding: Uint8Array }>;
       vectorRows = embedded
-        .map((row) => ({ chunk_id: row.id, document_id: row.document_id, text: row.text, score: cosineSimilarity(queryVector, blobToEmbedding(row.embedding)) }))
+        .map((row) => {
+          const embedding = blobToEmbedding(row.embedding);
+          const score = Math.max(...queryVectors.map((queryVector, index) => cosineSimilarity(queryVector, embedding) * (index === 0 ? 1 : 0.97)));
+          return { chunk_id: row.id, document_id: row.document_id, text: row.text, score };
+        })
         .sort((a, b) => b.score - a.score)
         .slice(0, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE);
     }
@@ -496,25 +716,13 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
 
   const documentIds = [...bestByDocument.keys()];
   const placeholders = documentIds.map(() => '?').join(',');
-  // Project scope belongs at retrieval, before score sorting and prompt
-  // selection. Otherwise unrelated high-frequency transcripts can displace
-  // the linked project's evidence before it has a chance to be deduplicated.
-  const projectKey = options.projectKey?.trim() || null;
-  const conversationId = options.conversationId?.trim() || null;
-  const workItemId = options.workItemId?.trim() || null;
-  const sourceValues = sourceFilter ? [...sourceFilter] : [];
-  const sourceClause = sourceValues.length ? `AND source IN (${sourceValues.map(() => '?').join(',')})` : '';
   const documents = database.prepare(`
     SELECT * FROM memory_documents
     WHERE id IN (${placeholders})
-      AND (? IS NULL OR work_item_id IN (
-        SELECT id FROM work_items WHERE project_key = ? AND deleted_at IS NULL
-      ))
-      AND (? IS NULL OR conversation_id = ?)
-      AND (? IS NULL OR work_item_id = ?)
-      ${sourceClause}
-  `).all(...documentIds, projectKey, projectKey, conversationId, conversationId, workItemId, workItemId, ...sourceValues) as MemoryDocumentRow[];
+  `).all(...documentIds) as MemoryDocumentRow[];
   const documentById = new Map(documents.map((doc) => [doc.id, doc]));
+  const corroboration = corroborationMultipliers(documents);
+  const maximumFusedScore = Math.max(...[...bestByDocument.values()].map(({ score }) => score));
 
   const results: MemorySearchResult[] = [];
   for (const [documentId, best] of bestByDocument) {
@@ -522,11 +730,31 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     if (!doc) continue;
     if (sourceFilter && !sourceFilter.has(doc.source)) continue;
     const chunk = chunkById.get(best.chunkId);
+    const normalizedSearchScore = maximumFusedScore > 0 ? best.score / maximumFusedScore : 0;
+    const importanceScore = normalizedSearchScore
+      * (SOURCE_AUTHORITY[doc.source] ?? 1)
+      * lexicalImportanceMultiplier(doc, trimmed)
+      * recencyMultiplier(doc.created_at)
+      * (corroboration.get(doc.id) ?? 1)
+      * personalImportanceMultiplier(doc, options.importanceProfile);
     results.push({
       source: doc.source, sourceId: doc.source_id, title: doc.title, snippet: chunk?.text ?? doc.body.slice(0, 1_200),
-      createdAt: doc.created_at, conversationId: doc.conversation_id, workItemId: doc.work_item_id, actor: doc.actor, score: best.score,
+      createdAt: doc.created_at, conversationId: doc.conversation_id, workItemId: doc.work_item_id, actor: doc.actor, score: importanceScore,
+      retrievalPath: ['Matched request'],
     });
   }
   results.sort((a, b) => b.score - a.score);
-  return results.slice(0, limit);
+  const graphResults = expandKnowledgeGraph(database, results.slice(0, 8), {
+    limit: Math.min(20, Math.ceil(limit / 3)),
+    sources: options.sources,
+    projectKey: options.projectKey,
+    conversationId: options.conversationId,
+    workItemId: options.workItemId,
+  });
+  const merged = new Map(results.map((result) => [`${result.source}:${result.sourceId}`, result]));
+  for (const result of graphResults) {
+    const key = `${result.source}:${result.sourceId}`;
+    if (!merged.has(key)) merged.set(key, result);
+  }
+  return diversifyMemoryResults([...merged.values()], limit);
 }

@@ -2141,6 +2141,201 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // The knowledge graph is a derived relational index over canonical
+    // Workbench rows. Nodes store only stable source references; source text
+    // remains in the existing tables and memory_documents. Triggers keep the
+    // deterministic graph projection in the same transaction as each write.
+    id: '078_knowledge_graph',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE knowledge_graph_nodes (
+          id TEXT PRIMARY KEY,
+          entity_type TEXT NOT NULL,
+          source_table TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(source_table, source_id)
+        );
+        CREATE INDEX idx_knowledge_graph_nodes_type
+          ON knowledge_graph_nodes(entity_type, created_at DESC);
+
+        CREATE TABLE knowledge_graph_edges (
+          from_node_id TEXT NOT NULL REFERENCES knowledge_graph_nodes(id) ON DELETE CASCADE,
+          to_node_id TEXT NOT NULL REFERENCES knowledge_graph_nodes(id) ON DELETE CASCADE,
+          relation TEXT NOT NULL,
+          source_table TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(from_node_id, relation, to_node_id)
+        );
+        CREATE INDEX idx_knowledge_graph_edges_to
+          ON knowledge_graph_edges(to_node_id, relation, from_node_id);
+        CREATE INDEX idx_knowledge_graph_edges_source
+          ON knowledge_graph_edges(source_table, source_id);
+
+        INSERT OR IGNORE INTO knowledge_graph_nodes
+          SELECT 'project:' || id, 'project', 'projects', id, created_at FROM projects;
+        INSERT OR IGNORE INTO knowledge_graph_nodes
+          SELECT 'work_item:' || id, 'work_item', 'work_items', id, created_at FROM work_items;
+        INSERT OR IGNORE INTO knowledge_graph_nodes
+          SELECT 'conversation:' || id, 'conversation', 'shared_conversations', id, created_at FROM shared_conversations;
+        INSERT OR IGNORE INTO knowledge_graph_nodes
+          SELECT 'message:' || id, 'message', 'shared_messages', id, created_at FROM shared_messages;
+        INSERT OR IGNORE INTO knowledge_graph_nodes
+          SELECT 'activity:' || id, 'activity', 'activities', id, created_at FROM activities;
+        INSERT OR IGNORE INTO knowledge_graph_nodes
+          SELECT 'agent_run:' || id, 'agent_run', 'agent_runs', id, created_at FROM agent_runs;
+        INSERT OR IGNORE INTO knowledge_graph_nodes
+          SELECT 'audit:' || id, 'audit', 'audit_log', id, created_at FROM audit_log;
+        INSERT OR IGNORE INTO knowledge_graph_nodes
+          SELECT 'artifact:' || id, 'artifact', 'published_artifacts', id, published_at FROM published_artifacts;
+
+        INSERT OR IGNORE INTO knowledge_graph_edges
+          SELECT 'work_item:' || w.id, 'project:' || p.id, 'belongs_to_project', 'work_items', w.id, w.created_at
+          FROM work_items w JOIN projects p ON p.key = w.project_key;
+        INSERT OR IGNORE INTO knowledge_graph_edges
+          SELECT 'conversation:' || c.id, 'work_item:' || c.work_item_id, 'linked_to_task', 'shared_conversations', c.id, c.created_at
+          FROM shared_conversations c JOIN work_items w ON w.id = c.work_item_id;
+        INSERT OR IGNORE INTO knowledge_graph_edges
+          SELECT 'message:' || m.id, 'conversation:' || m.conversation_id, 'in_conversation', 'shared_messages', m.id, m.created_at
+          FROM shared_messages m JOIN shared_conversations c ON c.id = m.conversation_id;
+        INSERT OR IGNORE INTO knowledge_graph_edges
+          SELECT 'activity:' || a.id, 'work_item:' || a.work_item_id, 'about_task', 'activities', a.id, a.created_at
+          FROM activities a JOIN work_items w ON w.id = a.work_item_id;
+        INSERT OR IGNORE INTO knowledge_graph_edges
+          SELECT 'agent_run:' || r.id, 'work_item:' || r.work_item_id, 'executes_task', 'agent_runs', r.id, r.created_at
+          FROM agent_runs r JOIN work_items w ON w.id = r.work_item_id;
+        INSERT OR IGNORE INTO knowledge_graph_edges
+          SELECT 'agent_run:' || r.id, 'conversation:' || r.conversation_id, 'in_conversation', 'agent_runs', r.id, r.created_at
+          FROM agent_runs r JOIN shared_conversations c ON c.id = r.conversation_id;
+        INSERT OR IGNORE INTO knowledge_graph_edges
+          SELECT 'audit:' || a.id, 'work_item:' || a.work_item_id, 'about_task', 'audit_log', a.id, a.created_at
+          FROM audit_log a JOIN work_items w ON w.id = a.work_item_id;
+        INSERT OR IGNORE INTO knowledge_graph_edges
+          SELECT 'artifact:' || a.id, 'work_item:' || a.work_item_id, 'evidence_for_task', 'published_artifacts', a.id, a.published_at
+          FROM published_artifacts a JOIN work_items w ON w.id = a.work_item_id;
+        INSERT OR IGNORE INTO knowledge_graph_edges
+          SELECT 'artifact:' || a.id, 'conversation:' || a.conversation_id, 'published_from_conversation', 'published_artifacts', a.id, a.published_at
+          FROM published_artifacts a JOIN shared_conversations c ON c.id = a.conversation_id;
+
+        CREATE TRIGGER knowledge_graph_projects_insert AFTER INSERT ON projects BEGIN
+          INSERT OR IGNORE INTO knowledge_graph_nodes VALUES ('project:' || NEW.id, 'project', 'projects', NEW.id, NEW.created_at);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'work_item:' || id, 'project:' || NEW.id, 'belongs_to_project', 'work_items', id, created_at
+            FROM work_items WHERE project_key = NEW.key;
+        END;
+        CREATE TRIGGER knowledge_graph_projects_delete AFTER DELETE ON projects BEGIN
+          DELETE FROM knowledge_graph_nodes WHERE id = 'project:' || OLD.id;
+        END;
+
+        CREATE TRIGGER knowledge_graph_work_items_insert AFTER INSERT ON work_items BEGIN
+          INSERT OR IGNORE INTO knowledge_graph_nodes VALUES ('work_item:' || NEW.id, 'work_item', 'work_items', NEW.id, NEW.created_at);
+          INSERT OR IGNORE INTO knowledge_graph_nodes
+            SELECT 'project:' || id, 'project', 'projects', id, created_at FROM projects WHERE key = NEW.project_key;
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'work_item:' || NEW.id, 'project:' || id, 'belongs_to_project', 'work_items', NEW.id, NEW.created_at FROM projects WHERE key = NEW.project_key;
+        END;
+        CREATE TRIGGER knowledge_graph_work_items_project_update AFTER UPDATE OF project_key ON work_items BEGIN
+          DELETE FROM knowledge_graph_edges WHERE from_node_id = 'work_item:' || NEW.id AND relation = 'belongs_to_project';
+          INSERT OR IGNORE INTO knowledge_graph_nodes
+            SELECT 'project:' || id, 'project', 'projects', id, created_at FROM projects WHERE key = NEW.project_key;
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'work_item:' || NEW.id, 'project:' || id, 'belongs_to_project', 'work_items', NEW.id, NEW.created_at FROM projects WHERE key = NEW.project_key;
+        END;
+        CREATE TRIGGER knowledge_graph_work_items_delete AFTER DELETE ON work_items BEGIN
+          DELETE FROM knowledge_graph_nodes WHERE id = 'work_item:' || OLD.id;
+        END;
+
+        CREATE TRIGGER knowledge_graph_conversations_insert AFTER INSERT ON shared_conversations BEGIN
+          INSERT OR IGNORE INTO knowledge_graph_nodes VALUES ('conversation:' || NEW.id, 'conversation', 'shared_conversations', NEW.id, NEW.created_at);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'conversation:' || NEW.id, 'work_item:' || NEW.work_item_id, 'linked_to_task', 'shared_conversations', NEW.id, NEW.created_at
+            WHERE NEW.work_item_id IS NOT NULL AND EXISTS (SELECT 1 FROM work_items WHERE id = NEW.work_item_id);
+        END;
+        CREATE TRIGGER knowledge_graph_conversations_task_update AFTER UPDATE OF work_item_id ON shared_conversations BEGIN
+          DELETE FROM knowledge_graph_edges WHERE from_node_id = 'conversation:' || NEW.id AND relation = 'linked_to_task';
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'conversation:' || NEW.id, 'work_item:' || NEW.work_item_id, 'linked_to_task', 'shared_conversations', NEW.id, NEW.created_at
+            WHERE NEW.work_item_id IS NOT NULL AND EXISTS (SELECT 1 FROM work_items WHERE id = NEW.work_item_id);
+        END;
+        CREATE TRIGGER knowledge_graph_conversations_delete AFTER DELETE ON shared_conversations BEGIN
+          DELETE FROM knowledge_graph_nodes WHERE id = 'conversation:' || OLD.id;
+        END;
+
+        CREATE TRIGGER knowledge_graph_messages_insert AFTER INSERT ON shared_messages BEGIN
+          INSERT OR IGNORE INTO knowledge_graph_nodes VALUES ('message:' || NEW.id, 'message', 'shared_messages', NEW.id, NEW.created_at);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'message:' || NEW.id, 'conversation:' || NEW.conversation_id, 'in_conversation', 'shared_messages', NEW.id, NEW.created_at
+            WHERE NEW.conversation_id IS NOT NULL AND EXISTS (SELECT 1 FROM shared_conversations WHERE id = NEW.conversation_id);
+        END;
+        CREATE TRIGGER knowledge_graph_messages_delete AFTER DELETE ON shared_messages BEGIN
+          DELETE FROM knowledge_graph_nodes WHERE id = 'message:' || OLD.id;
+        END;
+
+        CREATE TRIGGER knowledge_graph_activities_insert AFTER INSERT ON activities BEGIN
+          INSERT OR IGNORE INTO knowledge_graph_nodes VALUES ('activity:' || NEW.id, 'activity', 'activities', NEW.id, NEW.created_at);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'activity:' || NEW.id, 'work_item:' || NEW.work_item_id, 'about_task', 'activities', NEW.id, NEW.created_at
+            WHERE EXISTS (SELECT 1 FROM work_items WHERE id = NEW.work_item_id);
+        END;
+        CREATE TRIGGER knowledge_graph_activities_delete AFTER DELETE ON activities BEGIN
+          DELETE FROM knowledge_graph_nodes WHERE id = 'activity:' || OLD.id;
+        END;
+
+        CREATE TRIGGER knowledge_graph_agent_runs_insert AFTER INSERT ON agent_runs BEGIN
+          INSERT OR IGNORE INTO knowledge_graph_nodes VALUES ('agent_run:' || NEW.id, 'agent_run', 'agent_runs', NEW.id, NEW.created_at);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'agent_run:' || NEW.id, 'work_item:' || NEW.work_item_id, 'executes_task', 'agent_runs', NEW.id, NEW.created_at
+            WHERE EXISTS (SELECT 1 FROM work_items WHERE id = NEW.work_item_id);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'agent_run:' || NEW.id, 'conversation:' || NEW.conversation_id, 'in_conversation', 'agent_runs', NEW.id, NEW.created_at
+            WHERE NEW.conversation_id IS NOT NULL AND EXISTS (SELECT 1 FROM shared_conversations WHERE id = NEW.conversation_id);
+        END;
+        CREATE TRIGGER knowledge_graph_agent_runs_conversation_update AFTER UPDATE OF conversation_id ON agent_runs BEGIN
+          DELETE FROM knowledge_graph_edges WHERE from_node_id = 'agent_run:' || NEW.id AND relation = 'in_conversation';
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'agent_run:' || NEW.id, 'conversation:' || NEW.conversation_id, 'in_conversation', 'agent_runs', NEW.id, NEW.created_at
+            WHERE NEW.conversation_id IS NOT NULL AND EXISTS (SELECT 1 FROM shared_conversations WHERE id = NEW.conversation_id);
+        END;
+        CREATE TRIGGER knowledge_graph_agent_runs_delete AFTER DELETE ON agent_runs BEGIN
+          DELETE FROM knowledge_graph_nodes WHERE id = 'agent_run:' || OLD.id;
+        END;
+
+        CREATE TRIGGER knowledge_graph_audit_insert AFTER INSERT ON audit_log BEGIN
+          INSERT OR IGNORE INTO knowledge_graph_nodes VALUES ('audit:' || NEW.id, 'audit', 'audit_log', NEW.id, NEW.created_at);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'audit:' || NEW.id, 'work_item:' || NEW.work_item_id, 'about_task', 'audit_log', NEW.id, NEW.created_at
+            WHERE NEW.work_item_id IS NOT NULL AND EXISTS (SELECT 1 FROM work_items WHERE id = NEW.work_item_id);
+        END;
+        CREATE TRIGGER knowledge_graph_audit_delete AFTER DELETE ON audit_log BEGIN
+          DELETE FROM knowledge_graph_nodes WHERE id = 'audit:' || OLD.id;
+        END;
+
+        CREATE TRIGGER knowledge_graph_artifacts_insert AFTER INSERT ON published_artifacts BEGIN
+          INSERT OR IGNORE INTO knowledge_graph_nodes VALUES ('artifact:' || NEW.id, 'artifact', 'published_artifacts', NEW.id, NEW.published_at);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'artifact:' || NEW.id, 'work_item:' || NEW.work_item_id, 'evidence_for_task', 'published_artifacts', NEW.id, NEW.published_at
+            WHERE NEW.work_item_id IS NOT NULL AND EXISTS (SELECT 1 FROM work_items WHERE id = NEW.work_item_id);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'artifact:' || NEW.id, 'conversation:' || NEW.conversation_id, 'published_from_conversation', 'published_artifacts', NEW.id, NEW.published_at
+            WHERE NEW.conversation_id IS NOT NULL AND EXISTS (SELECT 1 FROM shared_conversations WHERE id = NEW.conversation_id);
+        END;
+        CREATE TRIGGER knowledge_graph_artifacts_scope_update AFTER UPDATE OF work_item_id, conversation_id ON published_artifacts BEGIN
+          DELETE FROM knowledge_graph_edges WHERE from_node_id = 'artifact:' || NEW.id;
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'artifact:' || NEW.id, 'work_item:' || NEW.work_item_id, 'evidence_for_task', 'published_artifacts', NEW.id, NEW.published_at
+            WHERE NEW.work_item_id IS NOT NULL AND EXISTS (SELECT 1 FROM work_items WHERE id = NEW.work_item_id);
+          INSERT OR IGNORE INTO knowledge_graph_edges
+            SELECT 'artifact:' || NEW.id, 'conversation:' || NEW.conversation_id, 'published_from_conversation', 'published_artifacts', NEW.id, NEW.published_at
+            WHERE NEW.conversation_id IS NOT NULL AND EXISTS (SELECT 1 FROM shared_conversations WHERE id = NEW.conversation_id);
+        END;
+        CREATE TRIGGER knowledge_graph_artifacts_delete AFTER DELETE ON published_artifacts BEGIN
+          DELETE FROM knowledge_graph_nodes WHERE id = 'artifact:' || OLD.id;
+        END;
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

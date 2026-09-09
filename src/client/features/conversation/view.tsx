@@ -1361,9 +1361,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                     onClick={() => setRetrievedMemoryMessageId(message.id)}
                     title={typeof message.retrievedMemoryCount === 'number'
                       ? message.retrievedMemoryCount > 0
-                        ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} from RAG for this reply — click to view`
-                        : 'RAG memory search ran but found no matches'
-                      : 'RAG memory retrieval did not run for this message'}
+                        ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} using search and relationships — click to view`
+                        : 'Memory retrieval ran but found no matches'
+                      : 'Memory retrieval did not run for this message'}
                   >
                     <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
                   </button>}

@@ -16,7 +16,7 @@ import { groundTurn } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
 import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
@@ -1397,6 +1397,7 @@ export async function replyInSharedRoom(
         refresh: false,
         projectKey: !isExplicitMemoryRequest(latestUserMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
         sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
+        importanceProfile: isPersonalLongTermMemoryRequest(latestUserMessage) ? 'personal' : 'default',
       }).then((candidates) => selectDurableMemoryEvidence(candidates, target.conversationId, memoryPlan.evidenceLimit)).catch((error) => {
         console.error('[shared-room] automatic durable-memory retrieval failed; continuing without it', error);
         return [];
@@ -1409,7 +1410,7 @@ export async function replyInSharedRoom(
       retrievedMemoryCount: memoryEvidence.length,
       retrievedMemoryDetail: memoryEvidence.length ? {
         query: memoryQuery,
-        items: memoryEvidence.map(({ source, title, body, createdAt }) => ({ source, title, body, createdAt })),
+        items: memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
       } : null,
     });
     const shortTermContext = repository.getSharedContext(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });

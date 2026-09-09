@@ -789,7 +789,7 @@ export class WorkItemRepository {
    * the request path (a poller keyed off a watermark) rather than doing it
    * here.
    */
-  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string; conversationId?: string; workItemId?: string; sources?: string[] } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null }>> {
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string; conversationId?: string; workItemId?: string; sources?: string[]; importanceProfile?: 'default' | 'personal' } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null; retrievalPath: string[] }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
       try {
@@ -806,6 +806,7 @@ export class WorkItemRepository {
       conversationId: options.conversationId,
       workItemId: options.workItemId,
       sources: options.sources,
+      importanceProfile: options.importanceProfile,
     });
     const excludedBody = options.excludeExactBody?.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
     return results.map((result) => ({
@@ -817,6 +818,7 @@ export class WorkItemRepository {
       conversationId: result.conversationId,
       workItemId: result.workItemId,
       actor: result.actor,
+      retrievalPath: result.retrievalPath,
     })).filter((result) => !excludedBody || result.body.trim().replace(/\s+/g, ' ').toLocaleLowerCase() !== excludedBody);
   }
 
@@ -916,7 +918,7 @@ export class WorkItemRepository {
     }, changes.costUsd);
   }
 
-  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; attempt?: number; interjectionStreamOffset?: number | null; retrievedMemoryCount?: number | null; retrievedMemoryDetail?: { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string }> } | null; costUsd?: number | null; kind?: SharedMessage['kind'] }): SharedMessage | null {
+  updateSharedMessage(id: string, changes: { pinned?: boolean; body?: string; status?: SharedMessage['status']; error?: string; author?: SharedMessage['author']; model?: string; accountProfile?: string | null; executionProfile?: SharedMessage['executionProfile']; inputTokens?: number | null; cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null; outputTokens?: number | null; fallbackFrom?: AgentRun['agent'] | null; fallbackReason?: string | null; completedAt?: string | null; attempt?: number; interjectionStreamOffset?: number | null; retrievedMemoryCount?: number | null; retrievedMemoryDetail?: { query: string; items: Array<{ source: string; title: string; body: string; createdAt: string; retrievalPath?: string[] }> } | null; costUsd?: number | null; kind?: SharedMessage['kind'] }): SharedMessage | null {
     // A retry reuses the same message row. Never let the error from the prior
     // attempt survive a successful or user-canceled terminal transition.
     const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
