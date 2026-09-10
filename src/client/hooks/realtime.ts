@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { ToastTone } from '../state/toast-store';
 
-const realtimeTopics = ['work-items', 'shared', 'discovery', 'runtime', 'insights', 'artifacts'] as const;
+const realtimeTopics = ['work-items', 'shared', 'shared-messages', 'discovery', 'runtime', 'insights', 'artifacts'] as const;
 type RealtimeTopic = typeof realtimeTopics[number];
 
 type RealtimeMessage =
@@ -30,6 +30,7 @@ export function subscribeRealtimeMessages(listener: (message: RealtimeMessage) =
 export type RealtimeConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'polling';
 
 const MAX_WEBSOCKET_RECONNECT_ATTEMPTS = 3;
+const REALTIME_INVALIDATION_BATCH_MS = 250;
 const HTTPS_FALLBACK_POLL_MS = 1_500;
 const HTTPS_FALLBACK_WS_PROBE_MS = 30_000;
 const AGENT_POLL_TOPICS: readonly RealtimeTopic[] = ['shared', 'work-items', 'insights'];
@@ -43,6 +44,7 @@ const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
     ['shared-conversations'], ['shared-conversation'], ['shared-messages'], ['shared-message-activity'],
     ['conversation-count'], ['notification-conversations'], ['conversation-unread-count'], ['conversation-attention-count'], ['shared-search'],
   ],
+  'shared-messages': [['shared-messages']],
   discovery: [['discovery'], ['discovery-merge-targets']],
   runtime: [['runtime-preview-status']],
   insights: [['insights'], ['usage']],
@@ -136,9 +138,23 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
     let reconnectTimer: number | null = null;
     let pollingTimer: number | null = null;
     let recoveryProbeTimer: number | null = null;
+    let invalidationTimer: number | null = null;
+    const pendingInvalidationTopics = new Set<RealtimeTopic>();
     let attempts = 0;
     let disposed = false;
     let manualRetryRequested = false;
+
+    const flushInvalidations = () => {
+      invalidationTimer = null;
+      if (disposed || pendingInvalidationTopics.size === 0) return;
+      invalidateRealtimeTopics(queryClient, [...pendingInvalidationTopics]);
+      pendingInvalidationTopics.clear();
+    };
+
+    const queueInvalidations = (topics: readonly RealtimeTopic[]) => {
+      for (const topic of topics) pendingInvalidationTopics.add(topic);
+      if (invalidationTimer === null) invalidationTimer = window.setTimeout(flushInvalidations, REALTIME_INVALIDATION_BATCH_MS);
+    };
 
     const startHttpsFallback = () => {
       if (disposed || pollingTimer !== null) return;
@@ -173,7 +189,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
         try {
           const message: unknown = JSON.parse(typeof event.data === 'string' ? event.data : '');
           if (!isRealtimeMessage(message)) return;
-          if (message.type === 'invalidate') invalidateRealtimeTopics(queryClient, message.topics);
+          if (message.type === 'invalidate') queueInvalidations(message.topics);
           if (message.type === 'notification') onNotification(message);
           if (message.type === 'diff-confidence' || message.type === 'review-score') for (const listener of realtimeMessageListeners) listener(message);
         } catch {
@@ -232,6 +248,8 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (pollingTimer !== null) window.clearInterval(pollingTimer);
       if (recoveryProbeTimer !== null) window.clearInterval(recoveryProbeTimer);
+      if (invalidationTimer !== null) window.clearTimeout(invalidationTimer);
+      pendingInvalidationTopics.clear();
       socket?.close();
     };
   }, [onNotification, queryClient]);

@@ -414,7 +414,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   }, []);
   const conversations = useInfiniteQuery({
     queryKey: conversationQueryKeys.rail(conversationView), queryFn: ({ pageParam }) => conversationData.list(conversationView, pageParam),
-    initialPageParam: undefined as string | undefined, getNextPageParam: (page) => page.nextCursor ?? undefined, refetchInterval: 1_000,
+    initialPageParam: undefined as string | undefined, getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
   const selectConversationView = (view: 'active' | 'archive') => {
     if (view === conversationView) {
@@ -442,7 +442,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       pages: current.pages.map((page) => ({ ...page, conversations: page.conversations.filter((conversation) => conversation.id !== removedId) })),
     }));
   };
-  const conversationActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: api.listSharedMessageActivity, refetchInterval: 1_000 });
+  const conversationActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: api.listSharedMessageActivity });
   const activeConversationIds = useMemo(() => new Set(conversationActivity.data?.messages.filter((message) => message.status === 'running').map((message) => message.conversationId) ?? []), [conversationActivity.data?.messages]);
   const fallbackConversationStates = useMemo(() => {
     const states = new Map<string, SharedConversation['state']>();
@@ -523,7 +523,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConversation, conversationId]);
   const linkedWorkItemId = selectedConversation?.workItemId ?? null;
-  const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId), refetchInterval: 1_000 });
+  const linkedWorkItem = useQuery({ queryKey: ['work-item', linkedWorkItemId], queryFn: () => api.getWorkItem(linkedWorkItemId!), enabled: Boolean(linkedWorkItemId) });
   // Changes belong to the conversation, not merely its linked task: Repo
   // Explorer can deliberately select any attached local repository.
   const workspaceDiffScope: WorkspaceDiffScope | null = conversationId ? { conversationId } : null;
@@ -612,13 +612,10 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   }, [proposedPlan]);
   const messages = useQuery({
     queryKey: ['shared-messages', conversationId], queryFn: () => api.listSharedMessages(conversationId!, undefined, MESSAGES_PAGE_SIZE), enabled: Boolean(conversationId),
-    refetchInterval: (query) => query.state.data?.messages.some((message) => message.status === 'running' || message.status === 'queued') ? 750 : false,
   });
-  // The live page above always refetches on a 750ms poll while a reply is in
-  // flight; older pages never change once fetched (only the tail can still be
-  // running), so they're loaded once on demand and kept in local state instead
-  // of inside the polled query — otherwise every older page would be
-  // re-fetched on every poll tick as history grew.
+  // WebSocket invalidations keep the live page current. Older pages never
+  // change once fetched, so they're loaded once on demand and kept in local
+  // state instead of joining the realtime refresh path as history grows.
   const nextOlderMessagesCursor = olderMessagePages.length
     ? olderMessagePages[olderMessagePages.length - 1].nextCursor
     : messages.data?.nextCursor ?? null;
@@ -1079,8 +1076,16 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // Only follow new streaming output while the user is already near the
     // bottom; once they scroll up to read history, stop yanking them back
     // and instead flag that new activity is waiting below the fold.
-    if (isNearThreadBottomRef.current) scrollThreadToLatest('smooth');
-    else setHasNewActivityBelow(true);
+    if (!isNearThreadBottomRef.current) {
+      setHasNewActivityBelow(true);
+      return;
+    }
+    // A stream can update several times per second. Starting a new smooth
+    // animation for every chunk keeps the compositor busy and makes the whole
+    // tab feel stuck. Follow the live edge in one paint without animation;
+    // explicit user navigation still uses smooth scrolling.
+    const frame = window.requestAnimationFrame(() => scrollThreadToLatest('auto'));
+    return () => window.cancelAnimationFrame(frame);
   }, [messages.data?.messages.length, latestMessageLength, proposedPlan]);
   useEffect(() => {
     // Switching conversations lands the reader back where they left off, or

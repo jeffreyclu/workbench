@@ -64,7 +64,7 @@ function updateLiveSharedBody(repository: WorkItemRepository, messageId: string,
   persistNonTerminalAgentUpdate(() => {
     repository.updateSharedMessage(messageId, { body });
     if (runId) repository.updateRun(runId, { output: body });
-    publishRealtimeEvent('shared');
+    publishRealtimeEvent('shared-messages');
   });
 }
 

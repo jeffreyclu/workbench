@@ -45,6 +45,7 @@ describe('realtime invalidation', () => {
   });
 
   it('invalidates active server data and delivers typed notifications from socket events', () => {
+    vi.useFakeTimers();
     vi.stubGlobal('WebSocket', MockWebSocket);
     const client = new QueryClient();
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
@@ -55,9 +56,14 @@ describe('realtime invalidation', () => {
     const socket = MockWebSocket.instances[0];
     expect(socket.url).toMatch(/\/api\/realtime$/);
     socket.emit('message', JSON.stringify({ type: 'invalidate', topics: ['work-items', 'discovery'] }));
+    socket.emit('message', JSON.stringify({ type: 'invalidate', topics: ['work-items', 'shared-messages'] }));
 
+    expect(invalidateQueries).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(250); });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['work-items'] });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['discovery'] });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-messages'] });
+    expect(invalidateQueries.mock.calls.filter(([input]) => JSON.stringify(input) === JSON.stringify({ queryKey: ['work-items'] }))).toHaveLength(1);
     socket.emit('message', JSON.stringify({ type: 'notification', tone: 'success', message: 'Agent finished', action: { label: 'Open conversation', route: '/conversations/123' } }));
     expect(notify).toHaveBeenCalledWith({ type: 'notification', tone: 'success', message: 'Agent finished', action: { label: 'Open conversation', route: '/conversations/123' } });
     rendered.unmount();

@@ -1988,7 +1988,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     let result = run.agent === 'palmyra'
       ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, previousMessages: palmyraContext, imageAttachments: item.attachments ?? [], onProgress: (partialOutput) => {
         repository.updateRun(run.id, { output: partialOutput });
-        if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
+        if (run.messageId) {
+          repository.updateSharedMessage(run.messageId, { body: partialOutput });
+          publishRealtimeEvent('shared-messages');
+        }
       }, onUsage: (usage) => {
         const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
         repository.updateRun(run.id, telemetry);
@@ -2004,7 +2007,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       } })
       : await runAgentCommandWithFallback(run.agent, cwd, run.agent === 'claude' ? claudeScopeRecoveryPrompt(prompt, cwd) : prompt, (partialOutput) => {
       repository.updateRun(run.id, { output: partialOutput });
-      if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
+      if (run.messageId) {
+        repository.updateSharedMessage(run.messageId, { body: partialOutput });
+        publishRealtimeEvent('shared-messages');
+      }
     }, controller.signal, (fallback, reason) => {
       repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
