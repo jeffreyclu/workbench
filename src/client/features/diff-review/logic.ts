@@ -100,30 +100,37 @@ function hunkStart(range: string, side: 'old' | 'new'): number | null {
   return match ? Number(match[1]) : null;
 }
 
+/** One hunk's raw patch lines, numbered against both sides of the file. The
+ * file diff and the change map's code popup both render a hunk, so they
+ * number it once here rather than each deriving line numbers of its own. */
+export function buildDiffLines(range: string, lines: string[]): ReviewDiffLine[] {
+  let oldLine = hunkStart(range, 'old');
+  let newLine = hunkStart(range, 'new');
+  return lines.map((text, index) => {
+    const key = `${range}:${index}`;
+    if (text.startsWith('+')) {
+      const line = { key, kind: 'addition' as const, oldLine: null, newLine, text };
+      if (newLine !== null) newLine += 1;
+      return line;
+    }
+    if (text.startsWith('-')) {
+      const line = { key, kind: 'deletion' as const, oldLine, newLine: null, text };
+      if (oldLine !== null) oldLine += 1;
+      return line;
+    }
+    const line = { key, kind: 'context' as const, oldLine, newLine, text };
+    if (oldLine !== null) oldLine += 1;
+    if (newLine !== null) newLine += 1;
+    return line;
+  });
+}
+
 /** The complete patch of one file, split into decision-addressable blocks. The
  * review surface renders every line of it — reviewers judge a change in its
  * surrounding context, not as detached lines. */
 export function buildFileDiffHunks(file: Pick<WorkspaceDiffFile, 'path' | 'patch' | 'isBinary'>): ReviewDiffHunk[] {
   return splitPatchHunks(file).map((hunk) => {
-    let oldLine = hunkStart(hunk.range, 'old');
-    let newLine = hunkStart(hunk.range, 'new');
-    const lines: ReviewDiffLine[] = hunk.lines.map((text, index) => {
-      const key = `${hunk.range}:${index}`;
-      if (text.startsWith('+')) {
-        const line = { key, kind: 'addition' as const, oldLine: null, newLine, text };
-        if (newLine !== null) newLine += 1;
-        return line;
-      }
-      if (text.startsWith('-')) {
-        const line = { key, kind: 'deletion' as const, oldLine, newLine: null, text };
-        if (oldLine !== null) oldLine += 1;
-        return line;
-      }
-      const line = { key, kind: 'context' as const, oldLine, newLine, text };
-      if (oldLine !== null) oldLine += 1;
-      if (newLine !== null) newLine += 1;
-      return line;
-    });
+    const lines = buildDiffLines(hunk.range, hunk.lines);
     const counts = countChangedLines(hunk.lines);
     return { decisionId: `${file.path}::${hunk.range}`, range: hunk.range, location: hunkLocation(hunk.range), enclosing: hunkContext(hunk.range), additions: counts.additions, deletions: counts.deletions, lines };
   });

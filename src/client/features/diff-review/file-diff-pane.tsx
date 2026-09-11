@@ -400,7 +400,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         // Every line gets its own hover handle, not just the block: a reviewer
         // hovering any row should be able to jump straight into the simplified
         // review/ask/AI-assist popup for the chunk that row belongs to.
-        const simpleMarker = (lineKey) => onOpenSimpleDetail && <button
+        const simpleMarker = (lineKey: string) => onOpenSimpleDetail && <button
           key={lineKey}
           type="button"
           className="diff-line-simple-marker"

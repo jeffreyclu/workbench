@@ -719,6 +719,31 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .decision-popover.with-aside > .decision-popover-aside { overflow-y: auto; overscroll-behavior: contain; max-height: min(74vh, 620px); }
 .decision-popover.with-aside.stacked { grid-template-columns: minmax(0, 1fr); overflow-y: auto; overscroll-behavior: contain; max-height: min(74vh, 620px); }
 .decision-popover.with-aside.stacked > .decision-popover-panel, .decision-popover.with-aside.stacked > .decision-popover-aside { overflow: visible; max-height: none; }
+/* Code needs more column than a diagram does, and the popover's own measuring
+   uses the same two widths, so these must move together with WIDE_ASIDE_WIDTH
+   in decision-popover.tsx. */
+.decision-popover.with-aside.wide-aside { grid-template-columns: 336px 420px; }
+.decision-popover.with-aside.wide-aside.stacked { grid-template-columns: minmax(0, 1fr); }
+.decision-popover.with-aside.wide-aside > .decision-popover-aside { display: grid; align-content: start; gap: 10px; }
+.change-map-code { overflow: hidden; border: 1px solid #45443e; border-radius: 9px; background: #131311; box-shadow: 0 14px 38px #000a; }
+.change-map-code > header { display: flex; align-items: center; gap: 7px; padding: 10px 14px 8px; color: #85847d; font: 10px 'DM Mono'; }
+.change-map-code > header h4 { margin: 0; color: #85847d; font: inherit; letter-spacing: 0.04em; text-transform: uppercase; }
+.change-map-code > header small { margin-left: auto; font: 9px 'DM Mono'; }
+.change-map-code > header small .added { color: #8fb59c; }
+.change-map-code > header small .removed { color: #c9a3a7; }
+.change-map-code-hunk + .change-map-code-hunk { border-top: 1px solid #242421; }
+.change-map-code-hunk h5 { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 6px 14px; border-top: 1px solid #242421; background: #171715; font: 10px 'DM Mono'; font-weight: 400; }
+/* The path wraps rather than being clipped: the tail of a path is the file
+   name, which is the part that identifies the hunk. */
+.change-map-code-path { min-width: 0; color: #c9c8c1; overflow-wrap: anywhere; }
+.change-map-code-location { margin-left: auto; flex: 0 0 auto; color: #77766f; font-size: 9px; }
+/* The lines are the diff pane's lines, at the size a popup can hold. Tall
+   changes scroll inside the panel rather than pushing the popover off screen. */
+.change-map-code-lines { max-height: 280px; overflow: auto; overscroll-behavior: contain; font-size: 10px; }
+.change-map-code-lines .diff-line { grid-template-columns: 32px 32px minmax(0, 1fr); font-size: 10px; }
+.change-map-code-lines .diff-line > span { padding: 0 6px; }
+.change-map-code-lines .diff-line > span:last-child { padding-left: calc(6px + 2ch); text-indent: -2ch; }
+.change-map-code-more { margin: 0; padding: 8px 14px 10px; font: 10px 'DM Mono'; }
 .decision-relationship-diagram { border: 1px solid #45443e; border-radius: 9px; background: #131311; box-shadow: 0 14px 38px #000a; }
 .decision-relationship-diagram > header { display: flex; align-items: center; gap: 7px; padding: 10px 14px 8px; color: #85847d; font: 10px 'DM Mono'; }
 .decision-relationship-diagram > header small { margin-left: auto; color: #77766f; font: 9px 'DM Mono'; }

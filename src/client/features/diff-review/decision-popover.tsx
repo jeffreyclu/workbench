@@ -3,12 +3,16 @@ import { createPortal } from 'react-dom';
 
 const POPOVER_WIDTH = 336;
 const ASIDE_WIDTH = 306;
+/** The aside when it carries code. Lines wrap rather than scroll sideways, so
+ * a column sized for a diagram turns a patch into a ragged paragraph. */
+const WIDE_ASIDE_WIDTH = 420;
 const ASIDE_GAP = 10;
 const VIEWPORT_MARGIN = 12;
-/** Below this the panel, the diagram and the viewport margins cannot sit in a
+/** Below this the panel, the aside and the viewport margins cannot sit in a
  * row, so the pair stacks instead of being squeezed to an unreadable width or
- * pushed off a phone screen. */
-const STACK_BREAKPOINT = POPOVER_WIDTH + ASIDE_GAP + ASIDE_WIDTH + VIEWPORT_MARGIN * 2;
+ * pushed off a phone screen. It moves with the aside's width, because a wider
+ * aside runs out of room sooner. */
+const stackBreakpoint = (asideWidth: number): number => POPOVER_WIDTH + ASIDE_GAP + asideWidth + VIEWPORT_MARGIN * 2;
 
 export type DecisionPopoverAnchor = HTMLElement | SVGElement;
 
@@ -24,7 +28,7 @@ export type DecisionPopoverAnchor = HTMLElement | SVGElement;
  * it — so focus moves in but is not trapped, and dismissal returns focus to the
  * marker so keyboard review continues where it left off.
  */
-export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-decision-marker', labelledBy, aside, onClose, children }: {
+export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-decision-marker', labelledBy, aside, wideAside = false, onClose, children }: {
   /** Either handle that opens this panel: a gutter marker (HTML) or a change
    * map node (SVG). Both measure and focus the same way. */
   anchor: DecisionPopoverAnchor;
@@ -43,6 +47,9 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
    * never be pushed off screen on its own. On a viewport too narrow for a row
    * it stacks under the decision instead. */
   aside?: ReactNode;
+  /** Whether the aside holds code rather than a diagram, which needs the wider
+   * column. */
+  wideAside?: boolean;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -53,8 +60,9 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
    * Narrow viewports stack the diagram under the decision and clamp the panel
    * to the screen; wide ones reserve both columns as before. */
   const measure = () => {
-    const stacked = hasAside && window.innerWidth < STACK_BREAKPOINT;
-    const columns = hasAside && !stacked ? POPOVER_WIDTH + ASIDE_GAP + ASIDE_WIDTH : POPOVER_WIDTH;
+    const asideWidth = wideAside ? WIDE_ASIDE_WIDTH : ASIDE_WIDTH;
+    const stacked = hasAside && window.innerWidth < stackBreakpoint(asideWidth);
+    const columns = hasAside && !stacked ? POPOVER_WIDTH + ASIDE_GAP + asideWidth : POPOVER_WIDTH;
     return { stacked, width: Math.min(columns, window.innerWidth - VIEWPORT_MARGIN * 2) };
   };
   const [stacked, setStacked] = useState(() => measure().stacked);
@@ -106,7 +114,7 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
       window.removeEventListener('resize', place);
       observer?.disconnect();
     };
-  }, [anchor, anchorId, anchorAttribute, hasAside]);
+  }, [anchor, anchorId, anchorAttribute, hasAside, wideAside]);
 
   useEffect(() => {
     panel.current?.focus?.({ preventScroll: true });
@@ -138,7 +146,7 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
   }, [anchor, anchorId, anchorAttribute, onClose]);
 
   return createPortal(
-    <div ref={panel} className={`decision-popover${hasAside ? ' with-aside' : ''}${stacked ? ' stacked' : ''}`} role="dialog" aria-labelledby={labelledBy} tabIndex={-1} style={style}>
+    <div ref={panel} className={`decision-popover${hasAside ? ' with-aside' : ''}${hasAside && wideAside ? ' wide-aside' : ''}${stacked ? ' stacked' : ''}`} role="dialog" aria-labelledby={labelledBy} tabIndex={-1} style={style}>
       {hasAside ? <>
         <div className="decision-popover-panel">{children}</div>
         <div className="decision-popover-aside">{aside}</div>

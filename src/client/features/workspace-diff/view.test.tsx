@@ -713,6 +713,37 @@ describe('WorkspaceDiffView pull-request source', () => {
     const popover = await screen.findByRole('dialog', { name: /./ });
     expect(within(popover).getByRole('region', { name: 'Related changes for this decision' })).toBeInTheDocument();
   });
+
+  it('shows the code of the change behind a disc clicked in the change map', async () => {
+    const declaration: WorkspaceDiffFile = {
+      path: 'src/scale.ts', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false,
+      patch: '@@ -1,2 +1,3 @@ export function scale(value)\n-export function scale(value) {\n+export function scale(value, ratio) {\n+  return value * ratio',
+    };
+    const caller: WorkspaceDiffFile = {
+      path: 'src/render.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false,
+      patch: '@@ -8 +8 @@ function render()\n-const size = scale(base)\n+const size = scale(base, ratio)',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: null, workspaces: [] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([declaration, caller], 'change-map-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    await waitFor(() => expect(selectedDecisionChip()).toBeInTheDocument());
+    fireEvent.click(await screen.findByRole('button', { name: /Full change diagram/ }));
+    const diagram = await screen.findByRole('group', { name: 'Change map diagram' });
+    fireEvent.click(within(diagram).getByRole('button', { name: /^Decision 2:/ }));
+
+    const popover = await screen.findByRole('dialog', { name: /./ });
+    const code = within(popover).getByRole('region', { name: 'Code for change 2' });
+    expect(within(code).getByText('src/render.ts')).toBeInTheDocument();
+    expect([...code.querySelectorAll('.diff-line-code')].map((line) => line.textContent))
+      .toEqual(expect.arrayContaining(['const size = scale(base, ratio)', 'const size = scale(base)']));
+  });
 });
 
 describe('WorkspaceDiffView readings and settled changes', () => {
