@@ -128,8 +128,12 @@ export function composerSelectionForConversation(
   const latestDispatchedMessage = [...messages].reverse().find((message) => message.author === 'jeffrey'
     && (message.dispatchTarget === 'both' || message.dispatchTarget === 'codex' || message.dispatchTarget === 'claude' || message.dispatchTarget === 'palmyra'));
   const latestProviderMessage = [...messages].reverse().find(isProviderMessage);
-  const historyTarget = latestDispatchedMessage?.dispatchTarget
-    ?? (latestProviderMessage?.author === 'codex' || latestProviderMessage?.author === 'claude' || latestProviderMessage?.author === 'palmyra' ? latestProviderMessage.author : null);
+  const recordedTarget = latestDispatchedMessage?.dispatchTarget;
+  const historyTarget: ConversationDispatchTarget | null = recordedTarget === 'both' || recordedTarget === 'codex' || recordedTarget === 'claude' || recordedTarget === 'palmyra'
+    ? recordedTarget
+    : latestProviderMessage?.author === 'codex' || latestProviderMessage?.author === 'claude' || latestProviderMessage?.author === 'palmyra'
+      ? latestProviderMessage.author
+      : null;
   const dispatchTarget = conversation.preferredDispatchTarget ?? historyTarget ?? 'both';
   const latestModelMessage = [...messages].reverse().find((message) => message.executionProfile && message.executionProfile !== 'routing');
   const latestAccountMessage = [...messages].reverse().find((message) => message.accountProfile);
