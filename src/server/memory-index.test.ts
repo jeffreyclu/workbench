@@ -164,7 +164,7 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     const task = repository.create({ title: 'Graph-assisted retrieval', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Graph-assisted retrieval', task.id);
     const seed = repository.createSharedMessage('jeffrey', 'Investigate nebulafalcon failures.', 'completed', conversation.id);
-    const related = repository.createSharedMessage('claude', 'Use the cursor-pagination decision.', 'completed', conversation.id);
+    const related = repository.createSharedMessage('claude', 'The nebulafalcon resolution is to use the cursor-pagination decision.', 'completed', conversation.id);
     collectMemoryDocuments(database, { docRoots: [] });
     await indexPendingMemory(database);
     database.prepare("DELETE FROM memory_chunks WHERE document_id = (SELECT id FROM memory_documents WHERE source = 'message' AND source_id = ?)").run(related.id);
@@ -280,26 +280,50 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
   });
 
   it('does not let generic task context outrank the exact request', async () => {
-    insertDocument('prototype-evidence', 'message', 'Prototype buy-in', 'Build a narrow frontend prototype to get team buy-in before investing real engineering hours.');
+    setEmbedder(async (texts) => texts.map((text) => {
+      if (text.startsWith('the purpose of the prototype')) return Float32Array.from([1, 0, 0]);
+      if (text.startsWith('Analyze Connector Error Reports')) return Float32Array.from([0, 1, 0]);
+      if (text.includes('narrow frontend prototype')) return Float32Array.from([0.95, 0.05, 0]);
+      return Float32Array.from([0, 0, 1]);
+    }));
+    insertDocument('prototype-evidence', 'message', 'Connector error UX prototype', 'Build a narrow connector error UX prototype to get team buy-in before investing real engineering hours.');
     insertDocument('persona-cleanup', 'work_item', 'Cleanup overlapping personas and skills', 'Remove dead personas and consolidate duplicate testing skills.');
     insertDocument('first-week', 'message', 'First week at Writer', 'Onboarded to Connector Gateway and met the connectors team.');
     await indexPendingMemory(database);
 
-    const results = await searchMemory(database, [
-      'the purpose of the prototype is to get buy in from my team before investing real eng hours',
-      'Analyze Connector Error Reports and Propose UX Improvement Plan',
-      'Analyze Connector Error Reports and Propose UX Improvement Plan',
-    ].join('\n'), { limit: 10 });
+    try {
+      const results = await searchMemory(database, [
+        'the purpose of the prototype is to get buy in from my team before investing real eng hours',
+        'Analyze Connector Error Reports and Propose UX Improvement Plan',
+        'Analyze Connector Error Reports and Propose UX Improvement Plan',
+      ].join('\n'), { limit: 10 });
 
-    expect(results[0]?.sourceId).toBe('prototype-evidence');
-    expect(results.map(({ sourceId }) => sourceId)).not.toContain('persona-cleanup');
-    expect(results.map(({ sourceId }) => sourceId)).not.toContain('first-week');
+      expect(results[0]?.sourceId).toBe('prototype-evidence');
+      expect(results.map(({ sourceId }) => sourceId)).not.toContain('persona-cleanup');
+      expect(results.map(({ sourceId }) => sourceId)).not.toContain('first-week');
+    } finally {
+      setEmbedder(deterministicTestEmbedder);
+    }
+  });
+
+  it('excludes active-conversation echoes before they set the relevance threshold', async () => {
+    insertDocument('current-echo', 'message', 'Current task', 'Fix the connector prototype ranking.', null, { conversationId: 'current' });
+    insertDocument('historical-decision', 'doc', 'Prototype decision', 'The connector prototype must demonstrate frontend recovery UX for team buy-in.');
+    await indexPendingMemory(database);
+
+    const results = await searchMemory(database, 'Fix the connector prototype ranking.', {
+      limit: 10,
+      excludeConversationId: 'current',
+      excludeExactBody: 'Fix the connector prototype ranking.',
+    });
+
+    expect(results.map(({ sourceId }) => sourceId)).toEqual(['historical-decision']);
   });
 
   it('rejects weak semantic matches instead of filling the result limit with noise', async () => {
     setEmbedder(async (texts) => texts.map((text) => {
       if (text === 'repair authentication outage') return Float32Array.from([1, 0]);
-      if (text.includes('Restore login service')) return Float32Array.from([0.8, 0.6]);
+      if (text.includes('Re-enable identity provider')) return Float32Array.from([0.8, 0.6]);
       return Float32Array.from([0.05, 0.9987]);
     }));
     try {
@@ -358,7 +382,7 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     expect(corroborated!.score).toBeGreaterThan(solo!.score);
   });
 
-  it('protects direct matches while diversifying the remaining results across task and time', () => {
+  it('protects the strongest direct matches before diversifying the remaining results', () => {
     const result = (sourceId: string, score: number, overrides: Partial<MemorySearchResult> = {}): MemorySearchResult => ({
       source: 'message', sourceId, title: sourceId, snippet: sourceId, createdAt: '2026-09-01T00:00:00.000Z',
       conversationId: 'conversation-a', workItemId: 'task-a', actor: 'jeffrey', score, retrievalPath: ['Matched request'],
@@ -373,7 +397,7 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
       }),
     ], 3);
 
-    expect(diversified.map(({ sourceId }) => sourceId)).toEqual(['strong-direct', 'graph-result', 'different-period']);
+    expect(diversified.map(({ sourceId }) => sourceId)).toEqual(['strong-direct', 'same-task', 'different-period']);
   });
 
   it('returns no results for a query shorter than the minimum length', async () => {

@@ -70,6 +70,16 @@ describe('durable memory prefetch', () => {
     expect(results[0].source).toBe('doc');
   });
 
+  it('keeps active-room history in short-term memory instead of echoing it through durable retrieval', () => {
+    const results = selectDurableMemoryEvidence([
+      evidence({ source: 'run_instructions', conversationId: 'current', body: 'Build the prototype.' }),
+      evidence({ source: 'activity', conversationId: null, body: 'To codex and claude: Build the prototype.' }),
+      evidence({ source: 'doc', title: 'Prototype decision', body: 'Use a real frontend prototype.' }),
+    ], 'current', { promptBudget: 12_000, excludeBody: 'Build the prototype.' });
+
+    expect(results.map(({ title }) => title)).toEqual(['Prototype decision']);
+  });
+
   it('formats bounded evidence with explicit precedence and no repeat-recall loop', () => {
     const prompt = durableMemoryPrompt([evidence()]);
     expect(prompt).toContain('Retrieved durable context');

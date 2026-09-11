@@ -1923,11 +1923,15 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       ? repository.searchActivityMemory(memoryQuery, memoryPlan.candidateLimit, {
         refresh: false,
         projectKey: !isExplicitMemoryRequest(run.instructions) && item.projectName ? projectKey(item.projectName) || undefined : undefined,
+        excludeConversationId: run.conversationId ?? undefined,
+        excludeExactBody: run.instructions,
         sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
         importanceProfile: isPersonalLongTermMemoryRequest(run.instructions) ? 'personal' : 'default',
       }).then((candidates) => selectDurableMemoryEvidence(candidates, run.conversationId, {
         maxItems: memoryPlan.evidenceLimit,
         promptBudget: memoryPlan.promptBudget,
+        excludeBody: run.instructions,
+        excludeCurrentConversation: true,
       })).catch((error) => {
         console.error('[agent-runner] automatic durable-memory retrieval failed; continuing without it', error);
         return [];

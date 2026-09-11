@@ -275,6 +275,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       projectKey: appliedScope === 'project' ? projectKey(inferredProjectName) || undefined : undefined,
       conversationId: appliedScope === 'conversation' ? conversationId : undefined,
       workItemId: appliedScope === 'task' ? contextualItem?.id : undefined,
+      excludeGeneratedConversationId: conversationId,
       sources: sources ?? [...DEFAULT_DURABLE_MEMORY_SOURCES],
       importanceProfile: isPersonalLongTermMemoryRequest(query) ? 'personal' : 'default',
     });

@@ -38,6 +38,9 @@ export type MemorySearchOptions = {
   projectKey?: string;
   conversationId?: string;
   workItemId?: string;
+  excludeConversationId?: string;
+  excludeGeneratedConversationId?: string;
+  excludeExactBody?: string;
   importanceProfile?: 'default' | 'personal';
 };
 
@@ -516,10 +519,11 @@ const QUERY_STOP_WORDS = new Set([
   'were', 'what', 'when', 'where', 'which', 'with', 'work', 'would', 'your',
 ]);
 
-const MIN_SEMANTIC_SIMILARITY = 0.28;
+const MIN_SEMANTIC_SIMILARITY = 0.35;
 const MIN_DIRECT_RELEVANCE = 0.12;
-const RELATIVE_RELEVANCE_FLOOR = 0.32;
+const RELATIVE_RELEVANCE_FLOOR = 0.42;
 const SHORTHAND_REQUEST = /^(?:continue|do it|go ahead|proceed|yes|yep|okay|ok|build|fix it|ship it|run it|promote)[.!\s]*$/i;
+const CONTEXT_REFERENTIAL_REQUEST = /\b(?:this|that|these|those|it|the (?:purpose|prototype|plan|approach|solution|fix|design|implementation|work|task|issue|problem))\b/i;
 
 function significantTerms(value: string): Set<string> {
   return new Set((value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
@@ -537,6 +541,14 @@ function memoryQueryParts(query: string): { primary: string; context: string } {
     return true;
   }).join('\n');
   return { primary, context };
+}
+
+function normalizedMemoryBody(value: string): string {
+  return value
+    .replace(/^(?:execute|to (?:codex|claude|palmyra)(?: and (?:codex|claude|palmyra))?(?: · [^:]+)?):\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase();
 }
 
 function lexicalCoverage(text: string, query: string): number {
@@ -644,7 +656,7 @@ export function diversifyMemoryResults(results: MemorySearchResult[], limit: num
   if (!safeLimit) return [];
   const ranked = [...results].sort((left, right) => right.score - left.score || right.createdAt.localeCompare(left.createdAt));
   const direct = ranked.filter((result) => result.retrievalPath.length === 1);
-  const protectedCount = Math.min(direct.length, Math.min(6, Math.max(1, Math.ceil(safeLimit * 0.15))));
+  const protectedCount = Math.min(direct.length, Math.max(1, Math.ceil(safeLimit * 0.5)));
   const selected = direct.slice(0, protectedCount);
   const selectedKeys = new Set(selected.map((result) => `${result.source}:${result.sourceId}`));
   const remaining = ranked.filter((result) => !selectedKeys.has(`${result.source}:${result.sourceId}`));
@@ -706,8 +718,9 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
   const limit = Math.max(1, Math.min(101, options.limit ?? 20));
   const scope = memoryScopeClause(options, 'md');
   const { primary, context } = memoryQueryParts(trimmed);
-  const primaryTerms = significantTerms(primary);
-  const contextWeight = SHORTHAND_REQUEST.test(primary) || primaryTerms.size <= 2 ? 0.72 : 0.14;
+  const contextDependent = Boolean(context) && (SHORTHAND_REQUEST.test(primary)
+    || CONTEXT_REFERENTIAL_REQUEST.test(primary));
+  const contextWeight = contextDependent ? 0.72 : 0.14;
 
   const lexicalRows = (text: string): RankedChunk[] => {
     const matchQuery = buildMemoryFtsMatchQuery(text);
@@ -787,15 +800,18 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     if (!document) continue;
     const searchable = `${document.title}\n${chunk.text}`;
     const signal = signals.get(chunkId) ?? {};
+    const primaryCoverage = lexicalCoverage(searchable, primary);
+    const contextCoverage = context ? lexicalCoverage(searchable, context) : 0;
+    if (contextDependent && contextCoverage < 0.2 && (signal.contextSemanticSimilarity ?? -1) < 0.5) continue;
     const primaryScore = combinedChannelScore(
       signal.primaryLexicalRank,
       signal.primarySemanticSimilarity,
-      lexicalCoverage(searchable, primary),
+      primaryCoverage,
     );
     const contextScore = context ? combinedChannelScore(
       signal.contextLexicalRank,
       signal.contextSemanticSimilarity,
-      lexicalCoverage(searchable, context),
+      contextCoverage,
     ) : 0;
     const phraseBoost = primary.length >= 8 && searchable.toLocaleLowerCase().includes(primary.toLocaleLowerCase()) ? 0.08 : 0;
     const relevance = primaryScore + (contextWeight * contextScore) + phraseBoost;
@@ -805,11 +821,16 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
 
   const corroboration = corroborationMultipliers(documents);
   const directResults: MemorySearchResult[] = [];
+  const excludedBody = options.excludeExactBody ? normalizedMemoryBody(options.excludeExactBody) : '';
   for (const [documentId, best] of bestByDocument) {
     if (best.relevance < MIN_DIRECT_RELEVANCE) continue;
     const document = documentById.get(documentId);
     const chunk = chunks.get(best.chunkId);
     if (!document || !chunk) continue;
+    if (options.excludeConversationId && document.conversation_id === options.excludeConversationId) continue;
+    if (options.excludeGeneratedConversationId && document.conversation_id === options.excludeGeneratedConversationId
+      && (document.actor === 'codex' || document.actor === 'claude' || document.actor === 'palmyra' || document.actor === 'system')) continue;
+    if (excludedBody && normalizedMemoryBody(document.body) === excludedBody) continue;
     const score = best.relevance
       * (SOURCE_AUTHORITY[document.source] ?? 1)
       * lexicalImportanceMultiplier(document, primary)
@@ -840,6 +861,10 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
   `).all(...graphResults.flatMap(({ source, sourceId }) => [source, sourceId])) as Array<{ id: string; source: string; source_id: string }> : [];
   const graphDocumentIds = new Map(graphDocumentRows.map((row) => [`${row.source}:${row.source_id}`, row.id]));
   const relevantGraph = graphResults.flatMap((result) => {
+    if (options.excludeConversationId && result.conversationId === options.excludeConversationId) return [];
+    if (options.excludeGeneratedConversationId && result.conversationId === options.excludeGeneratedConversationId
+      && (result.actor === 'codex' || result.actor === 'claude' || result.actor === 'palmyra' || result.actor === 'system')) return [];
+    if (excludedBody && normalizedMemoryBody(result.snippet) === excludedBody) return [];
     const documentId = graphDocumentIds.get(`${result.source}:${result.sourceId}`);
     const lexical = lexicalCoverage(`${result.title}\n${result.snippet}`, primary);
     const semantic = semanticStrength(documentId ? bestPrimarySemanticByDocument.get(documentId) : undefined);

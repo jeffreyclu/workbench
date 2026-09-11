@@ -789,7 +789,7 @@ export class WorkItemRepository {
    * the request path (a poller keyed off a watermark) rather than doing it
    * here.
    */
-  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; projectKey?: string; conversationId?: string; workItemId?: string; sources?: string[]; importanceProfile?: 'default' | 'personal' } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null; retrievalPath: string[] }>> {
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; excludeConversationId?: string; excludeGeneratedConversationId?: string; projectKey?: string; conversationId?: string; workItemId?: string; sources?: string[]; importanceProfile?: 'default' | 'personal' } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null; retrievalPath: string[] }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
       try {
@@ -806,6 +806,9 @@ export class WorkItemRepository {
       conversationId: options.conversationId,
       workItemId: options.workItemId,
       sources: options.sources,
+      excludeConversationId: options.excludeConversationId,
+      excludeGeneratedConversationId: options.excludeGeneratedConversationId,
+      excludeExactBody: options.excludeExactBody,
       importanceProfile: options.importanceProfile,
     });
     const excludedBody = options.excludeExactBody?.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
