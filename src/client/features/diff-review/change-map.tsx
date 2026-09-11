@@ -2,6 +2,7 @@ import { memo, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Network } from 'lucide-react';
 import { CHANGE_RELATIONS, CHANGE_RELATION_LABELS, type ChangeMap, type ChangeRelation } from '../../../shared/change-map.js';
 import { layoutChangeMap } from './change-map-layout.js';
+import { CODE_CATEGORIES, CODE_CATEGORY_DESCRIPTIONS, CODE_CATEGORY_LABELS } from './change-map-taxonomy.js';
 import { plainRelationText, selectFocusedChangeMap } from './change-map-logic.js';
 import { ChangeMapCanvas } from './change-map-canvas.js';
 import { ChangeMapProgressLegend } from './change-map-progress-legend.js';
@@ -9,13 +10,14 @@ import type { DecisionPopoverAnchor } from './decision-popover.js';
 
 const CHANGE_MAP_FOCUS_LIMIT = 4;
 
-/** The diagram answers one question the queue cannot: which of these changes
- * exist because of another one. Direct curves expose hubs and nested package
- * and folder boundaries expose coupling. Selection stays shared with the queue
- * and diff pane, so clicking a node is the same act as clicking its decision.
+/** The diagram answers two questions the queue cannot: which of these changes
+ * exist because of another one, and how far each one reaches. A disc is a
+ * change and its area is how much code it moves; the rings around it are the
+ * folder and the package it lives in, so a relationship that stays at home is
+ * a short line and one that crosses the codebase is a long one.
  *
- * Relationships now read primarily as inline links inside the diff itself; the
- * diagram stays as the opt-in whole-diff view for wide refactors. */
+ * Relationships also read as inline links inside the diff itself; the diagram
+ * stays as the opt-in whole-diff view for wide refactors. */
 
 export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, selectedId, cameFromId, riskBands, openDetailFor, onSelect, onOpenDetail }: {
   map: ChangeMap;
@@ -49,7 +51,9 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
 
   const selectedEdge = layout.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const relationsPresent = CHANGE_RELATIONS.filter((relation) => layout.edges.some((edge) => edge.relation === relation));
+  const categoriesPresent = CODE_CATEGORIES.filter((category) => layout.nodes.some((node) => node.category === category));
   const relatedCount = layout.nodes.filter((node) => node.degree > 0).length;
+  const reaching = layout.edges.filter((edge) => edge.scope !== 'folder').length;
 
   return <section className="diff-review-change-map" aria-label="Change relationship map">
     <header>
@@ -71,7 +75,13 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
           {showingAll ? 'Focus on current change' : `Show all ${map.nodes.length} changes`}
         </button>}
       </div>}
-      <p className="change-map-key">Node area = changed code size. Boxes group folders inside packages. Bright boundary-crossing lines expose coupling.</p>
+      {/* The three readings, said out loud. A diagram whose shape has to be
+          guessed at is a puzzle, and a reviewer already has one of those open. */}
+      <p className="change-map-key">
+        Each disc is a change, sized by how much code it moves. The rings around it are its folder and its package.
+        {layout.edges.length > 0 && ` ${reaching} of ${layout.edges.length} ${layout.edges.length === 1 ? 'relationship reaches' : 'relationships reach'} outside their own folder.`}
+        {' '}Scroll to zoom, drag to pan.
+      </p>
       <ChangeMapCanvas
         layout={layout}
         selectedId={selectedId}
@@ -88,17 +98,16 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
           ? plainRelationText(selectedEdge.explanation)
           : layout.edges.length === 0
             ? 'Nothing in this diff references anything else in it. Each change stands alone.'
-            : 'Select a line to read why two changes are related, or a box to open that decision — risk score and AI assist included.'}
+            : 'Select a line to read why two changes are related, or a disc to open that decision — risk score and AI assist included.'}
       </p>
       <ChangeMapProgressLegend nodes={map.nodes} cameFromId={cameFromId} />
-      <ul className="change-map-category-legend" aria-label="Code categories">
-        <li className="category-ui"><span aria-hidden="true" />UI</li>
-        <li className="category-type"><span aria-hidden="true" />Types / contracts</li>
-        <li className="category-test"><span aria-hidden="true" />Tests</li>
-        <li className="category-data"><span aria-hidden="true" />Data / storage</li>
-        <li className="category-service"><span aria-hidden="true" />Server / service</li>
-        <li className="category-code"><span aria-hidden="true" />General logic</li>
-      </ul>
+      {/* Colour is a claim about what kind of code a change is, so the claim is
+          written down next to it rather than left to be inferred. */}
+      {categoriesPresent.length > 0 && <ul className="change-map-category-legend" aria-label="Kinds of code">
+        {categoriesPresent.map((category) => <li key={category} className={`category-${category}`} title={CODE_CATEGORY_DESCRIPTIONS[category]}>
+          <span aria-hidden="true" />{CODE_CATEGORY_LABELS[category]}
+        </li>)}
+      </ul>}
       {relationsPresent.length > 0 && <ul className="change-map-legend" aria-label="Relationship types">
         {relationsPresent.map((relation: ChangeRelation) => <li key={relation} className={`relation-${relation}`}><span aria-hidden="true" />{CHANGE_RELATION_LABELS[relation]}</li>)}
       </ul>}

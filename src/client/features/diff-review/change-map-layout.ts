@@ -1,200 +1,409 @@
-import { type ChangeMap, type ChangeMapEdge, type ChangeMapNode } from '../../../shared/change-map.js';
+import type { ChangeMap, ChangeMapEdge, ChangeMapNode } from '../../../shared/change-map.js';
+import { categoryOf, folderLabel, folderOf, packageOf, type CodeCategory } from './change-map-taxonomy.js';
 
-/** The graph stays deterministic: the same diff always produces the same map.
- * Packages contain folders, folders contain code blocks, and every dependency
- * is a direct curve between the two blocks. */
-const PADDING = 28;
-const PACKAGE_GAP = 36;
-const PACKAGE_PADDING = 18;
-const PACKAGE_LABEL_HEIGHT = 28;
-const FOLDER_GAP = 18;
-const FOLDER_PADDING = 14;
-const FOLDER_LABEL_HEIGHT = 24;
-const NODE_GAP = 18;
-const MIN_NODE_WIDTH = 150;
-const MAX_NODE_WIDTH = 270;
-const MIN_NODE_HEIGHT = 108;
-const MAX_NODE_HEIGHT = 156;
+/** Layout is presentation, so it stays out of `shared/change-map.ts`: the
+ * relationships are the same whoever draws them. It is also fully
+ * deterministic — no force simulation, no randomness — because a reviewer who
+ * reopens the same diff must see the same picture in the same places.
+ *
+ * The picture is a **nested radial map**, and it is one on purpose. The grid
+ * this replaced put a change one column right of whatever caused it, which
+ * drew causal depth well and hid the two things a reader wants at a glance:
+ * how connected a change is, and how far its connections travel. Layered lanes
+ * flatten both. Every line leaves a box on the same side, so nine of them look
+ * much like two; and a lane is a file, so a dependency crossing a package
+ * boundary is drawn exactly like one that never left the folder.
+ *
+ * Three rules carry those facts instead:
+ *
+ * - **A node is a disc whose area is the amount of code the change moves.**
+ *   Big edits are physically big, with nothing to read.
+ * - **Discs sit on a ring, so lines leave them in every direction.** A symbol
+ *   twenty changes depend on is a hub with twenty spokes; a leaf has one. The
+ *   count is the picture rather than a number in a label.
+ * - **Rings nest: nodes in a folder, folders in a package.** An edge that
+ *   stays inside a folder is a short line inside one ring; an edge to another
+ *   package is a long chord across the whole diagram. Containment and reach
+ *   read as line length, which needs no legend. */
 
-export type ChangeMapCodeCategory = 'test' | 'ui' | 'type' | 'data' | 'service' | 'code';
+/** The smallest a disc gets while still being a target a person can hit, and
+ * the largest it gets before it starts eating its neighbours' room. */
+export const CHANGE_MAP_MIN_NODE_RADIUS = 12;
+export const CHANGE_MAP_MAX_NODE_RADIUS = 40;
+
+const NODE_GAP = 30;
+const FOLDER_PAD = 22;
+const FOLDER_GAP = 34;
+const PACKAGE_PAD = 34;
+const PACKAGE_GAP = 52;
+const PADDING = 48;
+/** How far apart two lines joining the same pair are bowed, so a mutual
+ * dependency reads as two arrows rather than one thick one. */
+const PARALLEL_EDGE_BOW = 14;
+/** How far a caption clears the rim it belongs to, and the step between its
+ * two lines. */
+const LABEL_GAP = 13;
+const LABEL_LINE = 12;
+
+/** Where an edge goes, which is the whole containment reading. */
+export type ChangeEdgeScope = 'folder' | 'package' | 'cross-package';
 
 export interface ChangeMapPlacedNode extends ChangeMapNode {
+  /** Centre of the disc, not a corner: everything in this layout is radial. */
   x: number;
   y: number;
-  width: number;
-  height: number;
+  /** Area is proportional to the lines the change moves, so radius is not. */
+  radius: number;
+  category: CodeCategory;
   packageId: string;
   folderId: string;
-  category: ChangeMapCodeCategory;
+  /** Edges touching this node that leave its folder, and that leave its
+   * package. A node whose degree is entirely external is code nothing around
+   * it uses, which is worth seeing without counting lines. */
+  externalDegree: number;
+  crossPackageDegree: number;
+  /** Where the caption goes. It is pushed straight out of the ring the node
+   * sits on rather than always underneath, because underneath is where the
+   * next disc round the ring has its own caption — two changes a little apart
+   * on the same ring wrote their names on top of each other. */
+  labelX: number;
+  titleY: number;
+  countsY: number;
+  labelAnchor: 'start' | 'middle' | 'end';
 }
 
-export interface ChangeMapFolder {
+/** One folder's ring. The path is written once on the ring rather than
+ * truncated into every disc inside it. */
+export interface ChangeMapFolderGroup {
   id: string;
-  label: string;
   packageId: string;
+  folderPath: string;
+  /** The folder's path below its package. */
+  label: string;
   x: number;
   y: number;
-  width: number;
-  height: number;
+  radius: number;
+  nodeCount: number;
+  internalEdges: number;
+  externalEdges: number;
+  /** Share of this folder's relationships that stay inside it, 0 to 1. This is
+   * the "is this change self-contained" number, stated rather than left to be
+   * counted off the drawing. */
+  containment: number;
+}
+
+export interface ChangeMapPackageGroup {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  radius: number;
+  folderCount: number;
   nodeCount: number;
 }
 
-export interface ChangeMapPackage {
-  id: string;
-  label: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  folderCount: number;
-}
-
 export interface ChangeMapPlacedEdge extends ChangeMapEdge {
+  /** A straight line from rim to rim — bowed only when a second line joins the
+   * same pair and would otherwise hide under it. Straight is the point: a
+   * routed line hides how many lines a node has and how far each one goes. */
   path: string;
   labelX: number;
   labelY: number;
-  crossesFolder: boolean;
-  crossesPackage: boolean;
+  scope: ChangeEdgeScope;
 }
 
 export interface ChangeMapLayout {
   nodes: ChangeMapPlacedNode[];
-  folders: ChangeMapFolder[];
-  packages: ChangeMapPackage[];
+  folders: ChangeMapFolderGroup[];
+  packages: ChangeMapPackageGroup[];
   edges: ChangeMapPlacedEdge[];
   width: number;
   height: number;
 }
 
-function pathParts(filePath: string): string[] {
-  return filePath.split('/').filter(Boolean);
+interface Seat {
+  x: number;
+  y: number;
+  /** Where on its parent's ring this seat is, which is what the ring inside it
+   * is rotated by. */
+  angle: number;
 }
 
-/** Monorepo roots get a two-segment package name. A conventional single app
- * has one repository package so its domain folders remain siblings. */
-export function packageForPath(filePath: string): string {
-  const parts = pathParts(filePath);
-  if (parts.length >= 2 && ['apps', 'packages', 'services', 'libs'].includes(parts[0])) return `${parts[0]}/${parts[1]}`;
-  return 'root';
+/** Each ring is turned by this much relative to the seat it sits on.
+ *
+ * Without it every ring starts at the top, so a folder sits directly below its
+ * package and a node directly below its folder — and three relationships out of
+ * one change come out as three lines lying on top of each other pointing the
+ * same way. The golden angle is the standard answer to that: it is irrational,
+ * so no amount of nesting brings two levels back into alignment. */
+const RING_TURN = Math.PI * (3 - Math.sqrt(5));
+
+/** Coordinates are compared in tests and memoised by value, so they are held
+ * to a tenth of a pixel rather than to whatever the trigonometry produced. */
+function round(value: number): number {
+  return Math.round(value * 10) / 10;
 }
 
-export function folderForPath(filePath: string): string {
-  const parts = pathParts(filePath);
-  const start = packageForPath(filePath) === 'root' ? 0 : 2;
-  const folders = parts.slice(start, -1);
-  return folders.length > 0 ? folders.join('/') : '(package root)';
+/** Area, not radius, tracks the size of the change: doubling the lines a
+ * change touches doubles the ink, which is the comparison the eye actually
+ * makes. Radius therefore moves with the square root. A diff whose changes are
+ * all one size gets one middling disc each rather than a field of maximums. */
+function nodeRadius(size: number, smallest: number, largest: number): number {
+  const span = Math.sqrt(largest) - Math.sqrt(smallest);
+  if (span <= 0) return (CHANGE_MAP_MIN_NODE_RADIUS + CHANGE_MAP_MAX_NODE_RADIUS) / 2;
+  const position = (Math.sqrt(size) - Math.sqrt(smallest)) / span;
+  return CHANGE_MAP_MIN_NODE_RADIUS + position * (CHANGE_MAP_MAX_NODE_RADIUS - CHANGE_MAP_MIN_NODE_RADIUS);
 }
 
-export function categoryForNode(node: ChangeMapNode): ChangeMapCodeCategory {
-  const paths = node.filePaths.length > 0 ? node.filePaths : [node.filePath];
-  if (paths.every((path) => /(?:^|\/)(?:__tests__\/.*|[^/]+\.(?:test|spec)\.[^/]+)$/.test(path))) return 'test';
-  if (paths.some((path) => /\.(?:tsx|jsx)$/.test(path))) return 'ui';
-  if (node.symbols.length > 0 && node.symbols.every((symbol) => symbol.kind === 'type')) return 'type';
-  if (paths.some((path) => /(?:^|\/)(?:db|database|data|repository|storage|migrations?)(?:\/|\.|$)/i.test(path))) return 'data';
-  if (paths.some((path) => /(?:^|\/)(?:api|server|service|routes?)(?:\/|\.|$)/i.test(path))) return 'service';
-  return 'code';
+/** The smallest ring the given circles fit around without touching.
+ *
+ * A circle of radius `r` sitting on a ring of radius `R` takes up `2·asin(r/R)`
+ * of that ring's angle, so the ring is big enough exactly when those angles sum
+ * to no more than a full turn. Bisecting for it beats a closed formula because
+ * the circles differ in size — one hub the size of four leaves is the normal
+ * case here, not the exception. */
+function ringRadius(radii: number[], gap: number): number {
+  if (radii.length <= 1) return 0;
+  const needed = radii.map((radius) => radius + gap / 2);
+  const angleAt = (ring: number) => needed.reduce((sum, radius) => sum + 2 * Math.asin(Math.min(1, radius / ring)), 0);
+  let low = Math.max(...needed);
+  let high = low;
+  while (angleAt(high) > Math.PI * 2) high *= 2;
+  for (let step = 0; step < 48; step += 1) {
+    const middle = (low + high) / 2;
+    if (angleAt(middle) > Math.PI * 2) low = middle;
+    else high = middle;
+  }
+  return high;
 }
 
-function dimensions(node: ChangeMapNode): { width: number; height: number } {
-  const lines = Math.max(1, node.additions + node.deletions);
-  const scale = Math.sqrt(lines);
+/** Seats each circle on the ring, giving it the angle its own size needs and
+ * sharing whatever is left over evenly. Equal spacing would let a large disc
+ * overlap a small neighbour, which is exactly the case a change map is full
+ * of. The first seat is at the top, so the same diff always opens the same way
+ * round. */
+function seatOnRing(radii: number[], ring: number, gap: number, startAngle: number): Seat[] {
+  if (radii.length === 1) return [{ x: 0, y: 0, angle: startAngle }];
+  const widths = radii.map((radius) => 2 * Math.asin(Math.min(1, (radius + gap / 2) / ring)));
+  const slack = Math.max(0, Math.PI * 2 - widths.reduce((sum, width) => sum + width, 0));
+  const share = slack / radii.length;
+  const seats: Seat[] = [];
+  let angle = startAngle;
+  for (const width of widths) {
+    const centre = angle + width / 2;
+    seats.push({ x: ring * Math.cos(centre), y: ring * Math.sin(centre), angle: centre });
+    angle += width + share;
+  }
+  return seats;
+}
+
+/** Grouping keeps first-appearance order, which is what makes the drawing
+ * stable: the same diff yields the same rings in the same order. */
+function groupInOrder<T>(items: T[], keyOf: (item: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+  return groups;
+}
+
+interface Shaped {
+  node: ChangeMapNode;
+  radius: number;
+  category: CodeCategory;
+  packageId: string;
+  folderId: string;
+}
+
+function shapeNodes(map: ChangeMap): Shaped[] {
+  const sizeOf = (node: ChangeMapNode) => Math.max(1, node.additions + node.deletions);
+  const sizes = map.nodes.map(sizeOf);
+  const smallest = Math.min(...sizes);
+  const largest = Math.max(...sizes);
+  return map.nodes.map((node) => ({
+    node,
+    radius: nodeRadius(sizeOf(node), smallest, largest),
+    category: categoryOf(node),
+    packageId: packageOf(node.filePath),
+    folderId: folderOf(node.filePath),
+  }));
+}
+
+/** Rim to rim, so a line starts where its disc ends and the arrowhead lands on
+ * the edge of its target rather than under it. Every line out of a node leaves
+ * at its own angle, which is what makes a hub look like a hub. */
+function edgeGeometry(from: ChangeMapPlacedNode, to: ChangeMapPlacedNode, bow: number): { path: string; labelX: number; labelY: number } {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const distance = Math.hypot(dx, dy) || 1;
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const start = { x: from.x + ux * from.radius, y: from.y + uy * from.radius };
+  const end = { x: to.x - ux * to.radius, y: to.y - uy * to.radius };
+  if (bow === 0) {
+    return {
+      path: `M ${round(start.x)} ${round(start.y)} L ${round(end.x)} ${round(end.y)}`,
+      labelX: round((start.x + end.x) / 2),
+      labelY: round((start.y + end.y) / 2),
+    };
+  }
+  const control = { x: (start.x + end.x) / 2 - uy * bow * 2, y: (start.y + end.y) / 2 + ux * bow * 2 };
   return {
-    width: Math.min(MAX_NODE_WIDTH, MIN_NODE_WIDTH + scale * 12),
-    height: Math.min(MAX_NODE_HEIGHT, MIN_NODE_HEIGHT + scale * 7),
+    path: `M ${round(start.x)} ${round(start.y)} Q ${round(control.x)} ${round(control.y)} ${round(end.x)} ${round(end.y)}`,
+    // Midpoint of the quadratic, not of its endpoints, so the label sits on
+    // the line rather than beside it.
+    labelX: round((start.x + 2 * control.x + end.x) / 4),
+    labelY: round((start.y + 2 * control.y + end.y) / 4),
   };
 }
 
-function append<K, T>(map: Map<K, T[]>, key: K, value: T): void {
-  map.set(key, [...(map.get(key) ?? []), value]);
-}
-
-interface Box { x: number; y: number; width: number; height: number }
-interface Point { x: number; y: number }
-
-function boundaryPoint(box: Box, toward: Point): Point {
-  const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  const dx = toward.x - centre.x;
-  const dy = toward.y - centre.y;
-  if (dx === 0 && dy === 0) return centre;
-  const scale = 1 / Math.max(Math.abs(dx) / (box.width / 2), Math.abs(dy) / (box.height / 2));
-  return { x: centre.x + dx * scale, y: centre.y + dy * scale };
-}
-
-function curve(from: ChangeMapPlacedNode, to: ChangeMapPlacedNode, index: number): { path: string; label: Point } {
-  const fromCentre = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
-  const toCentre = { x: to.x + to.width / 2, y: to.y + to.height / 2 };
-  const start = boundaryPoint(from, toCentre);
-  const end = boundaryPoint(to, fromCentre);
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const length = Math.max(1, Math.hypot(dx, dy));
-  const offset = ((index % 5) - 2) * 5;
-  const control = { x: (start.x + end.x) / 2 - dy / length * offset, y: (start.y + end.y) / 2 + dx / length * offset };
-  return {
-    path: `M ${start.x} ${start.y} Q ${control.x} ${control.y}, ${end.x} ${end.y}`,
-    label: { x: (start.x + 2 * control.x + end.x) / 4, y: (start.y + 2 * control.y + end.y) / 4 },
-  };
+function scopeOf(from: ChangeMapPlacedNode, to: ChangeMapPlacedNode): ChangeEdgeScope {
+  if (from.packageId !== to.packageId) return 'cross-package';
+  return from.folderId === to.folderId ? 'folder' : 'package';
 }
 
 export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
-  const packageNodes = new Map<string, ChangeMapNode[]>();
-  for (const node of [...map.nodes].sort((a, b) => a.ordinal - b.ordinal)) append(packageNodes, packageForPath(node.filePath), node);
+  const shaped = shapeNodes(map);
+  const byFolder = groupInOrder(shaped, (item) => item.folderId);
 
+  // Folder rings first, because a package ring is sized by the folder rings it
+  // has to hold, and the outermost ring by the packages.
+  const folderRings = [...byFolder].map(([folderId, members]) => {
+    const radii = members.map((member) => member.radius);
+    const ring = ringRadius(radii, NODE_GAP);
+    return { folderId, packageId: members[0].packageId, members, radii, ring, radius: ring + Math.max(...radii) + FOLDER_PAD };
+  });
+
+  const byPackage = groupInOrder(folderRings, (ring) => ring.packageId);
+  const packageRings = [...byPackage].map(([packageId, rings]) => {
+    const radii = rings.map((item) => item.radius);
+    const ring = ringRadius(radii, FOLDER_GAP);
+    return { packageId, rings, radii, ring, radius: ring + Math.max(...radii) + PACKAGE_PAD };
+  });
+
+  const packageRadii = packageRings.map((ring) => ring.radius);
+  const outerRing = ringRadius(packageRadii, PACKAGE_GAP);
+  const outerSeats = seatOnRing(packageRadii, outerRing, PACKAGE_GAP, -Math.PI / 2);
+
+  // One walk down the three levels, adding each seat to the one above it.
+  const packages: ChangeMapPackageGroup[] = [];
+  const folders: ChangeMapFolderGroup[] = [];
   const nodes: ChangeMapPlacedNode[] = [];
-  const folders: ChangeMapFolder[] = [];
-  const packages: ChangeMapPackage[] = [];
-  let packageX = PADDING;
-
-  for (const [packageId, members] of packageNodes) {
-    const folderNodes = new Map<string, ChangeMapNode[]>();
-    for (const node of members) append(folderNodes, folderForPath(node.filePath), node);
-    const folderLayouts: Array<{ id: string; width: number; height: number; members: Array<ChangeMapNode & { width: number; height: number }> }> = [];
-    let packageWidth = 360;
-
-    for (const [folderId, folderMembers] of folderNodes) {
-      const sized = folderMembers.map((node) => ({ ...node, ...dimensions(node) }));
-      const columns = Math.max(1, Math.ceil(Math.sqrt(sized.length)));
-      const rows = Math.ceil(sized.length / columns);
-      const columnWidths = Array.from({ length: columns }, (_, column) => Math.max(...sized.filter((_, index) => index % columns === column).map((node) => node.width)));
-      const rowHeights = Array.from({ length: rows }, (_, row) => Math.max(...sized.slice(row * columns, (row + 1) * columns).map((node) => node.height)));
-      const width = FOLDER_PADDING * 2 + columnWidths.reduce((sum, value) => sum + value, 0) + NODE_GAP * (columns - 1);
-      const height = FOLDER_LABEL_HEIGHT + FOLDER_PADDING * 2 + rowHeights.reduce((sum, value) => sum + value, 0) + NODE_GAP * (rows - 1);
-      folderLayouts.push({ id: folderId, width, height, members: sized });
-      packageWidth = Math.max(packageWidth, width + PACKAGE_PADDING * 2);
-    }
-
-    const packageHeight = PACKAGE_LABEL_HEIGHT + PACKAGE_PADDING * 2 + folderLayouts.reduce((sum, folder) => sum + folder.height, 0) + FOLDER_GAP * Math.max(0, folderLayouts.length - 1);
-    const packageY = PADDING;
-    packages.push({ id: packageId, label: packageId, x: packageX, y: packageY, width: packageWidth, height: packageHeight, folderCount: folderLayouts.length });
-
-    let folderY = packageY + PACKAGE_LABEL_HEIGHT + PACKAGE_PADDING;
-    for (const folder of folderLayouts) {
-      const folderX = packageX + PACKAGE_PADDING;
-      folders.push({ id: `${packageId}:${folder.id}`, label: folder.id, packageId, x: folderX, y: folderY, width: packageWidth - PACKAGE_PADDING * 2, height: folder.height, nodeCount: folder.members.length });
-      const columns = Math.max(1, Math.ceil(Math.sqrt(folder.members.length)));
-      const columnWidths = Array.from({ length: columns }, (_, column) => Math.max(...folder.members.filter((_, index) => index % columns === column).map((node) => node.width)));
-      const rowHeights = Array.from({ length: Math.ceil(folder.members.length / columns) }, (_, row) => Math.max(...folder.members.slice(row * columns, (row + 1) * columns).map((node) => node.height)));
-      const columnOffsets = columnWidths.map((_, column) => columnWidths.slice(0, column).reduce((sum, value) => sum + value, 0) + NODE_GAP * column);
-      const rowOffsets = rowHeights.map((_, row) => rowHeights.slice(0, row).reduce((sum, value) => sum + value, 0) + NODE_GAP * row);
-      folder.members.forEach((node, index) => {
-        const column = index % columns;
-        const row = Math.floor(index / columns);
-        nodes.push({ ...node, x: folderX + FOLDER_PADDING + columnOffsets[column], y: folderY + FOLDER_LABEL_HEIGHT + FOLDER_PADDING + rowOffsets[row], packageId, folderId: folder.id, category: categoryForNode(node) });
+  packageRings.forEach((packageRing, packageIndex) => {
+    const seat = outerSeats[packageIndex];
+    packages.push({
+      id: packageRing.packageId,
+      label: packageRing.packageId,
+      x: seat.x,
+      y: seat.y,
+      radius: packageRing.radius,
+      folderCount: packageRing.rings.length,
+      nodeCount: packageRing.rings.reduce((sum, ring) => sum + ring.members.length, 0),
+    });
+    const folderSeats = seatOnRing(packageRing.radii, packageRing.ring, FOLDER_GAP, seat.angle + RING_TURN);
+    packageRing.rings.forEach((folderRing, folderIndex) => {
+      const folderSeat = folderSeats[folderIndex];
+      const centre = { x: seat.x + folderSeat.x, y: seat.y + folderSeat.y };
+      folders.push({
+        id: folderRing.folderId,
+        packageId: folderRing.packageId,
+        folderPath: folderRing.folderId,
+        label: folderLabel(folderRing.folderId, folderRing.packageId),
+        x: centre.x,
+        y: centre.y,
+        radius: folderRing.radius,
+        nodeCount: folderRing.members.length,
+        internalEdges: 0,
+        externalEdges: 0,
+        containment: 1,
       });
-      folderY += folder.height + FOLDER_GAP;
-    }
-    packageX += packageWidth + PACKAGE_GAP;
+      const nodeSeats = seatOnRing(folderRing.radii, folderRing.ring, NODE_GAP, folderSeat.angle + RING_TURN);
+      folderRing.members.forEach((member, memberIndex) => {
+        const nodeSeat = nodeSeats[memberIndex];
+        nodes.push({
+          ...member.node,
+          x: centre.x + nodeSeat.x,
+          y: centre.y + nodeSeat.y,
+          radius: member.radius,
+          category: member.category,
+          packageId: member.packageId,
+          folderId: member.folderId,
+          externalDegree: 0,
+          crossPackageDegree: 0,
+          labelX: 0,
+          titleY: 0,
+          countsY: 0,
+          labelAnchor: 'middle',
+        });
+      });
+    });
+  });
+
+  // Shift the whole drawing into positive space: the rings were built around
+  // an origin in the middle of it.
+  const shiftX = PADDING - Math.min(...packages.map((group) => group.x - group.radius));
+  const shiftY = PADDING - Math.min(...packages.map((group) => group.y - group.radius));
+  for (const group of packages) { group.x = round(group.x + shiftX); group.y = round(group.y + shiftY); group.radius = round(group.radius); }
+  for (const group of folders) { group.x = round(group.x + shiftX); group.y = round(group.y + shiftY); group.radius = round(group.radius); }
+  for (const node of nodes) { node.x = round(node.x + shiftX); node.y = round(node.y + shiftY); node.radius = round(node.radius); }
+
+  // Captions, once every disc is where it finally sits. A folder holding one
+  // change has nothing to point away from, so that caption goes underneath.
+  for (const node of nodes) {
+    const folder = folders.find((group) => group.id === node.folderId)!;
+    const away = Math.hypot(node.x - folder.x, node.y - folder.y);
+    const dx = away === 0 ? 0 : (node.x - folder.x) / away;
+    const dy = away === 0 ? 1 : (node.y - folder.y) / away;
+    const reach = node.radius + LABEL_GAP;
+    const anchorY = node.y + dy * reach;
+    node.labelX = round(node.x + dx * reach);
+    node.titleY = round(dy < -0.3 ? anchorY - LABEL_LINE : anchorY);
+    node.countsY = round(node.titleY + LABEL_LINE);
+    node.labelAnchor = dx > 0.3 ? 'start' : dx < -0.3 ? 'end' : 'middle';
   }
 
-  const placed = new Map(nodes.map((node) => [node.id, node]));
-  const edges = map.edges.flatMap((edge, index): ChangeMapPlacedEdge[] => {
-    const from = placed.get(edge.fromId);
-    const to = placed.get(edge.toId);
-    if (!from || !to) return [];
-    const curved = curve(from, to, index);
-    return [{ ...edge, path: curved.path, labelX: curved.label.x, labelY: curved.label.y, crossesFolder: from.folderId !== to.folderId || from.packageId !== to.packageId, crossesPackage: from.packageId !== to.packageId }];
+  const placedById = new Map(nodes.map((node) => [node.id, node]));
+  const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  const drawable = map.edges.filter((edge) => placedById.has(edge.fromId) && placedById.has(edge.toId) && edge.fromId !== edge.toId);
+
+  // Two changes can relate in both directions at once — two functions that
+  // call each other, both edited. Counting the pair first is what lets the
+  // second line be bowed off the first instead of drawn under it.
+  const pairKey = (edge: ChangeMapEdge) => [edge.fromId, edge.toId].sort().join(' ');
+  const pairCounts = new Map<string, number>();
+  for (const edge of drawable) pairCounts.set(pairKey(edge), (pairCounts.get(pairKey(edge)) ?? 0) + 1);
+  const pairSeen = new Map<string, number>();
+
+  const edges: ChangeMapPlacedEdge[] = drawable.map((edge) => {
+    const from = placedById.get(edge.fromId)!;
+    const to = placedById.get(edge.toId)!;
+    const key = pairKey(edge);
+    const total = pairCounts.get(key)!;
+    const index = pairSeen.get(key) ?? 0;
+    pairSeen.set(key, index + 1);
+    const bow = total === 1 ? 0 : (index - (total - 1) / 2) * PARALLEL_EDGE_BOW;
+    const scope = scopeOf(from, to);
+
+    from.externalDegree += scope === 'folder' ? 0 : 1;
+    to.externalDegree += scope === 'folder' ? 0 : 1;
+    from.crossPackageDegree += scope === 'cross-package' ? 1 : 0;
+    to.crossPackageDegree += scope === 'cross-package' ? 1 : 0;
+    if (scope === 'folder') folderById.get(from.folderId)!.internalEdges += 1;
+    else {
+      folderById.get(from.folderId)!.externalEdges += 1;
+      folderById.get(to.folderId)!.externalEdges += 1;
+    }
+
+    return { ...edge, ...edgeGeometry(from, to, bow), scope };
   });
-  const width = Math.max(480, packageX - PACKAGE_GAP + PADDING);
-  const height = Math.max(280, ...packages.map((item) => item.y + item.height + PADDING));
-  return { nodes, folders, packages, edges, width, height };
+
+  for (const folder of folders) {
+    const total = folder.internalEdges + folder.externalEdges;
+    folder.containment = total === 0 ? 1 : folder.internalEdges / total;
+  }
+
+  const right = Math.max(...packages.map((group) => group.x + group.radius));
+  const bottom = Math.max(...packages.map((group) => group.y + group.radius));
+  return { nodes, folders, packages, edges, width: round(right + PADDING), height: round(bottom + PADDING) };
 }

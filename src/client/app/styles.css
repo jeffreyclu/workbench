@@ -489,37 +489,61 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-scope button { flex: 0 0 auto; padding: 4px 7px; color: #c4c3bc; border: 1px solid #45443e; border-radius: 5px; background: #1b1b18; cursor: pointer; font: 9px 'DM Mono'; }
 .change-map-scope button:hover, .change-map-scope button:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
 .change-map-key { margin: 0; padding: 0 14px 8px; color: #85847d; font: 9px 'DM Mono'; }
-.change-map-canvas { min-width: 0; padding: 0 14px 10px; }
-.change-map-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 0 6px; }
-.change-map-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 28px; min-height: 28px; padding: 4px 7px; color: #aaa99f; border: 1px solid #35352f; border-radius: 6px; background: #191917; cursor: pointer; font: 9px 'DM Mono'; }
-.change-map-toolbar button:hover, .change-map-toolbar button:focus-visible { color: var(--acid); border-color: #59683a; outline: 0; }
-.change-map-toolbar button:disabled { opacity: .35; cursor: default; }
-.change-map-toolbar output { min-width: 42px; color: #85847d; text-align: center; font: 9px 'DM Mono'; }
-.change-map-viewport { overflow: auto; overscroll-behavior: contain; max-height: 560px; border: 1px solid #262621; border-radius: 8px; background: #10100e; cursor: grab; touch-action: pan-x pan-y; }
-.change-map-viewport.is-panning { cursor: grabbing; user-select: none; }
-.change-map-viewport:focus-visible { outline: 1px solid var(--acid); outline-offset: -2px; }
-.change-map-package rect { fill: #141412; stroke: #4a493f; stroke-width: 1.5; }
-.change-map-package text { fill: #c2c1b7; font: 700 11px 'DM Mono'; }
-.change-map-package text tspan { fill: #68675f; font-size: 9px; font-weight: 500; }
-.change-map-folder rect { fill: #181816; stroke: #302f2a; stroke-dasharray: 4 3; }
-.change-map-folder.selected rect { fill: #1b1c17; stroke: #647345; }
-.change-map-folder text { fill: #8f8e86; font: 10px 'DM Mono'; }
-.change-map-folder text tspan { fill: #616059; font-size: 9px; }
+/* A window onto the drawing rather than a box around it: the SVG is the size
+   of the pane and the camera moves, so the wheel zooms and a drag pans instead
+   of the reviewer scrolling a diagram wider than the screen. */
+.change-map-canvas { position: relative; overflow: hidden; margin: 0 14px 10px; border: 1px solid #24241f; border-radius: 9px; background: #101010; touch-action: none; }
+.change-map-canvas:focus-visible { outline: 1px solid var(--acid); outline-offset: -3px; }
+.change-map-surface { display: block; cursor: grab; }
+.change-map-canvas.panning .change-map-surface { cursor: grabbing; }
+.change-map-zoom { position: absolute; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid #35352c; border-radius: 7px; background: #161614e6; }
+.change-map-zoom button { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; color: #a9a89f; border: 0; border-radius: 5px; background: none; cursor: pointer; }
+.change-map-zoom button:hover, .change-map-zoom button:focus-visible { color: var(--acid); background: #22221c; outline: 0; }
+.change-map-zoom output { min-width: 34px; color: #85847d; font: 9px 'DM Mono'; text-align: center; }
+/* The ground the graph sits on: a package ring holding one ring per folder,
+   each named once on its own edge. They are drawn behind everything and take
+   no clicks, so what they contribute is containment and nothing else — a line
+   that stays inside a ring never left its folder. */
+.change-map-package-ring { fill: #141412; stroke: #2b2b24; stroke-dasharray: 2 6; }
+.change-map-package.selected .change-map-package-ring { fill: #171713; stroke: #3d3d33; }
+.change-map-package-label { fill: #8f8e86; font: 11px 'DM Mono'; paint-order: stroke; stroke: #101010; stroke-width: 4px; }
+.change-map-folder-ring { fill: #191915; stroke: #2f2f27; }
+.change-map-folder.selected .change-map-folder-ring { fill: #1e1e18; stroke: #4b4a44; }
+/* A folder whose relationships mostly leave it is the thing this map exists to
+   show, so it is marked rather than left to be counted off the lines. */
+.change-map-folder.reaching .change-map-folder-ring { stroke: #6b5738; stroke-dasharray: 5 4; }
+.change-map-folder-label { fill: #77766f; font: 9px 'DM Mono'; paint-order: stroke; stroke: #191915; stroke-width: 4px; }
+.change-map-folder.selected .change-map-folder-label { fill: #c4c3bc; }
+.change-map-group-count { fill: #56554e; }
 .change-map-node { --state-tone: #56554e; cursor: pointer; }
 .change-map-node.state-reviewed { --state-tone: #8bbd75; }
 .change-map-node.state-needs_changes { --state-tone: #e1a68f; }
 .change-map-node.state-commented { --state-tone: #9ab6d8; }
-.change-map-node { --category-fill: #22221f; --category-stroke: #77766d; }
-.change-map-node.category-ui { --category-fill: #222b35; --category-stroke: #79a9d1; }
-.change-map-node.category-type { --category-fill: #2b2431; --category-stroke: #b591c5; }
-.change-map-node.category-test { --category-fill: #263025; --category-stroke: #82a978; }
-.change-map-node.category-data { --category-fill: #302a1e; --category-stroke: #c3a25b; }
-.change-map-node.category-service { --category-fill: #1e302d; --category-stroke: #68a89b; }
-.change-map-node-body { fill: var(--category-fill); stroke: var(--category-stroke); }
-.change-map-node:hover .change-map-node-body { stroke: #4b4a44; }
-.change-map-node.selected .change-map-node-body { stroke: var(--acid); stroke-width: 2; }
+/* One hue per semantic category, so the kind of code a change is reads before
+   any label does. The fill is the category at low opacity and the outline is
+   the category at full strength, which keeps a small disc legible without
+   making a large one a solid block of colour. */
+.change-map-node { --category-tone: #8a8980; }
+.change-map-node.category-ui { --category-tone: #7cb3e8; }
+.change-map-node.category-state { --category-tone: #c69bd8; }
+.change-map-node.category-logic { --category-tone: #8bbd75; }
+.change-map-node.category-api { --category-tone: #e5b769; }
+.change-map-node.category-data { --category-tone: #e08f6f; }
+.change-map-node.category-types { --category-tone: #6fc3bd; }
+.change-map-node.category-test { --category-tone: #8f8e86; }
+.change-map-node.category-config { --category-tone: #b39b6a; }
+.change-map-node.category-styles { --category-tone: #d98fb0; }
+.change-map-node.category-docs { --category-tone: #9aa7b8; }
+.change-map-node.category-tooling { --category-tone: #86a0a8; }
+.change-map-node.category-other { --category-tone: #6b6a64; }
+.change-map-node-body { fill: var(--category-tone); fill-opacity: 0.24; stroke: var(--category-tone); stroke-opacity: 0.85; }
+.change-map-node:hover .change-map-node-body { fill-opacity: 0.4; }
+.change-map-node.selected .change-map-node-body { fill-opacity: 0.5; stroke: var(--acid); stroke-width: 2; }
 .change-map-node:focus-visible { outline: none; }
 .change-map-node:focus-visible .change-map-node-body { stroke: var(--acid); stroke-width: 2; }
+/* A change that reaches into another package gets a halo, because that is the
+   fact most worth catching from across the diagram. */
+.change-map-node.crosses-package .change-map-node-body { stroke-width: 2; }
 .change-map-node.dimmed { opacity: 0.38; }
 /* An accepted change recedes on both surfaces at once: the map node and the
    hunk itself. It is still there, still selectable, and comes back to full
@@ -528,13 +552,17 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-node.state-reviewed { opacity: 0.55; }
 .change-map-node.state-reviewed.selected, .change-map-node.state-reviewed.came-from, .change-map-node.state-reviewed:hover, .change-map-node.state-reviewed:focus-visible { opacity: 1; }
 .change-map-node.isolated .change-map-node-body { stroke-dasharray: 3 3; }
-.change-map-node-rail { fill: var(--state-tone); }
-.change-map-node-title { fill: #e6e5de; font: 13px 'DM Mono'; }
+/* The reviewer's own verdict, as a ring just outside the disc. It rides on top
+   of the category colour rather than replacing it: what kind of code this is
+   and whether it has been read are two different questions. */
+.change-map-node-rail { fill: none; stroke: var(--state-tone); stroke-width: 2; stroke-opacity: 0; transform-box: fill-box; }
+.change-map-node.state-reviewed .change-map-node-rail, .change-map-node.state-needs_changes .change-map-node-rail, .change-map-node.state-commented .change-map-node-rail { stroke-opacity: 0.9; r: calc(100% + 3px); }
+.change-map-node-ordinal { fill: #e6e5de; font: 10px 'DM Mono'; pointer-events: none; }
+.change-map-node-title { fill: #d5d4cd; font: 11px 'DM Mono'; paint-order: stroke; stroke: #101010; stroke-width: 3.5px; pointer-events: none; }
 /* The declarations the change moves, and the size of it. These were drawn
    without a fill rule until now, which on a dark canvas meant black on black:
    the box was carrying two lines nobody could read. */
-.change-map-node-symbols { fill: #9ab6d8; font: 11px 'DM Mono'; }
-.change-map-node-counts { fill: #77766f; font: 10px 'DM Mono'; }
+.change-map-node-counts { fill: #77766f; font: 9px 'DM Mono'; paint-order: stroke; stroke: #101010; stroke-width: 3px; pointer-events: none; }
 .change-map-node-counts .added { fill: #8bbd75; }
 .change-map-node-counts .removed { fill: #e1a68f; }
 .change-map-node-trail { fill: #85847d; font: 9px 'DM Mono'; }
@@ -551,8 +579,12 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-edge.relation-uses, .change-map-arrow.relation-uses, .change-map-legend li.relation-uses { --relation-tone: #77766f; }
 .change-map-arrow path { fill: var(--relation-tone); }
 .change-map-edge-line { fill: none; stroke: var(--relation-tone); stroke-width: 1.4; opacity: 0.7; }
-.change-map-edge.crosses-folder .change-map-edge-line { stroke-width: 1.8; opacity: .88; }
-.change-map-edge.crosses-package .change-map-edge-line { stroke-width: 2.3; opacity: 1; }
+/* Reach, as weight. A line inside one folder is quiet; a line into another
+   package is the heaviest thing on the diagram, because it is the one that
+   makes the change stop being self-contained. */
+.change-map-edge.scope-folder .change-map-edge-line { opacity: 0.45; }
+.change-map-edge.scope-package .change-map-edge-line { stroke-width: 1.7; }
+.change-map-edge.scope-cross-package .change-map-edge-line { stroke-width: 2.2; opacity: 0.92; }
 /* How the pair reads across the patch, drawn so the four cases are not one
    line. Severed coupling fades and breaks up, rewired coupling keeps full
    weight with a long dash because it is a live edge that changed shape, and
@@ -566,7 +598,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 /* Every line carries its name; whether the name is drawn is a question of
    crowding. A handful of arrows read better named, and a busy diagram reads
    better naming only the line the reviewer is pointing at or has selected. */
-.change-map-edge-label { fill: #b8b7ae; font: 10px 'DM Mono'; paint-order: stroke; stroke: #131311; stroke-width: 3.5px; pointer-events: none; opacity: 0; }
+.change-map-edge-label { fill: #b8b7ae; font: 10px 'DM Mono'; paint-order: stroke; stroke: #101010; stroke-width: 3.5px; pointer-events: none; opacity: 0; }
 .change-map-canvas.labelled .change-map-edge-label { opacity: 0.78; }
 .change-map-edge:hover .change-map-edge-label, .change-map-edge.active .change-map-edge-label, .change-map-edge.touches-selection .change-map-edge-label { opacity: 1; }
 .change-map-edge.dimmed .change-map-edge-label { opacity: 0; }
@@ -575,15 +607,21 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 12px; list-style: none; }
 .change-map-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
 .change-map-legend li span { width: 14px; height: 2px; border-radius: 2px; background: var(--relation-tone); }
-.change-map-category-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 10px; list-style: none; }
-.change-map-category-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
-.change-map-category-legend li span { width: 9px; height: 9px; border: 1px solid var(--category-stroke); border-radius: 3px; background: var(--category-fill); }
-.change-map-category-legend .category-ui { --category-fill: #222b35; --category-stroke: #79a9d1; }
-.change-map-category-legend .category-type { --category-fill: #2b2431; --category-stroke: #b591c5; }
-.change-map-category-legend .category-test { --category-fill: #263025; --category-stroke: #82a978; }
-.change-map-category-legend .category-data { --category-fill: #302a1e; --category-stroke: #c3a25b; }
-.change-map-category-legend .category-service { --category-fill: #1e302d; --category-stroke: #68a89b; }
-.change-map-category-legend .category-code { --category-fill: #22221f; --category-stroke: #77766d; }
+.change-map-category-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 8px; list-style: none; }
+.change-map-category-legend li { --category-tone: #8a8980; display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
+.change-map-category-legend li span { width: 9px; height: 9px; border: 1px solid var(--category-tone); border-radius: 50%; background: color-mix(in srgb, var(--category-tone) 24%, transparent); }
+.change-map-category-legend li.category-ui { --category-tone: #7cb3e8; }
+.change-map-category-legend li.category-state { --category-tone: #c69bd8; }
+.change-map-category-legend li.category-logic { --category-tone: #8bbd75; }
+.change-map-category-legend li.category-api { --category-tone: #e5b769; }
+.change-map-category-legend li.category-data { --category-tone: #e08f6f; }
+.change-map-category-legend li.category-types { --category-tone: #6fc3bd; }
+.change-map-category-legend li.category-test { --category-tone: #8f8e86; }
+.change-map-category-legend li.category-config { --category-tone: #b39b6a; }
+.change-map-category-legend li.category-styles { --category-tone: #d98fb0; }
+.change-map-category-legend li.category-docs { --category-tone: #9aa7b8; }
+.change-map-category-legend li.category-tooling { --category-tone: #86a0a8; }
+.change-map-category-legend li.category-other { --category-tone: #6b6a64; }
 .diff-review-queue-region { min-width: 0; }
 .workspace-diff .diff-review-decision-queue { background: #11110f; }
 .diff-review-decision-queue ol { display: flex; margin: 0; padding: 0; overflow-x: auto; overscroll-behavior-x: contain; list-style: none; }
@@ -679,9 +717,9 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .decision-relationship-diagram > header { display: flex; align-items: center; gap: 7px; padding: 10px 14px 8px; color: #85847d; font: 10px 'DM Mono'; }
 .decision-relationship-diagram > header small { margin-left: auto; color: #77766f; font: 9px 'DM Mono'; }
 .decision-relationship-diagram > p.muted { margin: 0; padding: 0 14px 12px; font: 10px 'DM Mono'; }
-/* The same drawing, in a panel rather than a page: it scrolls inside the
-   popover instead of growing it to the size of the diff. */
-.decision-relationship-diagram .change-map-canvas { max-width: 560px; max-height: 360px; }
+/* The same camera, in a panel rather than a page: the frame is smaller and the
+   drawing is fitted into it, instead of the popover growing to the diff. */
+.decision-relationship-diagram .change-map-canvas { margin: 0 10px 10px; }
 .diff-review-load-error { padding: 14px; border: 1px solid #5b3935; border-radius: 7px; background: #211716; }.diff-review-load-error strong { color: #e1a68f; }.diff-review-load-error p { color: #aaa9a2; }
 .diff-review-workbench { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; border-top: 1px solid #252522; }
 .diff-review-file-diff { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; background: #101010; }

@@ -55,6 +55,7 @@ export const DecisionRelationshipDiagram = memo(function DecisionRelationshipDia
           riskBands={riskBands}
           selectedEdgeId={selectedEdgeId}
           label="Related changes diagram"
+          viewHeight={300}
           nodeAttribute="data-decision-diagram-node"
           onSelect={onSelect}
           onSelectEdge={setSelectedEdgeId}
@@ -63,7 +64,7 @@ export const DecisionRelationshipDiagram = memo(function DecisionRelationshipDia
         <p className="change-map-explanation" role="status">
           {selectedEdge
             ? plainRelationText(selectedEdge.explanation)
-            : 'Select a line to read why two changes are related, or a box to jump to that change.'}
+            : 'Select a line to read why two changes are related, or a disc to jump to that change.'}
         </p>
         {relationsPresent.length > 0 && <ul className="change-map-legend" aria-label="Relationship types">
           {relationsPresent.map((relation: ChangeRelation) => <li key={relation} className={`relation-${relation}`}><span aria-hidden="true" />{CHANGE_RELATION_LABELS[relation]}</li>)}

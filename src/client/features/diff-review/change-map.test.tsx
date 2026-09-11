@@ -115,19 +115,24 @@ describe('diff review change navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
     expect(screen.getByRole('button', { name: /Decision 2:/ })).not.toHaveAttribute('aria-haspopup');
   });
-  it('zooms the vector canvas and explains the semantic node colors', () => {
+  it('zooms the mounted canvas and names the kinds of code on it', () => {
+    // Carried over from the other implementation's suite: the canvas' own
+    // tests drive it directly, so this is the only check that opening the full
+    // diagram wires up a camera and a legend the reviewer can actually use.
     render(<DiffReviewChangeMap map={map} selectedId="type" onSelect={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
 
     const canvas = screen.getByRole('group', { name: 'Change map diagram' });
-    const svg = canvas.querySelector('.change-map-viewport > svg')!;
-    const initialWidth = Number(svg.getAttribute('width'));
-    expect(screen.getByText('100%')).toBeInTheDocument();
+    const surface = canvas.querySelector('.change-map-surface')!;
+    const windowWidth = () => Number(surface.getAttribute('viewBox')!.split(' ')[2]);
+    const fitted = windowWidth();
 
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
-    expect(screen.getByText('120%')).toBeInTheDocument();
-    expect(Number(svg.getAttribute('width'))).toBeGreaterThan(initialWidth);
-    expect(screen.getByRole('list', { name: 'Code categories' })).toHaveTextContent('UI');
-    expect(screen.getByRole('list', { name: 'Code categories' })).toHaveTextContent('Types / contracts');
+    expect(windowWidth()).toBeLessThan(fitted);
+    expect(screen.getByRole('group', { name: 'Zoom' })).toHaveTextContent('%');
+
+    const legend = screen.getByRole('list', { name: 'Kinds of code' });
+    expect(legend).toHaveTextContent('Types');
+    expect(legend).toHaveTextContent('Logic');
   });
 });
