@@ -115,6 +115,33 @@ export function composerSelectionFromConversation(conversation: Pick<SharedConve
   };
 }
 
+/**
+ * Stored conversation preferences are authoritative once present. Older
+ * conversations predate those columns, so their latest dispatched turn is the
+ * durable fallback. Only a conversation with no recorded choice starts on
+ * Codex + Claude.
+ */
+export function composerSelectionForConversation(
+  conversation: Pick<SharedConversation, 'preferredExecutionProfile' | 'preferredAccountProfile' | 'preferredDispatchTarget' | 'preferredAiProvider'>,
+  messages: Array<Pick<SharedMessage, 'author' | 'dispatchTarget' | 'executionProfile' | 'accountProfile'>>,
+): ComposerSelection {
+  const latestDispatchedMessage = [...messages].reverse().find((message) => message.author === 'jeffrey'
+    && (message.dispatchTarget === 'both' || message.dispatchTarget === 'codex' || message.dispatchTarget === 'claude' || message.dispatchTarget === 'palmyra'));
+  const latestProviderMessage = [...messages].reverse().find(isProviderMessage);
+  const historyTarget = latestDispatchedMessage?.dispatchTarget
+    ?? (latestProviderMessage?.author === 'codex' || latestProviderMessage?.author === 'claude' || latestProviderMessage?.author === 'palmyra' ? latestProviderMessage.author : null);
+  const dispatchTarget = conversation.preferredDispatchTarget ?? historyTarget ?? 'both';
+  const latestModelMessage = [...messages].reverse().find((message) => message.executionProfile && message.executionProfile !== 'routing');
+  const latestAccountMessage = [...messages].reverse().find((message) => message.accountProfile);
+
+  return {
+    executionProfile: conversation.preferredExecutionProfile ?? (latestModelMessage?.executionProfile === 'routing' ? null : latestModelMessage?.executionProfile ?? null),
+    accountProfile: conversation.preferredAccountProfile ?? latestAccountMessage?.accountProfile ?? DEFAULT_ACCOUNT_PROFILE,
+    aiProvider: conversation.preferredAiProvider ?? (dispatchTarget === 'palmyra' ? 'palmyra' : dispatchTarget === 'claude' ? 'claude' : 'auto'),
+    dispatchTarget,
+  };
+}
+
 /** The first message row whose bottom edge has not yet scrolled past the top
  * of the thread container — i.e. the one Jeffrey is currently reading. */
 function findTopVisibleMessageId(container: HTMLElement): string | null {
@@ -699,10 +726,15 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // response when it is absent from the rail.
     const selectionSource = conversationDetail.data?.conversation ?? selectedConversation;
     if (!selectionSource) return;
-    setComposerSelection(composerSelectionFromConversation(selectionSource));
-    composerSelectionsRef.current.set(conversationId, composerSelectionFromConversation(selectionSource));
+    const needsHistory = selectionSource.preferredDispatchTarget == null
+      || selectionSource.preferredExecutionProfile == null
+      || selectionSource.preferredAccountProfile == null;
+    if (needsHistory && !messages.data && !messages.isError) return;
+    const selection = composerSelectionForConversation(selectionSource, messages.data?.messages ?? []);
+    setComposerSelection(selection);
+    composerSelectionsRef.current.set(conversationId, selection);
     setSelectionHydratedFor(conversationId);
-  }, [conversationId, conversationDetail.data?.conversation, selectedConversation, selectionHydratedFor]);
+  }, [conversationId, conversationDetail.data?.conversation, messages.data, messages.isError, selectedConversation, selectionHydratedFor]);
   // c6c9a112-2ab0-433f-afff-d1d3e0f87329 LEGACY-AFFECTING: A failed shared
   // send leaves its draft in the mounted composer so retry never discards text
   // or moves the editor's keyboard focus.
@@ -1457,7 +1489,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           <div ref={endRef} />
         </div>
         {hasNewActivityBelow && <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> New activity · Jump to latest</button>}
-        {conversationDetail.isLoading ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <>{isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-backdrop" aria-label="Dismiss composer" onClick={() => setMobileComposerOpen(false)} />}<form id="conversation-composer" className={`shared-composer${mobileComposerOpen ? ' mobile-composer-sheet' : ' is-mobile-composer-collapsed'}`} onSubmit={submit}>
+        {conversationDetail.isLoading || (conversationId && selectionHydratedFor !== conversationId) ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <>{isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-backdrop" aria-label="Dismiss composer" onClick={() => setMobileComposerOpen(false)} />}<form id="conversation-composer" className={`shared-composer${mobileComposerOpen ? ' mobile-composer-sheet' : ' is-mobile-composer-collapsed'}`} onSubmit={submit}>
           {isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-handle" aria-label="Collapse composer" title="Collapse composer" onPointerDown={(event) => { mobileComposerDragStartY.current = event.clientY; }} onPointerUp={(event) => { if (mobileComposerDragStartY.current !== null && event.clientY - mobileComposerDragStartY.current >= 36) setMobileComposerOpen(false); mobileComposerDragStartY.current = null; }} onPointerCancel={() => { mobileComposerDragStartY.current = null; }} onClick={() => setMobileComposerOpen(false)}><span /></button>}
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
           <MarkdownComposer conversationId={conversationId} value={body} onChange={updateBody} placeholder="Message an agent…" ariaLabel="Message an agent" onSubmit={retrySend} disabled={send.isPending} />

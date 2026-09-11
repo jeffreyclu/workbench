@@ -1683,14 +1683,15 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     await screen.findByRole('heading', { name: 'Slow to init' });
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send message' })).toBeNull();
+
+    resolveMessages!();
+    await screen.findByRole('button', { name: 'Attach files' });
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [new File(['content'], 'notes.txt', { type: 'text/plain' })] } });
     await screen.findByText('notes.txt');
-
     const sendButton = screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement;
-    expect(sendButton.disabled).toBe(true);
-
-    resolveMessages!();
     await waitFor(() => expect(sendButton.disabled).toBe(false));
   });
 
@@ -1728,10 +1729,11 @@ describe('shared room', () => {
     fireEvent.scroll(container);
     scrollTo.mockClear();
 
-    const pollBeforeScrollAway = pollCount;
-    await waitFor(() => expect(pollCount).toBeGreaterThan(pollBeforeScrollAway), { timeout: 2000 });
+    const fetchesBeforeUpdate = pollCount;
+    await act(async () => { await client.invalidateQueries({ queryKey: ['shared-messages', conversationId] }); });
+    expect(pollCount).toBeGreaterThan(fetchesBeforeUpdate);
     expect(scrollTo).not.toHaveBeenCalled();
-    const jumpToLatest = screen.getByRole('button', { name: /New activity · Jump to latest/i });
+    const jumpToLatest = await screen.findByRole('button', { name: /New activity · Jump to latest/i });
     expect(jumpToLatest.parentElement).toHaveClass('conversation-thread-pane');
 
     fireEvent.click(jumpToLatest);
@@ -1801,6 +1803,7 @@ describe('shared room', () => {
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
     await screen.findByText('Working on the report…');
+    await act(async () => { await client.invalidateQueries({ queryKey: ['shared-messages', conversationId] }); });
     expect(await screen.findByText('The normal-flow row expanded without overlap.', {}, { timeout: 2_000 })).toBeInTheDocument();
     expect(screen.getByLabelText('Agent response in 2 parts')).toBeInTheDocument();
   });
@@ -1938,7 +1941,7 @@ describe('shared room', () => {
     const timestamp = '2026-01-01T00:00:00Z';
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Continue with Claude', workItemId: null, preferredExecutionProfile: 'deep', preferredAccountProfile: 'default', preferredDispatchTarget: 'claude', createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations: [{ id: conversationId, title: 'Continue with Claude', workItemId: null, preferredExecutionProfile: null, preferredAccountProfile: null, preferredDispatchTarget: null, createdAt: timestamp, updatedAt: timestamp }], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [
         { id: 'request-1', conversationId, author: 'jeffrey', body: 'Please investigate.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: null, accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'claude' },
         { id: 'reply-1', conversationId, author: 'claude', body: 'I found the regression.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: 'opus', accountProfile: 'default', executionProfile: 'deep', inputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none' },

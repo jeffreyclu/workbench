@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type SharedMessage } from '../../../shared/contracts';
 import { conversationCacheSpendWarning } from './cache-spend';
-import { composerSelectionFromConversation, executionKindForConversationSend, latestConversationExecutionKind, replyBadge } from './view';
+import { composerSelectionForConversation, composerSelectionFromConversation, executionKindForConversationSend, latestConversationExecutionKind, replyBadge } from './view';
 
 describe('replyBadge', () => {
   it('shows the actual model alongside the compact agent, profile, usage, and duration telemetry', () => {
@@ -85,6 +85,41 @@ describe('composerSelectionFromConversation', () => {
       preferredAccountProfile: null,
       preferredDispatchTarget: null,
     })).toEqual({ executionProfile: null, accountProfile: 'default', aiProvider: 'auto', dispatchTarget: 'both' });
+  });
+});
+
+describe('composerSelectionForConversation', () => {
+  it('restores the latest recorded target for a legacy conversation', () => {
+    expect(composerSelectionForConversation({
+      preferredExecutionProfile: null,
+      preferredAccountProfile: null,
+      preferredDispatchTarget: null,
+      preferredAiProvider: null,
+    }, [
+      { author: 'jeffrey', dispatchTarget: 'codex', executionProfile: 'standard', accountProfile: 'default' },
+      { author: 'codex', dispatchTarget: 'none', executionProfile: 'standard', accountProfile: 'default' },
+      { author: 'jeffrey', dispatchTarget: 'claude', executionProfile: 'deep', accountProfile: 'personal' },
+    ])).toEqual({ executionProfile: 'deep', accountProfile: 'personal', aiProvider: 'claude', dispatchTarget: 'claude' });
+  });
+
+  it('uses Codex + Claude only when no choice exists in the conversation', () => {
+    expect(composerSelectionForConversation({
+      preferredExecutionProfile: null,
+      preferredAccountProfile: null,
+      preferredDispatchTarget: null,
+      preferredAiProvider: null,
+    }, [])).toEqual({ executionProfile: null, accountProfile: 'default', aiProvider: 'auto', dispatchTarget: 'both' });
+  });
+
+  it('keeps an explicit saved target ahead of older message history', () => {
+    expect(composerSelectionForConversation({
+      preferredExecutionProfile: 'standard',
+      preferredAccountProfile: 'default',
+      preferredDispatchTarget: 'palmyra',
+      preferredAiProvider: 'palmyra',
+    }, [
+      { author: 'jeffrey', dispatchTarget: 'both', executionProfile: 'deep', accountProfile: 'personal' },
+    ])).toEqual({ executionProfile: 'standard', accountProfile: 'default', aiProvider: 'palmyra', dispatchTarget: 'palmyra' });
   });
 });
 

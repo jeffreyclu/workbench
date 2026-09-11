@@ -435,6 +435,13 @@ agent and model choice recorded in that conversation; it must never inherit a
 load-balancing fallback or a choice from another conversation. A genuinely empty
 new conversation starts with **Ask both** and model **Auto**.
 
+*Regression clarification from Jeffrey, 2026-09-11.* A null preference on an
+older conversation does not make that conversation empty. Restore its latest
+recorded dispatch target, model tier, and account profile from message history.
+Do not show the composer until that fallback is resolved; otherwise the temporary
+Ask both value looks like the conversation was reset. Ask both is the fallback
+only when neither saved preferences nor message history records a choice.
+
 ### Empty conversations expose execution type before the first reply
 
 *Decision from Jeffrey, 2026-08-29.*
