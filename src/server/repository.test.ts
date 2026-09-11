@@ -1486,7 +1486,7 @@ describe('WorkItemRepository', () => {
     expect(source?.verbose).toBe(true);
   });
 
-  it('does not run ambient retrieval before concurrent Codex and Claude replies', async () => {
+  it('retrieves one shared memory snapshot before concurrent Codex and Claude replies', async () => {
     const task = repository.create({ title: 'Connectors retrieval', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Concurrent retrieval', task.id);
     repository.createSharedMessage('jeffrey', 'The durable fact has several relevant details.', 'completed', conversation.id);
@@ -1503,8 +1503,9 @@ describe('WorkItemRepository', () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       await vi.waitFor(() => expect(replies.some((reply) => isSharedReplyActive(reply.id))).toBe(false), { timeout: 5_000 });
-      expect(retrieval).not.toHaveBeenCalled();
+      expect(retrieval).toHaveBeenCalledOnce();
       expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
+      expect(replies.map((reply) => repository.getSharedMessageById(reply.id)?.retrievedMemoryCount)).toEqual([0, 0]);
       expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id))).toEqual([null, null]);
     } finally {
       process.env.PATH = previousPath;

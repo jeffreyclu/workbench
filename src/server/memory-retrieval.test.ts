@@ -4,6 +4,7 @@ import {
   durableMemoryQuery,
   durableMemoryRetrievalPlan,
   isExplicitMemoryRequest,
+  retrievedMemoryCountForAttempt,
   selectDurableMemoryEvidence,
   shouldPrefetchDurableMemory,
   type DurableMemoryEvidence,
@@ -40,7 +41,15 @@ describe('durable memory prefetch', () => {
     expect(shouldPrefetchDurableMemory('review', 'Review this diff.')).toBe(false);
     expect(shouldPrefetchDurableMemory('execute', 'Fix this regression again.')).toBe(true);
     expect(shouldPrefetchDurableMemory('review', 'Review why this failed again.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('execute', "Let's keep working on this problem and finish the lossless handoff part 2.")).toBe(true);
+    expect(shouldPrefetchDurableMemory('execute', 'Resume the previous implementation.')).toBe(true);
     expect(shouldPrefetchDurableMemory('analysis', 'Explain this function.')).toBe(false);
+  });
+
+  it('distinguishes a skipped long-term search from a search with no matches', () => {
+    expect(retrievedMemoryCountForAttempt(false, [])).toBeNull();
+    expect(retrievedMemoryCountForAttempt(true, [])).toBe(0);
+    expect(retrievedMemoryCountForAttempt(true, [evidence()])).toBe(1);
   });
 
   it('expands personal memory queries so sparse requests can find profile facts', () => {

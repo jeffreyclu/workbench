@@ -18,7 +18,7 @@ import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
 
 export type CliAgent = Exclude<AgentRun['agent'], 'palmyra'>;
@@ -1919,7 +1919,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       : classifyExternalActionAuthorization({ currentMessage: run.instructions });
     const memoryQuery = durableMemoryQuery(run.instructions, { taskTitle: item.title, projectName: item.projectName });
     const memoryPlan = durableMemoryRetrievalPlan(run.instructions);
-    const memoryPromise = shouldPrefetchDurableMemory(run.kind, run.instructions)
+    const memoryAttempted = shouldPrefetchDurableMemory(run.kind, run.instructions);
+    const memoryPromise = memoryAttempted
       ? repository.searchActivityMemory(memoryQuery, memoryPlan.candidateLimit, {
         refresh: false,
         projectKey: !isExplicitMemoryRequest(run.instructions) && item.projectName ? projectKey(item.projectName) || undefined : undefined,
@@ -1957,7 +1958,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
     if (run.messageId) repository.updateSharedMessage(run.messageId, {
-      retrievedMemoryCount: memoryEvidence.length,
+      retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryDetail: memoryEvidence.length ? {
         query: memoryQuery,
         items: memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
@@ -1973,7 +1974,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       strategyChars: item.strategy?.length ?? 0,
       instructionChars: run.instructions.length,
       sharedContextChars: sharedContext.length,
-      retrievedMemoryCount: memoryEvidence.length,
+      retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryChars: memoryContext.length,
     });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });

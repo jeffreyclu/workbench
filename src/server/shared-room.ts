@@ -16,7 +16,7 @@ import { groundTurn } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
 import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
@@ -608,6 +608,7 @@ export type SharedReplyGrounding = {
 
 type SharedReplyMemory = {
   query: string;
+  attempted: boolean;
   resolved: Promise<ReturnType<typeof selectDurableMemoryEvidence>>;
 };
 
@@ -1155,9 +1156,11 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     projectName: linkedItem?.projectName,
   });
   const memoryPlan = durableMemoryRetrievalPlan(currentMessage);
+  const memoryAttempted = shouldPrefetchDurableMemory(taskKind, currentMessage);
   const memory: SharedReplyMemory = {
     query: memoryQuery,
-    resolved: shouldPrefetchDurableMemory(taskKind, currentMessage)
+    attempted: memoryAttempted,
+    resolved: memoryAttempted
       ? repository.searchActivityMemory(memoryQuery, memoryPlan.candidateLimit, {
         refresh: false,
         projectKey: !isExplicitMemoryRequest(currentMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
@@ -1420,7 +1423,8 @@ export async function replyInSharedRoom(
     });
     const memoryQuery = memorySnapshot?.query ?? automaticMemoryQuery;
     const memoryPlan = durableMemoryRetrievalPlan(latestUserMessage);
-    const memoryPromise = memorySnapshot?.resolved ?? (shouldPrefetchDurableMemory(runKind, latestUserMessage)
+    const memoryAttempted = memorySnapshot?.attempted ?? shouldPrefetchDurableMemory(runKind, latestUserMessage);
+    const memoryPromise = memorySnapshot?.resolved ?? (memoryAttempted
       ? repository.searchActivityMemory(memoryQuery, memoryPlan.candidateLimit, {
         refresh: false,
         projectKey: !isExplicitMemoryRequest(latestUserMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
@@ -1442,7 +1446,7 @@ export async function replyInSharedRoom(
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
     repository.updateSharedMessage(messageId, {
-      retrievedMemoryCount: memoryEvidence.length,
+      retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryDetail: memoryEvidence.length ? {
         query: memoryQuery,
         items: memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
@@ -1473,7 +1477,7 @@ export async function replyInSharedRoom(
       sharedContextChars: shortTermContext.length,
       connectionContextChars: connectionContext.length,
       conversationMessageCount: thread.length,
-      retrievedMemoryCount: memoryEvidence.length,
+      retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryChars: memoryContext.length,
       authoritativeObjective: turnGrounding.objective,
       groundingSource: turnGrounding.source,

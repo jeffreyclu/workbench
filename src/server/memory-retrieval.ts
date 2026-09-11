@@ -35,7 +35,7 @@ const DURABLE_MEMORY_PROMPT_PREFIX = 'Retrieved durable context (historical evid
 const DURABLE_MEMORY_PROMPT_SUFFIX = `\n\nUse only relevant evidence. Jeffrey's newest statement wins over older material. When Jeffrey explicitly asks for an answer from memory, self-reported durable profile facts are valid memory evidence; label uncertainty accurately, but do not discard them merely because they were not independently verified. Do not call recall_context again for the same question unless a concrete information gap remains.`;
 
 const EXPLICIT_MEMORY_REQUEST = /\b(?:memory|memories|remember|recall|recalled|prior context|previous context|conversation history|what (?:do|did) you know about|know about me|about jeffrey|my (?:background|bio(?:graphy)?|profile|preferences|history)|self[- ]review|performance review|staff promo(?:tion)?|promotion (?:case|packet|review)|accomplishments?|career (?:history|story)|impact (?:summary|over time)|(?:intro(?:duction)?|introduce).*(?:me|jeffrey))\b/i;
-const CONTEXT_DEPENDENT_ANALYSIS = /\b(?:again|still|prior|previous|earlier|history|context|decision|regression|root cause|what happened|why did|status|compare|investigate|recurring)\b/i;
+const CONTEXT_DEPENDENT_ANALYSIS = /\b(?:again|still|prior|previous|earlier|history|context|decision|regression|root cause|what happened|why did|status|compare|investigate|recurring|continue|resume|keep working|pick up|finish|remaining|next (?:step|phase)|part \d+|phase \d+|follow[- ]?up|handoff|build on|as discussed)\b/i;
 const PERSONAL_MEMORY_REQUEST = /\b(?:about me|about jeffrey|jeffrey(?:'s)?|my (?:background|bio(?:graphy)?|profile|preferences|history)|self[- ]review|performance review|staff promo(?:tion)?|promotion (?:case|packet|review)|accomplishments?|career (?:history|story)|impact (?:summary|over time)|(?:intro(?:duction)?|introduce).*(?:me|jeffrey))\b/i;
 
 export function isExplicitMemoryRequest(message: string): boolean {
@@ -64,6 +64,10 @@ export function shouldPrefetchDurableMemory(kind: AgentRun['kind'], message: str
   // context. Only pay for historical evidence when prior decisions or a
   // recurring failure can change the result.
   return CONTEXT_DEPENDENT_ANALYSIS.test(message);
+}
+
+export function retrievedMemoryCountForAttempt(attempted: boolean, evidence: DurableMemoryEvidence[]): number | null {
+  return attempted ? evidence.length : null;
 }
 
 export function durableMemoryQuery(message: string, context: { conversationTitle?: string | null; taskTitle?: string | null; projectName?: string | null } = {}): string {
