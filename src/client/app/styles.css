@@ -489,22 +489,35 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-scope button { flex: 0 0 auto; padding: 4px 7px; color: #c4c3bc; border: 1px solid #45443e; border-radius: 5px; background: #1b1b18; cursor: pointer; font: 9px 'DM Mono'; }
 .change-map-scope button:hover, .change-map-scope button:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
 .change-map-key { margin: 0; padding: 0 14px 8px; color: #85847d; font: 9px 'DM Mono'; }
-.change-map-canvas { overflow: auto; overscroll-behavior-x: contain; max-height: 560px; padding: 0 14px 10px; }
-.change-map-canvas:focus-visible { outline: 1px solid var(--acid); outline-offset: -3px; }
-/* A file's band, named once at its top left. It groups and labels and nothing
-   else, so it sits behind the boxes rather than competing with them. */
-.change-map-lane-band { fill: #171714; stroke: #24241f; }
-.change-map-lane.selected .change-map-lane-band { fill: #1a1a16; stroke: #35352c; }
-.change-map-lane-label { fill: #8f8e86; font: 10px 'DM Mono'; paint-order: stroke; stroke: #171714; stroke-width: 4px; }
-.change-map-lane.selected .change-map-lane-label { fill: #c4c3bc; }
-.change-map-lane-count { fill: #64635d; }
+.change-map-canvas { min-width: 0; padding: 0 14px 10px; }
+.change-map-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 0 6px; }
+.change-map-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 28px; min-height: 28px; padding: 4px 7px; color: #aaa99f; border: 1px solid #35352f; border-radius: 6px; background: #191917; cursor: pointer; font: 9px 'DM Mono'; }
+.change-map-toolbar button:hover, .change-map-toolbar button:focus-visible { color: var(--acid); border-color: #59683a; outline: 0; }
+.change-map-toolbar button:disabled { opacity: .35; cursor: default; }
+.change-map-toolbar output { min-width: 42px; color: #85847d; text-align: center; font: 9px 'DM Mono'; }
+.change-map-viewport { overflow: auto; overscroll-behavior: contain; max-height: 560px; border: 1px solid #262621; border-radius: 8px; background: #10100e; cursor: grab; touch-action: pan-x pan-y; }
+.change-map-viewport.is-panning { cursor: grabbing; user-select: none; }
+.change-map-viewport:focus-visible { outline: 1px solid var(--acid); outline-offset: -2px; }
+.change-map-package rect { fill: #141412; stroke: #4a493f; stroke-width: 1.5; }
+.change-map-package text { fill: #c2c1b7; font: 700 11px 'DM Mono'; }
+.change-map-package text tspan { fill: #68675f; font-size: 9px; font-weight: 500; }
+.change-map-folder rect { fill: #181816; stroke: #302f2a; stroke-dasharray: 4 3; }
+.change-map-folder.selected rect { fill: #1b1c17; stroke: #647345; }
+.change-map-folder text { fill: #8f8e86; font: 10px 'DM Mono'; }
+.change-map-folder text tspan { fill: #616059; font-size: 9px; }
 .change-map-node { --state-tone: #56554e; cursor: pointer; }
 .change-map-node.state-reviewed { --state-tone: #8bbd75; }
 .change-map-node.state-needs_changes { --state-tone: #e1a68f; }
 .change-map-node.state-commented { --state-tone: #9ab6d8; }
-.change-map-node-body { fill: #1b1b18; stroke: #302f2b; }
+.change-map-node { --category-fill: #22221f; --category-stroke: #77766d; }
+.change-map-node.category-ui { --category-fill: #222b35; --category-stroke: #79a9d1; }
+.change-map-node.category-type { --category-fill: #2b2431; --category-stroke: #b591c5; }
+.change-map-node.category-test { --category-fill: #263025; --category-stroke: #82a978; }
+.change-map-node.category-data { --category-fill: #302a1e; --category-stroke: #c3a25b; }
+.change-map-node.category-service { --category-fill: #1e302d; --category-stroke: #68a89b; }
+.change-map-node-body { fill: var(--category-fill); stroke: var(--category-stroke); }
 .change-map-node:hover .change-map-node-body { stroke: #4b4a44; }
-.change-map-node.selected .change-map-node-body { fill: #22221c; stroke: var(--acid); }
+.change-map-node.selected .change-map-node-body { stroke: var(--acid); stroke-width: 2; }
 .change-map-node:focus-visible { outline: none; }
 .change-map-node:focus-visible .change-map-node-body { stroke: var(--acid); stroke-width: 2; }
 .change-map-node.dimmed { opacity: 0.38; }
@@ -538,7 +551,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-edge.relation-uses, .change-map-arrow.relation-uses, .change-map-legend li.relation-uses { --relation-tone: #77766f; }
 .change-map-arrow path { fill: var(--relation-tone); }
 .change-map-edge-line { fill: none; stroke: var(--relation-tone); stroke-width: 1.4; opacity: 0.7; }
-.change-map-edge.backward .change-map-edge-line { stroke-dasharray: 4 3; }
+.change-map-edge.crosses-folder .change-map-edge-line { stroke-width: 1.8; opacity: .88; }
+.change-map-edge.crosses-package .change-map-edge-line { stroke-width: 2.3; opacity: 1; }
 /* How the pair reads across the patch, drawn so the four cases are not one
    line. Severed coupling fades and breaks up, rewired coupling keeps full
    weight with a long dash because it is a live edge that changed shape, and
@@ -561,6 +575,15 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 12px; list-style: none; }
 .change-map-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
 .change-map-legend li span { width: 14px; height: 2px; border-radius: 2px; background: var(--relation-tone); }
+.change-map-category-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 10px; list-style: none; }
+.change-map-category-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
+.change-map-category-legend li span { width: 9px; height: 9px; border: 1px solid var(--category-stroke); border-radius: 3px; background: var(--category-fill); }
+.change-map-category-legend .category-ui { --category-fill: #222b35; --category-stroke: #79a9d1; }
+.change-map-category-legend .category-type { --category-fill: #2b2431; --category-stroke: #b591c5; }
+.change-map-category-legend .category-test { --category-fill: #263025; --category-stroke: #82a978; }
+.change-map-category-legend .category-data { --category-fill: #302a1e; --category-stroke: #c3a25b; }
+.change-map-category-legend .category-service { --category-fill: #1e302d; --category-stroke: #68a89b; }
+.change-map-category-legend .category-code { --category-fill: #22221f; --category-stroke: #77766d; }
 .diff-review-queue-region { min-width: 0; }
 .workspace-diff .diff-review-decision-queue { background: #11110f; }
 .diff-review-decision-queue ol { display: flex; margin: 0; padding: 0; overflow-x: auto; overscroll-behavior-x: contain; list-style: none; }
@@ -691,6 +714,12 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-block-risk-dot.band-elevated { --band: #d6bd76; }
 .diff-review-block-risk-dot.band-high { --band: #e1a68f; }
 .diff-review-block-risk-dot.band-signals { --band: #77766f; }
+/* The chunk popup's handle — hidden until the block is hovered or the handle
+   itself is focused, so it never competes with the decision marker for
+   attention on a block the reviewer isn't looking at. */
+.diff-review-block-simple-marker { display: grid; place-items: center; width: 24px; height: 20px; color: #8a8980; border: 1px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
+.diff-review-diff-block:hover .diff-review-block-simple-marker, .diff-review-block-simple-marker:hover, .diff-review-block-simple-marker:focus-visible { opacity: 1; }
+.diff-review-block-simple-marker:hover, .diff-review-block-simple-marker:focus-visible { color: var(--acid); border-color: #2f2f2a; background: #131311; outline: 0; }
 .diff-review-diff-block { --state-tone: #6f6e68; }
 .diff-review-diff-block.state-reviewed { --state-tone: #8bbd75; }
 .diff-review-diff-block.state-needs_changes { --state-tone: #e1a68f; }

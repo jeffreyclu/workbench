@@ -115,4 +115,19 @@ describe('diff review change navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
     expect(screen.getByRole('button', { name: /Decision 2:/ })).not.toHaveAttribute('aria-haspopup');
   });
+  it('zooms the vector canvas and explains the semantic node colors', () => {
+    render(<DiffReviewChangeMap map={map} selectedId="type" onSelect={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
+
+    const canvas = screen.getByRole('group', { name: 'Change map diagram' });
+    const svg = canvas.querySelector('.change-map-viewport > svg')!;
+    const initialWidth = Number(svg.getAttribute('width'));
+    expect(screen.getByText('100%')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(screen.getByText('120%')).toBeInTheDocument();
+    expect(Number(svg.getAttribute('width'))).toBeGreaterThan(initialWidth);
+    expect(screen.getByRole('list', { name: 'Code categories' })).toHaveTextContent('UI');
+    expect(screen.getByRole('list', { name: 'Code categories' })).toHaveTextContent('Types / contracts');
+  });
 });

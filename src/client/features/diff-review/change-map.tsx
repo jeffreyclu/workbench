@@ -10,9 +10,9 @@ import type { DecisionPopoverAnchor } from './decision-popover.js';
 const CHANGE_MAP_FOCUS_LIMIT = 4;
 
 /** The diagram answers one question the queue cannot: which of these changes
- * exist because of another one. It reads left to right — a cause sits left of
- * everything that moved for it — and shares its selection with the queue and
- * the diff pane, so clicking a node is the same act as clicking its decision.
+ * exist because of another one. Direct curves expose hubs and nested package
+ * and folder boundaries expose coupling. Selection stays shared with the queue
+ * and diff pane, so clicking a node is the same act as clicking its decision.
  *
  * Relationships now read primarily as inline links inside the diff itself; the
  * diagram stays as the opt-in whole-diff view for wide refactors. */
@@ -71,9 +71,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
           {showingAll ? 'Focus on current change' : `Show all ${map.nodes.length} changes`}
         </button>}
       </div>}
-      {/* The two axes, said out loud. A diagram whose shape has to be guessed
-          at is a puzzle, and a reviewer already has one of those open. */}
-      <p className="change-map-key">Each row is a file. A change sits to the right of whatever caused it.</p>
+      <p className="change-map-key">Node area = changed code size. Boxes group folders inside packages. Bright boundary-crossing lines expose coupling.</p>
       <ChangeMapCanvas
         layout={layout}
         selectedId={selectedId}
@@ -93,6 +91,14 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
             : 'Select a line to read why two changes are related, or a box to open that decision — risk score and AI assist included.'}
       </p>
       <ChangeMapProgressLegend nodes={map.nodes} cameFromId={cameFromId} />
+      <ul className="change-map-category-legend" aria-label="Code categories">
+        <li className="category-ui"><span aria-hidden="true" />UI</li>
+        <li className="category-type"><span aria-hidden="true" />Types / contracts</li>
+        <li className="category-test"><span aria-hidden="true" />Tests</li>
+        <li className="category-data"><span aria-hidden="true" />Data / storage</li>
+        <li className="category-service"><span aria-hidden="true" />Server / service</li>
+        <li className="category-code"><span aria-hidden="true" />General logic</li>
+      </ul>
       {relationsPresent.length > 0 && <ul className="change-map-legend" aria-label="Relationship types">
         {relationsPresent.map((relation: ChangeRelation) => <li key={relation} className={`relation-${relation}`}><span aria-hidden="true" />{CHANGE_RELATION_LABELS[relation]}</li>)}
       </ul>}

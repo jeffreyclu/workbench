@@ -132,7 +132,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // The desktop decision detail is popover content opened from a block's gutter
   // marker, so the open state has to carry the marker that opened it: the
   // popover positions itself off that element's rect.
-  const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: DecisionPopoverAnchor; anchorAttribute: string } | null>(null);
+  const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: DecisionPopoverAnchor; anchorAttribute: string; simple?: boolean } | null>(null);
   const [isHandoffOpen, setIsHandoffOpen] = useState(false);
   // null means "automatically show the latest record when Git is clean";
   // an empty string is the user's explicit choice to view current changes.
@@ -502,7 +502,14 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   }, [onFixRequest]);
 
   const openDecisionDetail = (decisionId: string, anchor: DecisionPopoverAnchor, anchorAttribute = 'data-decision-marker') => {
-    setDetailAnchor((current) => (current?.decisionId === decisionId ? null : { decisionId, anchor, anchorAttribute }));
+    setDetailAnchor((current) => (current?.decisionId === decisionId && !current.simple ? null : { decisionId, anchor, anchorAttribute }));
+  };
+
+  // The chunk gutter's simplified popup: same decision detail popover, but
+  // opened from its own hover handle and marked so the render below swaps in
+  // the simplified card instead of the full one.
+  const openSimpleDecisionDetail = (decisionId: string, anchor: DecisionPopoverAnchor) => {
+    setDetailAnchor((current) => (current?.decisionId === decisionId && current.simple ? null : { decisionId, anchor, anchorAttribute: 'data-decision-simple-marker', simple: true }));
   };
 
   const selectDecision = useCallback((decisionId: string) => {
@@ -726,9 +733,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                         remaining files stay readable as diffs underneath it
                         rather than disappearing with the mode switch. */}
                     {(readingMode === 'file' ? fileHunkGroups.slice(1) : fileHunkGroups).map(({ file, hunks }) =>
-                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onToggleReadingMode={toggleReadingMode} />)}
-                    {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={<DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />} onClose={() => setDetailAnchor(null)}>
-                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null}>
+                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onOpenSimpleDetail={openSimpleDecisionDetail} onToggleReadingMode={toggleReadingMode} />)}
+                    {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={detailAnchor.simple ? undefined : <DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />} onClose={() => setDetailAnchor(null)}>
+                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null} hideJudging={detailAnchor.simple}>
                         <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} onFix={onFixRequest ? () => requestFix(popoverDecision) : undefined} onSkip={() => skipDecision(popoverDecision)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}

@@ -1345,3 +1345,11 @@ graph is not considered observable until these checks are visible to Jeffrey.
 must never be fabricated into the response's `Context` section. The
 deterministic formatter keeps the agent's saved result and uses
 `No additional context.` when the draft supplies none.
+### The code relationship map is a zoomable domain map (2026-09-11)
+
+*Decision from Jeffrey.* Node area reflects the amount of changed code in the
+semantic block. Relationships are direct radiating lines, never orthogonal
+routing, so hubs visibly have many lines. The canvas nests folders inside
+packages and emphasizes cross-folder and cross-package coupling. Node color is
+semantic: UI, types/contracts, tests, data/storage, server/service, or general
+logic. The map must support easy pan and zoom as a real vector canvas.

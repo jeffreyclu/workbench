@@ -23,7 +23,7 @@ export type { ReviewAssistAction, ReviewAssistTaskIntent };
  * lives on the block's gutter marker instead, so the panel only carries what
  * has to be asked for.
  */
-export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, tier = null, children }: {
+export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, tier = null, hideJudging = false, children }: {
   decision: ReviewDecision;
   taskIntent: ReviewAssistTaskIntent;
   /** Result of the background pass that scores a diff once its agent comes to
@@ -44,6 +44,10 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
    * along on the assist request so the answer is cached against the depth it
    * was asked at. Changes leaves it null and its requests are unchanged. */
   tier?: ReviewAssistTier | null;
+  /** Drops the heuristic panel and the AI risk score, leaving only what the
+   * chunk gutter's simplified popup wants: the change itself, review, ask and
+   * AI assist. No scoring, no obligations trace. */
+  hideJudging?: boolean;
   children: ReactNode;
 }) {
   const decisionPayload = reviewAssistDecisionPayload(decision, decisions);
@@ -96,8 +100,8 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       * allowed to rest on. Collapsed by default, because a reviewer only opens
       * it when the verdict looks wrong — which is exactly when a description
       * of the heuristic would be useless and the trace is not. */}
-    <DiffReviewHeuristicPanel decision={decision} decisions={decisions} staleReferences={staleReferences} />
-    <section className="diff-review-ai-risk" aria-labelledby="diff-review-risk-title">
+    {!hideJudging && <DiffReviewHeuristicPanel decision={decision} decisions={decisions} staleReferences={staleReferences} />}
+    {!hideJudging && <section className="diff-review-ai-risk" aria-labelledby="diff-review-risk-title">
       {/* The score action lives beside the number it produces, not in the assist
         * row: it answers a different question, and its label swaps width once a
         * score exists, which reflowed that row on every rescore. */}
@@ -126,7 +130,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
                 ? <small className="diff-review-ai-risk-reason is-error" role="alert">Background scoring failed: {autoScoreError} Use Score risk to retry.</small>
                 : <small className="diff-review-ai-risk-reason">Not scored yet.</small>}
       </div>
-    </section>
+    </section>}
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">
       {/* One selector for the whole review surface: the score above and the
         * answers below are the same AI spend, and splitting the choice in two

@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, LoaderCircle, MessageSquare, TriangleAlert } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, LoaderCircle, MessageSquare, MessageSquareText, TriangleAlert } from 'lucide-react';
 import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
 import { CHANGE_RELATION_LABELS, type ChangeMap } from '../../../shared/change-map.js';
 import { buildChangeLinkIndex, plainRelationText, type ChangeLink, type ChangeLinkSummary } from './change-map-logic.js';
@@ -81,7 +81,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onOpenSimpleDetail, onToggleReadingMode }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -121,6 +121,11 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   modeTitle?: string;
   onSelect: (decisionId: string) => void;
   onOpenDetail?: (decisionId: string, anchor: HTMLElement) => void;
+  /** A second, hover-revealed gutter handle beside the decision marker. It
+   * selects the same block but opens the simplified popup — review, ask and
+   * AI assist only, with no heuristics or risk score — instead of the full
+   * decision detail. Omitted, no such handle is drawn. */
+  onOpenSimpleDetail?: (decisionId: string, anchor: HTMLElement) => void;
   /** Supplying this is what puts the reading-mode switch in the header: a
    * surface that cannot change the mode should not advertise a control. */
   onToggleReadingMode?: () => void;
@@ -153,6 +158,86 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   const markers = useMemo(() => new Map((activeSummary
     ? [...activeSummary.upstream.map((link) => [link, 'upstream'] as const), ...activeSummary.downstream.map((link) => [link, 'downstream'] as const)]
     : []).map(([link, direction]) => [link.decisionId, { relation: link.relation, direction }])), [activeSummary]);
+
+  useEffect(() => {
+    // The pane clips at `max-height` and scrolls internally, but a native
+    // text-selection drag only auto-scrolls the document — not a nested
+    // `overflow: auto` container. Holding the pointer at this pane's edge
+    // during a selection previously just froze there: the mouse stopped
+    // moving, so no further selection or scroll ever happened, and a diff
+    // longer than the pane silently capped what a reviewer could select. This
+    // drives the scroll by hand near the edges and re-extends the native
+    // selection to the pointer on every scroll tick, so dragging to the
+    // bottom keeps both the view and the selection moving together.
+    const body = diffBody.current;
+    if (!body) return;
+    const EDGE = 36;
+    const MAX_SPEED = 14;
+    let dragging = false;
+    let point: { x: number; y: number } | null = null;
+    let frame: number | undefined;
+
+    const caretRangeAt = (x: number, y: number): Range | null => {
+      const withRangeFromPoint = document as unknown as { caretRangeFromPoint?: (x: number, y: number) => Range | null };
+      if (withRangeFromPoint.caretRangeFromPoint) return withRangeFromPoint.caretRangeFromPoint(x, y);
+      const withPositionFromPoint = document as unknown as { caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null };
+      const position = withPositionFromPoint.caretPositionFromPoint?.(x, y);
+      if (!position) return null;
+      const range = document.createRange();
+      range.setStart(position.offsetNode, position.offset);
+      range.collapse(true);
+      return range;
+    };
+
+    const extendSelectionTo = (x: number, y: number) => {
+      const range = caretRangeAt(x, y);
+      const selection = window.getSelection();
+      // Only an active, non-collapsed selection is ours to steer: a plain
+      // click has a collapsed range and must be left to the browser.
+      if (!range || !selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+      selection.extend(range.startContainer, range.startOffset);
+    };
+
+    const tick = () => {
+      frame = undefined;
+      if (!dragging || !point) return;
+      const rect = body.getBoundingClientRect();
+      let delta = 0;
+      if (point.y < rect.top + EDGE) delta = -MAX_SPEED * (1 - Math.max(0, point.y - rect.top) / EDGE);
+      else if (point.y > rect.bottom - EDGE) delta = MAX_SPEED * (1 - Math.max(0, rect.bottom - point.y) / EDGE);
+      if (delta !== 0) {
+        body.scrollTop += delta;
+        extendSelectionTo(point.x, Math.min(rect.bottom - 1, Math.max(rect.top, point.y)));
+        frame = window.requestAnimationFrame(tick);
+      }
+    };
+
+    const onPointerMove = (event: MouseEvent) => {
+      if (!dragging) return;
+      point = { x: event.clientX, y: event.clientY };
+      if (frame === undefined) frame = window.requestAnimationFrame(tick);
+    };
+    const onPointerDown = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      point = { x: event.clientX, y: event.clientY };
+    };
+    const stop = () => {
+      dragging = false;
+      point = null;
+      if (frame !== undefined) { window.cancelAnimationFrame(frame); frame = undefined; }
+    };
+
+    body.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', stop);
+    return () => {
+      body.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('mousemove', onPointerMove);
+      window.removeEventListener('mouseup', stop);
+      stop();
+    };
+  }, []);
 
   useEffect(() => {
     // IDE LEGACY-AFFECTING: `scrollIntoView` scrolls every ancestor, including
@@ -353,6 +438,25 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
               <StateGlyph state={state} />
               {band && <i className={`diff-review-block-risk-dot band-${band}`} aria-hidden="true" />}
             </button>
+            {onOpenSimpleDetail && <button
+              type="button"
+              className="diff-review-block-simple-marker"
+              // Re-found the same way as the full marker, but under its own
+              // attribute — the two handles anchor two independent popovers,
+              // and sharing one attribute would let either popover jump to the
+              // other's handle after a re-render.
+              data-decision-simple-marker={decisionId}
+              aria-haspopup="dialog"
+              aria-label={`Review, ask and get AI assist on ${hunk.location}`}
+              title="Review, ask and AI assist"
+              onClick={(event) => {
+                const anchor = event.currentTarget;
+                onSelect(decisionId);
+                onOpenSimpleDetail(decisionId, anchor);
+              }}
+            >
+              <MessageSquareText size={11} aria-hidden="true" />
+            </button>}
             {marker && <span className="diff-review-diff-block-link-marker" aria-hidden="true">{marker.direction === 'upstream' ? <ArrowDownRight size={10} /> : <ArrowUpRight size={10} />}{activeOrdinal}</span>}
           </div>
           <div className="diff-review-diff-block-main">

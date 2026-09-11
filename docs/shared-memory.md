@@ -522,3 +522,108 @@ The standing rule for any code review:
   `git worktree list` before creating another.
 - "The symbol does not exist in the repo" is never a finding until it has been checked at the PR's head
   commit. The default working directory is a starting point, not the subject of the review.
+
+## A rewrite preserves the legacy behavior exactly — do not "improve" the UX along the way (2026-09-08)
+
+During the Manage Connectors V2 work, the V2 connect flow added a deliberate behavior the legacy flow
+never had: after a successful OAuth connection it held `ConnectConnectorModal` open on a
+"Successfully Connected!" state until the user dismissed it, on the reasoning that a modal closing by
+itself gives no confirmation. Jeffrey rejected that twice, the second time as "the modal is still
+fucking open after OAUTH connection", and stated the rule directly: "these are regressions including
+the autoclosing modal. we need to maintain the legacy behavior EXACTLY."
+
+The standing rule for any V1 → V2 rewrite or refactor he asks for: the new implementation reproduces
+the old observable behavior, including behavior that looks like a flaw. A behavior change is a
+separate, explicitly requested piece of work. Reasoning that the new behavior is better is not a
+license to ship it inside a refactor, and describing it in a code comment does not make it agreed.
+
+## When new code breaks existing machinery, delete the deviation — do not patch the symptom (2026-09-08)
+
+Continuing the Manage Connectors V2 connect flow, the V2 modal sat stuck on "connecting" after OAuth.
+Successive attempts chased the symptom: cutting a cache entry, adding a popup-closed grace period,
+adding window-closed detection — each one touching more shared files (`connect-connector-modal.tsx`,
+`oauth-popup.ts`, `use-github-oauth.ts`, the legacy `use-connector-auth.ts`). Jeffrey rejected the
+whole approach twice, the second time as: "STOP TRYING TO PATCH THE FUCKING PROBLEM. SOLVE FROM FIRST
+PRINCIPLES. WE HAVE A CONNECTOR MODAL COMPONENT THAT EXISTS. WE HAVE OAUTH FLOW LOGIC THAT EXISTS...
+ALL WE HAVE TO DO IS CORRECTLY ADAPT OUR V2 STATE TO THE EXISTING FUCKING MODAL."
+
+He was right, and the shape of the answer generalizes. When a working, shared component misbehaves
+only under a new feature, the defect is almost always something the new code added to a path it
+shares with everyone else — a flag-driven cache injected into a shared fetcher, or a local state
+layer wrapped around a hook that already owned that state. The fix is to remove the new code's
+deviation so the existing logic runs unmodified, and it should read as a deletion. Here it was
+−86 lines across 6 files, with the modal and OAuth helpers untouched.
+
+The standing rule: before editing shared code to accommodate a new surface, diff the new surface's
+behavior against the old one on that shared path and ask what the new code added. Growing the patch
+across more shared files is the signal that the diagnosis is wrong, not that the bug is deep.
+
+Restated by Jeffrey on the next iteration, as a concrete ownership boundary for Connectors: the
+`ConnectConnectorModal` owns its own open/authorizing/success/error state and that legacy behavior is
+not to be touched. Manage Connectors V2's only job is to wire its own success and error states
+through to the modal via the existing props — never to hold the modal open, override `open` or
+`connectorConfig`, or intercept `onOpenChange`. The V2-side success effects (toast, autoscroll,
+cache refresh) hang off `onAuthenticated`; the error surface stays the modal's.
+
+## Keep code comments short; do not pre-argue review objections in them (2026-09-09)
+
+Jeffrey has twice cut back block comments in the CON-230 connectors-v2 code, the second time with
+"why is this comment so fucking long". The pattern he objects to is a comment that stops describing
+what the code does and starts defending why an alternative was rejected — an anticipated reviewer
+question answered inline, in the file, forever.
+
+The rule: a comment carries only the one non-obvious fact a reader needs to understand the code in
+front of them, in two or three lines. Design justification, rejected alternatives, and rationale for
+where a call lives belong in the PR description or the review thread, which is where the objection
+would actually be raised and where it expires once resolved. If a comment is growing a second
+paragraph that begins "deliberately" or "instead", that paragraph is review argument, not
+documentation, and should be deleted.
+
+## Org profile IDs and statuses: not PII, still exposure-controlled (2026-09-09)
+
+Jeffrey's ruling for CON-196 (surfacing profile connection errors), and the standing rule for any
+similar identifier: neither an org profile ID nor a profile status is PII in the GDPR/CCPA sense —
+neither identifies a natural person — but "not PII" is not "safe to expose". The question is always
+safe to expose to whom, in what context.
+
+An org/profile ID is an opaque tenant identifier. Returning it in an API response to a caller already
+authenticated and authorized for that org is normal and done across the platform. Returning it to an
+unauthenticated caller, or to a user who is not a member of that org, is not acceptable: it enables
+enumeration (probing which orgs exist, correlating orgs across endpoints) and can leak business
+relationships. Never embed an unrelated org's ID in an error a different user sees.
+
+Profile status is sensitive business data rather than personal data. Show it only where the current
+user already has legitimate context for that org, and restrict raw status values to admins/owners if
+they are shown at all.
+
+Rule of thumb: never put in a user-facing error any detail the current user would not otherwise be
+entitled to see. When in doubt, log the detail server-side with a correlation ID and show the user a
+generic message plus that correlation ID.
+
+## Shared connector fixes ship unflagged, to legacy and V2 at once (2026-09-09)
+
+Jeffrey, on CON-196: a correction to shared connector behavior must not be gated behind a feature
+flag and must not land in only one of the two Manage Connectors surfaces. Both the legacy
+`connectors-tab.tsx` and `connectors-v2/` go through the same mutation hooks, so the right place for
+such a fix is the shared chain they already share — there the behavior is identical in both by
+construction and no toggle is needed. Adding a flag or patching one surface is the wrong shape.
+
+This is narrower than the earlier "don't modify the shared legacy component" note, which was about a
+V2-only visual choice. Presentation stays local to V2; correctness of a shared code path is fixed
+once, for everyone.
+
+## The Pluto bench bills production Claude API credits (2026-09-10)
+
+Jeffrey, escalating mid-task: the last few `scripts/run-bench.cjs` runs "quite literally exhausted the
+production Claude API credits." The bench is not a free local harness — it drives the real agent against
+the real Anthropic API on the production key, so every sweep is real money out of the product's budget.
+
+Never launch a bench sweep as a casual verification step, and never re-run one just to confirm a result
+that already has a log. Before proposing a run, state its expected cost and prefer the cheapest tier that
+answers the question (`--tier retrieval` spends $0 model tokens; `--ids <case>` scopes to specific cases).
+Treat a full multi-turn sweep as an explicit, budgeted decision that is Jeffrey's to make, not an
+implementation detail of a debugging loop.
+
+Measured cost lives in Supabase `token_usage` and `/tmp/agent-v2-usage.log`; `node scripts/cost-report.cjs
+--bench-run <log>` prices a specific run. The bench's own result files record no token data at all, which
+is why the spend stayed invisible until the credits ran out.
