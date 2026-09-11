@@ -627,3 +627,18 @@ implementation detail of a debugging loop.
 Measured cost lives in Supabase `token_usage` and `/tmp/agent-v2-usage.log`; `node scripts/cost-report.cjs
 --bench-run <log>` prices a specific run. The bench's own result files record no token data at all, which
 is why the spend stayed invisible until the credits ran out.
+
+## Prototypes are built in the real application, not in Storybook
+
+On 2026-09-11, after a connector error-UX plan proposed a Storybook-only prototype, Jeffrey rejected
+it outright and restated the requirement: cut a branch in the monorepo and build the prototype in the
+actual product code.
+
+When Jeffrey asks for a prototype, the deliverable is working code on a branch in the owning
+repository, wired into the real components, data model, and state layer the feature already uses. A
+Storybook story, a standalone demo page, an HTML mock, or any other external prototyping tool does not
+satisfy the request, because the point of the prototype is to demo the real experience to the team for
+buy-in — something a component gallery detached from the app's data cannot do.
+
+Base the branch on whatever in-flight branch the prototype depends on rather than on `main`, so the
+demo includes the plumbing it builds upon.
