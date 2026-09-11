@@ -1162,7 +1162,10 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
         refresh: false,
         projectKey: !isExplicitMemoryRequest(currentMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
         sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
-      }).then((candidates) => selectDurableMemoryEvidence(candidates, conversationId, memoryPlan.evidenceLimit)).catch((error) => {
+      }).then((candidates) => selectDurableMemoryEvidence(candidates, conversationId, {
+        maxItems: memoryPlan.evidenceLimit,
+        promptBudget: memoryPlan.promptBudget,
+      })).catch((error) => {
         console.error('[shared-room] automatic durable-memory retrieval failed; continuing without it', error);
         return [];
       })
@@ -1419,7 +1422,10 @@ export async function replyInSharedRoom(
         projectKey: !isExplicitMemoryRequest(latestUserMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
         sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
         importanceProfile: isPersonalLongTermMemoryRequest(latestUserMessage) ? 'personal' : 'default',
-      }).then((candidates) => selectDurableMemoryEvidence(candidates, target.conversationId, memoryPlan.evidenceLimit)).catch((error) => {
+      }).then((candidates) => selectDurableMemoryEvidence(candidates, target.conversationId, {
+        maxItems: memoryPlan.evidenceLimit,
+        promptBudget: memoryPlan.promptBudget,
+      })).catch((error) => {
         console.error('[shared-room] automatic durable-memory retrieval failed; continuing without it', error);
         return [];
       })

@@ -19,7 +19,6 @@ export interface KnowledgeGraphMemoryResult {
   retrievalPath: string[];
 }
 
-const MAX_SEEDS = 8;
 const MAX_GRAPH_NODES = 120;
 const MAX_HOPS = 2;
 const MAX_EDGES_PER_HOP = 2_000;
@@ -83,7 +82,8 @@ export function expandKnowledgeGraph(
   try {
     const visited = new Map<string, WalkState>();
     const seedNodeIds = new Set<string>();
-    for (const seed of seeds.slice(0, MAX_SEEDS)) {
+    for (const seed of seeds) {
+      if (visited.size >= MAX_GRAPH_NODES) break;
       const nodeId = graphNodeId(seed.source, seed.sourceId);
       if (!nodeId || visited.has(nodeId)) continue;
       seedNodeIds.add(nodeId);

@@ -48,8 +48,16 @@ describe('durable memory prefetch', () => {
     expect(query).toContain('Jeffrey Lu personal profile');
     expect(query).toContain('previous company');
     expect(durableMemoryQuery('Help me write my Staff promotion case.')).toContain('accomplishments impact projects leadership');
-    expect(durableMemoryRetrievalPlan('Help me write my Staff promotion case.')).toEqual({ candidateLimit: 100, evidenceLimit: 32, promptBudget: 16_000 });
-    expect(durableMemoryRetrievalPlan('Fix this recurring bug.')).toEqual({ candidateLimit: 40, evidenceLimit: 8, promptBudget: 4_000 });
+    expect(durableMemoryRetrievalPlan('Help me write my Staff promotion case.')).toEqual({ candidateLimit: 100, evidenceLimit: 100, promptBudget: 32_000 });
+    expect(durableMemoryRetrievalPlan('Fix this recurring bug.')).toEqual({ candidateLimit: 100, evidenceLimit: 100, promptBudget: 12_000 });
+  });
+
+  it('deduplicates repeated task context and does not pollute ordinary queries with a generic hint', () => {
+    expect(durableMemoryQuery('Design the prototype.', {
+      conversationTitle: 'Connector error UX',
+      taskTitle: 'Connector error UX',
+      projectName: 'Connectors',
+    })).toBe('Design the prototype.\nConnector error UX\nConnectors');
   });
 
   it('deduplicates evidence and excludes generated output from the current room', () => {
@@ -77,5 +85,25 @@ describe('durable memory prefetch', () => {
     })));
 
     expect(prompt.length).toBeLessThanOrEqual(4_000);
+  });
+
+  it('selects as many relevant memories as fit the prompt instead of taking a fixed count', () => {
+    const results = selectDurableMemoryEvidence(Array.from({ length: 20 }, (_, index) => evidence({
+      title: `Memory ${index}`,
+      body: 'Short relevant fact.',
+      score: 1 - index * 0.01,
+    })), null, { promptBudget: 4_000, maxItems: 100 });
+
+    expect(results.length).toBeGreaterThan(8);
+  });
+
+  it('drops the weak relevance tail before it can consume prompt space', () => {
+    const results = selectDurableMemoryEvidence([
+      evidence({ title: 'Direct answer', score: 1 }),
+      evidence({ title: 'Still useful', score: 0.72 }),
+      evidence({ title: 'Weak noise', score: 0.2 }),
+    ], null, { promptBudget: 12_000, maxItems: 100 });
+
+    expect(results.map(({ title }) => title)).toEqual(['Direct answer', 'Still useful']);
   });
 });

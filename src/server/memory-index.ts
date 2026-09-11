@@ -20,8 +20,9 @@ import { expandKnowledgeGraph } from './knowledge-graph.js';
  *     or just changed (`indexed_at IS NULL`), writing `memory_chunks` (+ the
  *     FTS5 mirror kept in sync by triggers, same convention as
  *     conversations_fts/messages_fts).
- *  3. `searchMemory` fuses an FTS5 BM25 ranking with a brute-force cosine
- *     ranking over the embedded chunks via Reciprocal Rank Fusion.
+ *  3. `searchMemory` combines FTS5 BM25 rank, lexical coverage, and calibrated
+ *     cosine similarity while keeping task-title context weaker than the
+ *     user's exact request.
  */
 
 export const EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
@@ -515,9 +516,51 @@ const QUERY_STOP_WORDS = new Set([
   'were', 'what', 'when', 'where', 'which', 'with', 'work', 'would', 'your',
 ]);
 
+const MIN_SEMANTIC_SIMILARITY = 0.28;
+const MIN_DIRECT_RELEVANCE = 0.12;
+const RELATIVE_RELEVANCE_FLOOR = 0.32;
+const SHORTHAND_REQUEST = /^(?:continue|do it|go ahead|proceed|yes|yep|okay|ok|build|fix it|ship it|run it|promote)[.!\s]*$/i;
+
 function significantTerms(value: string): Set<string> {
   return new Set((value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
     .filter((term) => term.length >= 3 && !QUERY_STOP_WORDS.has(term)));
+}
+
+function memoryQueryParts(query: string): { primary: string; context: string } {
+  const lines = query.split('\n').map((line) => line.trim()).filter(nonEmpty);
+  const primary = lines[0] ?? '';
+  const seen = new Set([primary.replace(/\s+/g, ' ').toLocaleLowerCase()]);
+  const context = lines.slice(1).filter((line) => {
+    const key = line.replace(/\s+/g, ' ').toLocaleLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).join('\n');
+  return { primary, context };
+}
+
+function lexicalCoverage(text: string, query: string): number {
+  const queryTerms = significantTerms(query);
+  if (!queryTerms.size) return 0;
+  const textTerms = significantTerms(text);
+  let matches = 0;
+  for (const term of queryTerms) if (textTerms.has(term)) matches += 1;
+  return matches / queryTerms.size;
+}
+
+function rankStrength(rank: number | undefined): number {
+  return rank === undefined ? 0 : 61 / (61 + rank);
+}
+
+function semanticStrength(similarity: number | undefined): number {
+  if (similarity === undefined || similarity < MIN_SEMANTIC_SIMILARITY) return 0;
+  return Math.min(1, (similarity - MIN_SEMANTIC_SIMILARITY) / (1 - MIN_SEMANTIC_SIMILARITY));
+}
+
+function combinedChannelScore(lexicalRank: number | undefined, semanticSimilarity: number | undefined, coverage: number): number {
+  const lexical = rankStrength(lexicalRank) * Math.pow(coverage, 0.65);
+  const semantic = semanticStrength(semanticSimilarity);
+  return (0.58 * lexical) + (0.42 * semantic) + (0.12 * Math.min(lexical, semantic));
 }
 
 /**
@@ -642,40 +685,62 @@ export function diversifyMemoryResults(results: MemorySearchResult[], limit: num
   return selected;
 }
 
+type RankedChunk = { chunk_id: number; document_id: string; text: string };
+type ChunkSignals = {
+  primaryLexicalRank?: number;
+  contextLexicalRank?: number;
+  primarySemanticSimilarity?: number;
+  contextSemanticSimilarity?: number;
+};
+
 /**
- * Hybrid retrieval: FTS5 BM25 (top 400) fused with brute-force cosine
- * similarity over embedded chunks (top 400) via Reciprocal Rank Fusion,
- * grouped to document level keeping the best-scoring chunk as the snippet.
- * Never throws on the embedding side -- a model failure or an empty
- * embeddings table just falls back to the FTS ranking alone.
+ * Relevance-first hybrid retrieval. The exact user request and its task context
+ * are independent channels: context can resolve a shorthand request, but it
+ * cannot overpower a specific request. Weak cosine matches are discarded,
+ * raw similarity strength survives ranking, and graph neighbors are admitted
+ * only when their own content also matches the request.
  */
 export async function searchMemory(database: WorkbenchDatabase, query: string, options: MemorySearchOptions = {}): Promise<MemorySearchResult[]> {
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
-  // API consumers can request a single lookahead row to report whether the
-  // visible result set is truncated while preserving the public 100-row cap.
   const limit = Math.max(1, Math.min(101, options.limit ?? 20));
-  const sourceFilter = options.sources && options.sources.length ? new Set(options.sources) : null;
   const scope = memoryScopeClause(options, 'md');
+  const { primary, context } = memoryQueryParts(trimmed);
+  const primaryTerms = significantTerms(primary);
+  const contextWeight = SHORTHAND_REQUEST.test(primary) || primaryTerms.size <= 2 ? 0.72 : 0.14;
 
-  const matchQuery = buildMemoryFtsMatchQuery(trimmed);
-  const ftsRows = matchQuery
-    ? database.prepare(`
-        SELECT memory_chunks.id AS chunk_id, memory_chunks.document_id AS document_id, memory_chunks.text AS text
-        FROM memory_chunks_fts
-        JOIN memory_chunks ON memory_chunks.id = memory_chunks_fts.chunk_id
-        JOIN memory_documents md ON md.id = memory_chunks.document_id
-        WHERE memory_chunks_fts MATCH ?
-          ${scope.sql}
-        ORDER BY bm25(memory_chunks_fts)
-        LIMIT ${MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE}
-      `).all(matchQuery, ...scope.parameters) as Array<{ chunk_id: number; document_id: string; text: string }>
-    : [];
+  const lexicalRows = (text: string): RankedChunk[] => {
+    const matchQuery = buildMemoryFtsMatchQuery(text);
+    if (!matchQuery) return [];
+    return database.prepare(`
+      SELECT memory_chunks.id AS chunk_id, memory_chunks.document_id AS document_id, memory_chunks.text AS text
+      FROM memory_chunks_fts
+      JOIN memory_chunks ON memory_chunks.id = memory_chunks_fts.chunk_id
+      JOIN memory_documents md ON md.id = memory_chunks.document_id
+      WHERE memory_chunks_fts MATCH ?
+        ${scope.sql}
+      ORDER BY bm25(memory_chunks_fts)
+      LIMIT ${MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE}
+    `).all(matchQuery, ...scope.parameters) as RankedChunk[];
+  };
 
-  let vectorRows: Array<{ chunk_id: number; document_id: string; text: string; score: number }> = [];
+  const primaryLexicalRows = lexicalRows(primary);
+  const contextLexicalRows = context ? lexicalRows(context) : [];
+  const chunks = new Map<string, { documentId: string; text: string }>();
+  const signals = new Map<string, ChunkSignals>();
+  const addRankedRows = (rows: RankedChunk[], key: 'primaryLexicalRank' | 'contextLexicalRank') => {
+    rows.forEach((row, rank) => {
+      const chunkId = String(row.chunk_id);
+      chunks.set(chunkId, { documentId: row.document_id, text: row.text });
+      signals.set(chunkId, { ...signals.get(chunkId), [key]: rank });
+    });
+  };
+  addRankedRows(primaryLexicalRows, 'primaryLexicalRank');
+  addRankedRows(contextLexicalRows, 'contextLexicalRank');
+
+  const bestPrimarySemanticByDocument = new Map<string, number>();
   try {
-    const primaryQuery = trimmed.split('\n', 1)[0]?.trim() || trimmed;
-    const semanticQueries = primaryQuery === trimmed ? [trimmed] : [primaryQuery, trimmed];
+    const semanticQueries = context ? [primary, context] : [primary];
     const queryVectors = await embedTexts(semanticQueries);
     if (queryVectors.length) {
       const embedded = database.prepare(`
@@ -685,74 +750,106 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
         WHERE memory_chunks.embedding IS NOT NULL
           ${scope.sql}
       `).all(...scope.parameters) as Array<{ id: number; document_id: string; text: string; embedding: Uint8Array }>;
-      vectorRows = embedded
-        .map((row) => {
-          const embedding = blobToEmbedding(row.embedding);
-          const score = Math.max(...queryVectors.map((queryVector, index) => cosineSimilarity(queryVector, embedding) * (index === 0 ? 1 : 0.97)));
-          return { chunk_id: row.id, document_id: row.document_id, text: row.text, score };
-        })
-        .sort((a, b) => b.score - a.score)
-        .slice(0, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE);
+      const semanticRows = embedded.map((row) => {
+        const embedding = blobToEmbedding(row.embedding);
+        const primarySimilarity = cosineSimilarity(queryVectors[0], embedding);
+        const contextSimilarity = queryVectors[1] ? cosineSimilarity(queryVectors[1], embedding) : undefined;
+        bestPrimarySemanticByDocument.set(row.document_id, Math.max(bestPrimarySemanticByDocument.get(row.document_id) ?? -1, primarySimilarity));
+        return { ...row, primarySimilarity, contextSimilarity };
+      });
+      const addSemanticRows = (key: 'primarySemanticSimilarity' | 'contextSemanticSimilarity', similarity: (row: typeof semanticRows[number]) => number | undefined) => {
+        semanticRows
+          .filter((row) => (similarity(row) ?? -1) >= MIN_SEMANTIC_SIMILARITY)
+          .sort((left, right) => (similarity(right) ?? -1) - (similarity(left) ?? -1))
+          .slice(0, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE)
+          .forEach((row) => {
+            const chunkId = String(row.id);
+            chunks.set(chunkId, { documentId: row.document_id, text: row.text });
+            signals.set(chunkId, { ...signals.get(chunkId), [key]: similarity(row) });
+          });
+      };
+      addSemanticRows('primarySemanticSimilarity', (row) => row.primarySimilarity);
+      if (queryVectors[1]) addSemanticRows('contextSemanticSimilarity', (row) => row.contextSimilarity);
     }
   } catch (error) {
     console.error('[memory-index] embedding query failed; falling back to full-text results only', error);
   }
 
-  const chunkById = new Map<string, { documentId: string; text: string }>();
-  for (const row of ftsRows) chunkById.set(String(row.chunk_id), { documentId: row.document_id, text: row.text });
-  for (const row of vectorRows) chunkById.set(String(row.chunk_id), { documentId: row.document_id, text: row.text });
-
-  const fused = reciprocalRankFusion([ftsRows.map((row) => String(row.chunk_id)), vectorRows.map((row) => String(row.chunk_id))]);
-  if (!fused.size) return [];
-
-  const bestByDocument = new Map<string, { chunkId: string; score: number }>();
-  for (const [chunkId, score] of fused) {
-    const chunk = chunkById.get(chunkId);
-    if (!chunk) continue;
-    const current = bestByDocument.get(chunk.documentId);
-    if (!current || score > current.score) bestByDocument.set(chunk.documentId, { chunkId, score });
-  }
-  if (!bestByDocument.size) return [];
-
-  const documentIds = [...bestByDocument.keys()];
+  if (!chunks.size) return [];
+  const documentIds = [...new Set([...chunks.values()].map(({ documentId }) => documentId))];
   const placeholders = documentIds.map(() => '?').join(',');
-  const documents = database.prepare(`
-    SELECT * FROM memory_documents
-    WHERE id IN (${placeholders})
-  `).all(...documentIds) as MemoryDocumentRow[];
-  const documentById = new Map(documents.map((doc) => [doc.id, doc]));
-  const corroboration = corroborationMultipliers(documents);
-  const maximumFusedScore = Math.max(...[...bestByDocument.values()].map(({ score }) => score));
+  const documents = database.prepare(`SELECT * FROM memory_documents WHERE id IN (${placeholders})`)
+    .all(...documentIds) as MemoryDocumentRow[];
+  const documentById = new Map(documents.map((document) => [document.id, document]));
+  const bestByDocument = new Map<string, { chunkId: string; relevance: number }>();
+  for (const [chunkId, chunk] of chunks) {
+    const document = documentById.get(chunk.documentId);
+    if (!document) continue;
+    const searchable = `${document.title}\n${chunk.text}`;
+    const signal = signals.get(chunkId) ?? {};
+    const primaryScore = combinedChannelScore(
+      signal.primaryLexicalRank,
+      signal.primarySemanticSimilarity,
+      lexicalCoverage(searchable, primary),
+    );
+    const contextScore = context ? combinedChannelScore(
+      signal.contextLexicalRank,
+      signal.contextSemanticSimilarity,
+      lexicalCoverage(searchable, context),
+    ) : 0;
+    const phraseBoost = primary.length >= 8 && searchable.toLocaleLowerCase().includes(primary.toLocaleLowerCase()) ? 0.08 : 0;
+    const relevance = primaryScore + (contextWeight * contextScore) + phraseBoost;
+    const current = bestByDocument.get(chunk.documentId);
+    if (!current || relevance > current.relevance) bestByDocument.set(chunk.documentId, { chunkId, relevance });
+  }
 
-  const results: MemorySearchResult[] = [];
+  const corroboration = corroborationMultipliers(documents);
+  const directResults: MemorySearchResult[] = [];
   for (const [documentId, best] of bestByDocument) {
-    const doc = documentById.get(documentId);
-    if (!doc) continue;
-    if (sourceFilter && !sourceFilter.has(doc.source)) continue;
-    const chunk = chunkById.get(best.chunkId);
-    const normalizedSearchScore = maximumFusedScore > 0 ? best.score / maximumFusedScore : 0;
-    const importanceScore = normalizedSearchScore
-      * (SOURCE_AUTHORITY[doc.source] ?? 1)
-      * lexicalImportanceMultiplier(doc, trimmed)
-      * recencyMultiplier(doc.created_at)
-      * (corroboration.get(doc.id) ?? 1)
-      * personalImportanceMultiplier(doc, options.importanceProfile);
-    results.push({
-      source: doc.source, sourceId: doc.source_id, title: doc.title, snippet: chunk?.text ?? doc.body.slice(0, 1_200),
-      createdAt: doc.created_at, conversationId: doc.conversation_id, workItemId: doc.work_item_id, actor: doc.actor, score: importanceScore,
-      retrievalPath: ['Matched request'],
+    if (best.relevance < MIN_DIRECT_RELEVANCE) continue;
+    const document = documentById.get(documentId);
+    const chunk = chunks.get(best.chunkId);
+    if (!document || !chunk) continue;
+    const score = best.relevance
+      * (SOURCE_AUTHORITY[document.source] ?? 1)
+      * lexicalImportanceMultiplier(document, primary)
+      * recencyMultiplier(document.created_at)
+      * (corroboration.get(document.id) ?? 1)
+      * personalImportanceMultiplier(document, options.importanceProfile);
+    directResults.push({
+      source: document.source, sourceId: document.source_id, title: document.title, snippet: chunk.text,
+      createdAt: document.created_at, conversationId: document.conversation_id, workItemId: document.work_item_id,
+      actor: document.actor, score, retrievalPath: ['Matched request'],
     });
   }
-  results.sort((a, b) => b.score - a.score);
-  const graphResults = expandKnowledgeGraph(database, results.slice(0, 8), {
+  directResults.sort((left, right) => right.score - left.score || right.createdAt.localeCompare(left.createdAt));
+  if (!directResults.length) return [];
+  const strongestScore = directResults[0].score;
+  const relevantDirect = directResults.filter(({ score }) => score >= strongestScore * RELATIVE_RELEVANCE_FLOOR);
+
+  const graphResults = expandKnowledgeGraph(database, relevantDirect, {
     limit: Math.min(20, Math.ceil(limit / 3)),
     sources: options.sources,
     projectKey: options.projectKey,
     conversationId: options.conversationId,
     workItemId: options.workItemId,
   });
-  const merged = new Map(results.map((result) => [`${result.source}:${result.sourceId}`, result]));
-  for (const result of graphResults) {
+  const graphDocumentRows = graphResults.length ? database.prepare(`
+    SELECT id, source, source_id FROM memory_documents
+    WHERE ${graphResults.map(() => '(source = ? AND source_id = ?)').join(' OR ')}
+  `).all(...graphResults.flatMap(({ source, sourceId }) => [source, sourceId])) as Array<{ id: string; source: string; source_id: string }> : [];
+  const graphDocumentIds = new Map(graphDocumentRows.map((row) => [`${row.source}:${row.source_id}`, row.id]));
+  const relevantGraph = graphResults.flatMap((result) => {
+    const documentId = graphDocumentIds.get(`${result.source}:${result.sourceId}`);
+    const lexical = lexicalCoverage(`${result.title}\n${result.snippet}`, primary);
+    const semantic = semanticStrength(documentId ? bestPrimarySemanticByDocument.get(documentId) : undefined);
+    const queryAffinity = Math.max(lexical, semantic);
+    if (queryAffinity <= 0) return [];
+    return [{ ...result, score: result.score * queryAffinity * 0.55 }];
+  });
+
+  const merged = new Map(relevantDirect.map((result) => [`${result.source}:${result.sourceId}`, result]));
+  for (const result of relevantGraph) {
     const key = `${result.source}:${result.sourceId}`;
     if (!merged.has(key)) merged.set(key, result);
   }

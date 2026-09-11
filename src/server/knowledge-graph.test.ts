@@ -36,7 +36,7 @@ describe('knowledge graph', () => {
     const task = repository.create({ title: 'Graph retrieval', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Graph retrieval', task.id);
     const seed = repository.createSharedMessage('jeffrey', 'Investigate nebulafalcon failures.', 'completed', conversation.id);
-    const related = repository.createSharedMessage('claude', 'The durable decision was to use cursor pagination.', 'completed', conversation.id);
+    const related = repository.createSharedMessage('claude', 'The nebulafalcon resolution was to use cursor pagination.', 'completed', conversation.id);
     collectMemoryDocuments(database, { docRoots: [] });
 
     const results = expandKnowledgeGraph(database, [{ source: 'message', sourceId: seed.id, score: 1 }], { sources: ['message'], limit: 10 });

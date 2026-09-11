@@ -279,6 +279,42 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     }
   });
 
+  it('does not let generic task context outrank the exact request', async () => {
+    insertDocument('prototype-evidence', 'message', 'Prototype buy-in', 'Build a narrow frontend prototype to get team buy-in before investing real engineering hours.');
+    insertDocument('persona-cleanup', 'work_item', 'Cleanup overlapping personas and skills', 'Remove dead personas and consolidate duplicate testing skills.');
+    insertDocument('first-week', 'message', 'First week at Writer', 'Onboarded to Connector Gateway and met the connectors team.');
+    await indexPendingMemory(database);
+
+    const results = await searchMemory(database, [
+      'the purpose of the prototype is to get buy in from my team before investing real eng hours',
+      'Analyze Connector Error Reports and Propose UX Improvement Plan',
+      'Analyze Connector Error Reports and Propose UX Improvement Plan',
+    ].join('\n'), { limit: 10 });
+
+    expect(results[0]?.sourceId).toBe('prototype-evidence');
+    expect(results.map(({ sourceId }) => sourceId)).not.toContain('persona-cleanup');
+    expect(results.map(({ sourceId }) => sourceId)).not.toContain('first-week');
+  });
+
+  it('rejects weak semantic matches instead of filling the result limit with noise', async () => {
+    setEmbedder(async (texts) => texts.map((text) => {
+      if (text === 'repair authentication outage') return Float32Array.from([1, 0]);
+      if (text.includes('Restore login service')) return Float32Array.from([0.8, 0.6]);
+      return Float32Array.from([0.05, 0.9987]);
+    }));
+    try {
+      insertDocument('semantic-answer', 'message', 'Restore login service', 'Re-enable identity provider access.');
+      insertDocument('semantic-noise', 'message', 'Lunch menu', 'The cafeteria serves noodles today.');
+      await indexPendingMemory(database);
+
+      const results = await searchMemory(database, 'repair authentication outage', { limit: 10 });
+
+      expect(results.map(({ sourceId }) => sourceId)).toEqual(['semantic-answer']);
+    } finally {
+      setEmbedder(deterministicTestEmbedder);
+    }
+  });
+
   it('prioritizes Jeffrey-authored evidence for personal-memory questions', async () => {
     insertDocument('agent-claim', 'run_output', 'Career history', 'Led the connector reliability launch.', null, {
       actor: 'claude', createdAt: '2026-09-09T00:00:00.000Z',
