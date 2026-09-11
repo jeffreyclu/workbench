@@ -397,6 +397,29 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         // the change, its severity is the more useful thing to show.
         const band = riskBands?.get(decisionId) ?? ((decision?.riskSignals.length ?? 0) > 0 ? 'signals' : null);
         const awaiting = state === null && !handled && Boolean(delegating?.has(decisionId));
+        // Every line gets its own hover handle, not just the block: a reviewer
+        // hovering any row should be able to jump straight into the simplified
+        // review/ask/AI-assist popup for the chunk that row belongs to.
+        const simpleMarker = (lineKey) => onOpenSimpleDetail && <button
+          key={lineKey}
+          type="button"
+          className="diff-line-simple-marker"
+          // Every line in the block shares the same attribute value on purpose:
+          // the popover only needs to re-find *a* live marker for this decision
+          // after a re-render, and any line in the block is an equally valid
+          // anchor for that.
+          data-decision-simple-marker={decisionId}
+          aria-haspopup="dialog"
+          aria-label={`Review, ask and get AI assist on ${hunk.location}`}
+          title="Review, ask and AI assist"
+          onClick={(event) => {
+            const anchor = event.currentTarget;
+            onSelect(decisionId);
+            onOpenSimpleDetail(decisionId, anchor);
+          }}
+        >
+          <MessageSquareText size={11} aria-hidden="true" />
+        </button>;
         return <section
           key={hunk.range}
           ref={scrollTarget ? activeBlock : undefined}
@@ -438,25 +461,6 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
               <StateGlyph state={state} />
               {band && <i className={`diff-review-block-risk-dot band-${band}`} aria-hidden="true" />}
             </button>
-            {onOpenSimpleDetail && <button
-              type="button"
-              className="diff-review-block-simple-marker"
-              // Re-found the same way as the full marker, but under its own
-              // attribute — the two handles anchor two independent popovers,
-              // and sharing one attribute would let either popover jump to the
-              // other's handle after a re-render.
-              data-decision-simple-marker={decisionId}
-              aria-haspopup="dialog"
-              aria-label={`Review, ask and get AI assist on ${hunk.location}`}
-              title="Review, ask and AI assist"
-              onClick={(event) => {
-                const anchor = event.currentTarget;
-                onSelect(decisionId);
-                onOpenSimpleDetail(decisionId, anchor);
-              }}
-            >
-              <MessageSquareText size={11} aria-hidden="true" />
-            </button>}
             {marker && <span className="diff-review-diff-block-link-marker" aria-hidden="true">{marker.direction === 'upstream' ? <ArrowDownRight size={10} /> : <ArrowUpRight size={10} />}{activeOrdinal}</span>}
           </div>
           <div className="diff-review-diff-block-main">
@@ -524,15 +528,18 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
                     <span>{row.lines.length} {row.lines.length === 1 ? 'line' : 'lines'} removed</span>
                   </button>
                   {openRemovals.has(row.key) && row.lines.map((removed) => <div key={removed.key} className="diff-line final was-removed">
+                    {simpleMarker(removed.key)}
                     <span>{removed.oldLine ?? ''}</span>
                     <span><SyntaxHighlight code={removed.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
                   </div>)}
                 </div>
                 : <div key={row.line.key} className={`diff-line final ${row.line.kind}`}>
+                  {simpleMarker(row.line.key)}
                   <span>{row.line.newLine ?? ''}</span>
                   <span><SyntaxHighlight code={row.line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
                 </div>)
               : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}`}>
+                {simpleMarker(line.key)}
                 <span>{line.oldLine ?? ''}</span>
                 <span>{line.newLine ?? ''}</span>
                 <span><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>

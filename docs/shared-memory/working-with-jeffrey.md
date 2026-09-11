@@ -435,3 +435,19 @@ listed them: Mural, Handshake, Goldman Sachs (contract), Perkins Eastman. Deep R
 TypeScript / GraphQL / design-system / accessibility / testing experience; self-identifies backend,
 infra, and deployment as weaker areas. Long-term interest in moving toward engineering management.
 Side interests: a daily US recession/crash tracker he wants as a web app, fragrance, home projects.
+
+## Connectors work assigned to Jeffrey means the frontend surface
+
+When a connectors defect is routed to Jeffrey — by Dennis Thompson, by a Linear ticket, or through
+Workbench — the deliverable is the frontend/UX fix, even when the same defect also has a real
+backend cause. He has had to correct this twice: once on the CON-218/CON-230 connector-search split
+(CON-218 is the backend ticket, CON-230 the frontend one) and again on the Basic HTTP auth flow,
+where the first answers analyzed `be.mcp-gateway` credential encoding and even pointed at a gateway
+PR. Jeffrey's reply both times was that the task is the frontend one, and that being tagged is
+itself the signal — he is the team's frontend engineer, so work lands on him because the observable
+user-facing behavior is wrong.
+
+Backend analysis is still useful as supporting context, but it is never the answer by itself. Name
+the backend cause in one line if it matters, then locate and report the defect in
+`writer-monorepo/frontend/src`. Ask which surface is in scope only when the frontend genuinely has
+no involvement in the reported behavior.

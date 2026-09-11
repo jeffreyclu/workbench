@@ -415,7 +415,13 @@ nav { display: grid; gap: 3px; }
 .workspace-diff-file > header span { flex: 0 0 auto; color: #898880; text-transform: capitalize; }
 .diff-file-info { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
 .workspace-diff-file pre { min-width: 0; max-width: 100%; margin: 0; padding: 8px 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; background: #10100f; font: 11px/1.55 var(--code-font); tab-size: 2; }
-.diff-line { display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; font-family: var(--code-font); font-variant-ligatures: none; tab-size: 2; white-space: pre-wrap; }
+.diff-line { position: relative; display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; font-family: var(--code-font); font-variant-ligatures: none; tab-size: 2; white-space: pre-wrap; }
+/* One hover handle per row, not per block: floats over the line-number gutter
+ * so every line — not just the top of a chunk — can open the simplified
+ * review/ask/AI-assist popup without reshaping the line-number grid. */
+.diff-line-simple-marker { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); z-index: 2; display: grid; place-items: center; width: 18px; height: 18px; color: #8a8980; border: 1px solid transparent; border-radius: 4px; background: #131311; cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
+.diff-line:hover .diff-line-simple-marker, .diff-line-simple-marker:hover, .diff-line-simple-marker:focus-visible { opacity: 1; }
+.diff-line-simple-marker:hover, .diff-line-simple-marker:focus-visible { color: var(--acid); border-color: #2f2f2a; outline: 0; }
 .diff-line > span { padding: 0 8px; }
 .diff-line > span:last-child, .diff-line-code { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 /* A wrapped long line restarts at the code column, not under the gutter, and is
@@ -752,12 +758,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-block-risk-dot.band-elevated { --band: #d6bd76; }
 .diff-review-block-risk-dot.band-high { --band: #e1a68f; }
 .diff-review-block-risk-dot.band-signals { --band: #77766f; }
-/* The chunk popup's handle — hidden until the block is hovered or the handle
-   itself is focused, so it never competes with the decision marker for
-   attention on a block the reviewer isn't looking at. */
-.diff-review-block-simple-marker { display: grid; place-items: center; width: 24px; height: 20px; color: #8a8980; border: 1px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
-.diff-review-diff-block:hover .diff-review-block-simple-marker, .diff-review-block-simple-marker:hover, .diff-review-block-simple-marker:focus-visible { opacity: 1; }
-.diff-review-block-simple-marker:hover, .diff-review-block-simple-marker:focus-visible { color: var(--acid); border-color: #2f2f2a; background: #131311; outline: 0; }
 .diff-review-diff-block { --state-tone: #6f6e68; }
 .diff-review-diff-block.state-reviewed { --state-tone: #8bbd75; }
 .diff-review-diff-block.state-needs_changes { --state-tone: #e1a68f; }
