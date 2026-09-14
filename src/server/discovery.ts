@@ -19,8 +19,11 @@ export function discoveryPriority(signal: SourceSignal): number {
   if (signal.referenceOnly) return 0;
   const text = `${signal.title}\n${signal.summary}\n${signal.url ?? ''}`;
   const isFocusArea = focusAreaPattern.test(text);
+  const isGitHubPullRequest = signal.provider === 'github' && /github\.com\/.+\/pull\//i.test(signal.url ?? '');
   const isActionable = signal.activeWork || signal.provider === 'linear' || actionablePattern.test(text) || reviewPattern.test(text);
   if (!isActionable && !isFocusArea) return 0;
+  if (isGitHubPullRequest && isFocusArea) return 5;
+  if (isGitHubPullRequest) return 4;
   if (primaryProviders.has(signal.provider)) return isFocusArea ? 4 : 3;
   if (isFocusArea || reviewPattern.test(text)) return 2;
   if (isActionable) return 1;

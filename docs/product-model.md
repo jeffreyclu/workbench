@@ -87,7 +87,8 @@ dashboards remain available to source search but do not enter the discovery inbo
 does not reappear merely to manufacture representation from each source.
 
 Slack, Linear, and GitHub are the primary discovery sources and rank above other providers. Within that
-top tier, Connectors and Writer Agent work ranks first. GitHub discovery includes open pull requests that
-involve Jeffrey, not only PRs with an explicit pending review request.
+top tier, Connectors and Writer Agent work ranks first. Connectors and Writer Agent pull requests receive
+the highest score, followed by other GitHub pull-request activity. GitHub discovery includes open pull
+requests that involve Jeffrey, not only PRs with an explicit pending review request.
 
 The local connection layer supports GitHub personal access tokens, Slack user tokens with `search:read`, Confluence email/API-token basic authentication, and Gmail OAuth access tokens. Secrets are stored only in the local SQLite database and are omitted from every read response. Gmail access tokens expire and must currently be replaced manually; refresh-token OAuth is a future hardening step.
