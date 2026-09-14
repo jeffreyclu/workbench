@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ChangeMap, ChangeMapEdge, ChangeMapNode } from '../../../shared/change-map.js';
 import { layoutChangeMap } from './change-map-layout.js';
@@ -43,6 +43,45 @@ function draw(overrides: Partial<Parameters<typeof ChangeMapCanvas>[0]> = {}) {
     onSelectEdge={() => {}}
     {...overrides}
   />);
+}
+
+/** jsdom measures every element as zero, which is the one case the camera has
+ * a fallback for — so a test that does not lay the element out never exercises
+ * the arithmetic a reviewer actually drives. This gives the surface a real
+ * pixel box and a resize observer that can be fired by hand. */
+function layOut(width: number, height: number) {
+  const box = { width, height };
+  const observers: ResizeObserverCallback[] = [];
+  const original = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function measured(this: Element) {
+    if (!this.classList?.contains('change-map-surface')) return original.call(this);
+    return { x: 0, y: 0, top: 0, left: 0, right: box.width, bottom: box.height, width: box.width, height: box.height, toJSON: () => ({}) } as DOMRect;
+  };
+  class Observer {
+    constructor(callback: ResizeObserverCallback) { observers.push(callback); }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  const previousObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = Observer as unknown as typeof ResizeObserver;
+  return {
+    /** The element changes size — the window narrowing, or the code column
+     * opening and taking 40% of the width with it. */
+    resize(nextWidth: number, nextHeight: number) {
+      box.width = nextWidth;
+      box.height = nextHeight;
+      act(() => {
+        for (const callback of observers) {
+          callback([{ contentRect: { width: nextWidth, height: nextHeight } } as ResizeObserverEntry], {} as ResizeObserver);
+        }
+      });
+    },
+    restore() {
+      Element.prototype.getBoundingClientRect = original;
+      globalThis.ResizeObserver = previousObserver;
+    },
+  };
 }
 
 const nodeGroup = (container: HTMLElement, id: string) => container.querySelector(`[data-change-map-node="${id}"]`)!;
@@ -139,6 +178,123 @@ describe('change map canvas', () => {
 
     fireEvent.keyDown(canvas, { key: '0' });
     expect(box()[2]).toBeCloseTo(widthBefore, 1);
+  });
+
+  it('keeps the window onto the world the same shape as the element', () => {
+    // The `viewBox` and the element must agree: when they do not, the SVG
+    // letterboxes the drawing to fit and every pointer sent to the surface
+    // resolves to the wrong world point — the map slides out from under the
+    // cursor instead of zooming about it.
+    const laid = layOut(800, 560);
+    try {
+      const { container } = draw();
+      const [, , width, height] = container.querySelector('.change-map-surface')!.getAttribute('viewBox')!.split(' ').map(Number);
+
+      expect(width / height).toBeCloseTo(800 / 560, 3);
+    } finally {
+      laid.restore();
+    }
+  });
+
+  it('holds the point under the pointer still while the wheel zooms', () => {
+    const laid = layOut(800, 560);
+    try {
+      const { container } = draw();
+      const surface = container.querySelector('.change-map-surface')!;
+      const box = () => surface.getAttribute('viewBox')!.split(' ').map(Number);
+      // What the cursor is over, in the world: the left edge of the window
+      // plus the distance across it, at the scale the window is drawn at.
+      const under = (clientX: number, clientY: number) => {
+        const [x, y, width, height] = box();
+        return { x: x + (clientX / 800) * width, y: y + (clientY / 560) * height };
+      };
+
+      const fitted = box()[2];
+      const before = under(620, 140);
+      fireEvent.wheel(surface, { deltaY: -240, clientX: 620, clientY: 140 });
+      const after = under(620, 140);
+
+      expect(box()[2]).toBeLessThan(fitted);
+      expect(after.x).toBeCloseTo(before.x, 1);
+      expect(after.y).toBeCloseTo(before.y, 1);
+    } finally {
+      laid.restore();
+    }
+  });
+
+  it('narrows onto the same drawing when the code column opens beside it', () => {
+    // Clicking a disc takes 40% of the width away. The camera has to keep what
+    // the reviewer was looking at rather than letting the shrinking element
+    // rescale the picture underneath them.
+    const laid = layOut(800, 560);
+    try {
+      const { container } = draw();
+      const surface = container.querySelector('.change-map-surface')!;
+      const centre = () => {
+        const [x, y, width, height] = surface.getAttribute('viewBox')!.split(' ').map(Number);
+        return { x: x + width / 2, y: y + height / 2, scale: 800 / width };
+      };
+
+      const before = centre();
+      laid.resize(480, 560);
+      const after = centre();
+
+      expect(after.x).toBeCloseTo(before.x, 1);
+      expect(after.y).toBeCloseTo(before.y, 1);
+      // The scale is untouched: a narrower window shows less of the world, it
+      // does not zoom the world.
+      expect(480 / Number(surface.getAttribute('viewBox')!.split(' ')[2])).toBeCloseTo(before.scale, 3);
+    } finally {
+      laid.restore();
+    }
+  });
+
+  it('will not let one wheel flick throw the camera to its stop', () => {
+    // A trackpad reports hundreds of units of delta per gesture, several times
+    // a frame. Uncapped, one flick ends at the zoom limit.
+    const laid = layOut(800, 560);
+    try {
+      const { container } = draw();
+      const surface = container.querySelector('.change-map-surface')!;
+      const scale = () => 800 / Number(surface.getAttribute('viewBox')!.split(' ')[2]);
+
+      const before = scale();
+      fireEvent.wheel(surface, { deltaY: -4000, clientX: 400, clientY: 280 });
+
+      expect(scale()).toBeGreaterThan(before);
+      expect(scale()).toBeLessThanOrEqual(before * 1.2 + 0.001);
+    } finally {
+      laid.restore();
+    }
+  });
+
+  it('will not let a drag lose the drawing off the edge of the pane', () => {
+    const laid = layOut(800, 560);
+    try {
+      const { container } = draw();
+      const surface = container.querySelector('.change-map-surface')!;
+      const box = () => surface.getAttribute('viewBox')!.split(' ').map(Number);
+
+      // This jsdom has no `PointerEvent`, so the press is sent as the mouse
+      // event it is built on — which still carries the button and the
+      // coordinates the handler reads.
+      const pointer = (type: string, clientX: number, clientY: number) =>
+        fireEvent(surface, new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX, clientY }));
+
+      pointer('pointerdown', 400, 280);
+      for (let step = 1; step <= 40; step += 1) pointer('pointermove', 400 + step * 200, 280 + step * 200);
+      pointer('pointerup', 400, 280);
+
+      // The window still overlaps the drawing, so there is something on screen
+      // to navigate back by.
+      const [x, y, width, height] = box();
+      expect(x).toBeLessThan(0);
+      expect(x + width).toBeGreaterThan(0);
+      expect(y).toBeLessThan(0);
+      expect(y + height).toBeGreaterThan(0);
+    } finally {
+      laid.restore();
+    }
   });
 
   it('fits a smaller neighbourhood into the shorter frame a panel gives it', () => {

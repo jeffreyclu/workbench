@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ChangeMap, ChangeMapNode } from '../../../shared/change-map.js';
+import type { ReviewDecision } from '../../../shared/review-decisions.js';
 import { DiffReviewChangeMap } from './change-map.js';
 
 afterEach(cleanup);
@@ -25,6 +26,24 @@ const map: ChangeMap = {
   }],
   omittedEdges: 0,
 };
+
+/** The change behind a disc, as the review pane hands it to the map. */
+function decisionFor(id: string, ordinal: number, lines: string[]): ReviewDecision {
+  return {
+    id, ordinal, subject: id, behavior: `Changes ${id}.`,
+    hunks: [{
+      id: `${id}-hunk`, filePath: `src/${id}.ts`, fileStatus: 'modified', editorUrl: null,
+      hunkRange: '@@ -4,2 +4,2 @@ renderWorkspace', location: '-4,2 +4,', lines, contentHash: id,
+      additions: lines.filter((line) => line.startsWith('+')).length,
+      deletions: lines.filter((line) => line.startsWith('-')).length,
+      state: null, note: null,
+    }],
+    filePaths: [`src/${id}.ts`], additions: 1, deletions: 1,
+    riskSignals: [], changeType: 'behavior_edit', secondaryChangeTypes: [], state: null, note: null,
+  };
+}
+
+const decisions = [decisionFor('type', 1, ['+type WorkspaceRef = string']), decisionFor('consumer', 2, ['+const scale = ratio()'])];
 
 describe('diff review change navigation', () => {
   it('marks the change the reviewer came from and the ones already reviewed', () => {
@@ -82,38 +101,65 @@ describe('diff review change navigation', () => {
     expect(screen.getByText(`All ${largeMap.nodes.length} changes`)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Focus on current change' })).toBeInTheDocument();
   });
-  it('makes a node open the decision detail and carry its AI risk band', () => {
-    // The diagram is a review surface, not an index: reaching a change through
-    // it has to reach the same scored panel the gutter marker opens.
-    const opened: Array<{ decisionId: string; tag: string }> = [];
-    render(<DiffReviewChangeMap
+  it('shows a clicked change\'s code inside the canvas, and never moves the review', () => {
+    // The whole point of the column: answering "what is this disc?" must not
+    // select the change, because selecting scrolls the diff pane under the
+    // diagram — which is what sent the reviewer away from the map every time.
+    const selected: string[] = [];
+    const { container } = render(<DiffReviewChangeMap
       map={map}
+      decisions={decisions}
       selectedId="type"
       riskBands={new Map([['consumer', 'high']])}
-      openDetailFor={null}
-      onSelect={() => {}}
-      onOpenDetail={(decisionId, anchor) => opened.push({ decisionId, tag: anchor.tagName })}
+      onSelect={(decisionId) => selected.push(decisionId)}
     />);
 
     fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
-    const scored = screen.getByRole('button', { name: /Decision 2:.*high risk\. Open decision details\./ });
-    expect(scored).toHaveAttribute('aria-haspopup', 'dialog');
+    const scored = screen.getByRole('button', { name: /Decision 2:.*high risk\. Show its code beside the diagram\./ });
     expect(scored).toHaveAttribute('aria-expanded', 'false');
     expect(scored.querySelector('.change-map-node-risk-dot.band-high')).not.toBeNull();
 
     fireEvent.click(scored);
-    expect(opened).toEqual([{ decisionId: 'consumer', tag: 'g' }]);
+    const code = container.querySelector('.change-map-canvas .change-map-code')!;
+    expect(code).not.toBeNull();
+    // Highlighting splits a line into token spans, so the code is read off the
+    // line element rather than matched as one text node.
+    expect([...code.querySelectorAll('.diff-line-code')].map((line) => line.textContent)).toContain('const scale = ratio()');
+    expect(within(code as HTMLElement).getByText('src/consumer.ts')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decision 2:/ })).toHaveClass('inspected');
+    expect(selected).toEqual([]);
 
-    // Keyboard reaches the same panel; a node that only responds to a mouse is
-    // still a dead handle for a keyboard reviewer.
-    fireEvent.keyDown(scored, { key: 'Enter' });
-    expect(opened).toHaveLength(2);
+    // Clicking the same disc again puts the column away.
+    fireEvent.click(screen.getByRole('button', { name: /Decision 2:/ }));
+    expect(container.querySelector('.change-map-code')).toBeNull();
   });
-  it('leaves the popover affordance off when no detail handler is wired', () => {
-    render(<DiffReviewChangeMap map={map} selectedId="type" onSelect={() => {}} />);
+  it('opens the code from the keyboard and only moves the review when asked', () => {
+    const selected: string[] = [];
+    const { container } = render(<DiffReviewChangeMap map={map} decisions={decisions} selectedId="type" onSelect={(decisionId) => selected.push(decisionId)} />);
 
     fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
-    expect(screen.getByRole('button', { name: /Decision 2:/ })).not.toHaveAttribute('aria-haspopup');
+    fireEvent.keyDown(screen.getByRole('button', { name: /Decision 2:/ }), { key: 'Enter' });
+    expect(container.querySelector('.change-map-canvas .change-map-code')).not.toBeNull();
+    expect(selected).toEqual([]);
+
+    // The one control that does take the reviewer to the diff, because they
+    // pressed it.
+    fireEvent.click(screen.getByRole('button', { name: 'Open in diff' }));
+    expect(selected).toEqual(['consumer']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close code' }));
+    expect(container.querySelector('.change-map-code')).toBeNull();
+  });
+  it('leaves the code column off when the changes behind the discs are not supplied', () => {
+    const selected: string[] = [];
+    const { container } = render(<DiffReviewChangeMap map={map} selectedId="type" onSelect={(decisionId) => selected.push(decisionId)} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
+    const node = screen.getByRole('button', { name: /Decision 2:/ });
+    expect(node).not.toHaveAttribute('aria-expanded');
+    fireEvent.click(node);
+    expect(container.querySelector('.change-map-code')).toBeNull();
+    expect(selected).toEqual(['consumer']);
   });
   it('zooms the mounted canvas and names the kinds of code on it', () => {
     // Carried over from the other implementation's suite: the canvas' own

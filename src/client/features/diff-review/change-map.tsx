@@ -6,7 +6,8 @@ import { CODE_CATEGORIES, CODE_CATEGORY_DESCRIPTIONS, CODE_CATEGORY_LABELS } fro
 import { plainRelationText, selectFocusedChangeMap } from './change-map-logic.js';
 import { ChangeMapCanvas } from './change-map-canvas.js';
 import { ChangeMapProgressLegend } from './change-map-progress-legend.js';
-import type { DecisionPopoverAnchor } from './decision-popover.js';
+import { DiffReviewChangeMapCode } from './change-map-code.js';
+import type { ReviewDecision } from '../../../shared/review-decisions.js';
 
 const CHANGE_MAP_FOCUS_LIMIT = 4;
 
@@ -19,8 +20,11 @@ const CHANGE_MAP_FOCUS_LIMIT = 4;
  * Relationships also read as inline links inside the diff itself; the diagram
  * stays as the opt-in whole-diff view for wide refactors. */
 
-export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, selectedId, cameFromId, riskBands, openDetailFor, onSelect, onOpenDetail }: {
+export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, decisions, selectedId, cameFromId, riskBands, onSelect }: {
   map: ChangeMap;
+  /** The changes behind the discs, so a clicked disc can show its own lines
+   * without the reviewer going looking for them in the diff below. */
+  decisions?: ReviewDecision[];
   selectedId: string | null;
   /** Where the reviewer was before following a relationship into the current
    * change, so the way back stays visible while they read. */
@@ -28,16 +32,19 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
   /** Scored risk band per decision, the same map the gutter dot reads, so a
    * node carries its AI score without being opened. */
   riskBands?: Map<string, string>;
-  openDetailFor?: string | null;
+  /** Moves the review to a change. The diagram never calls this on its own:
+   * selecting scrolls the diff pane to the block, and a reviewer reading the
+   * map did not ask to be taken anywhere. Only the code column's own control
+   * does, when they ask for it. */
   onSelect: (decisionId: string) => void;
-  /** Opens the decision detail — score and AI assist — anchored to the node.
-   * The diagram is a review surface, not an index: a node must reach the same
-   * panel its gutter marker does. */
-  onOpenDetail?: (decisionId: string, anchor: DecisionPopoverAnchor) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [fullMapForSelection, setFullMapForSelection] = useState<string | null>(null);
+  /** Which disc the reviewer is reading. It is the map's own state, not the
+   * review's selection, because changing the selection scrolls the diff pane
+   * under the diagram — the exact thing clicking a disc must not do. */
+  const [inspectedId, setInspectedId] = useState<string | null>(null);
   const focused = useMemo(() => selectedId
     ? selectFocusedChangeMap(map, selectedId, CHANGE_MAP_FOCUS_LIMIT)
     : { map, visibleConnections: map.edges.length, hiddenConnections: 0 }, [map, selectedId]);
@@ -48,6 +55,11 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
   // One change has nothing to relate to, and a map of it would only take space
   // away from the diff.
   if (map.nodes.length < 2) return null;
+
+  // A disc that the current view no longer draws cannot keep its code open:
+  // the column would describe something off the diagram.
+  const inspectedNode = layout.nodes.find((node) => node.id === inspectedId) ?? null;
+  const inspectedDecision = inspectedNode ? decisions?.find((decision) => decision.id === inspectedNode.id) ?? null : null;
 
   const selectedEdge = layout.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const relationsPresent = CHANGE_RELATIONS.filter((relation) => layout.edges.some((edge) => edge.relation === relation));
@@ -78,7 +90,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
       {/* The three readings, said out loud. A diagram whose shape has to be
           guessed at is a puzzle, and a reviewer already has one of those open. */}
       <p className="change-map-key">
-        Each disc is a change, sized by how much code it moves. The rings around it are its folder and its package.
+        Each disc is a change, sized by how much code it moves. The rings around it are its folder and its package. Click a disc to read its code beside the diagram.
         {layout.edges.length > 0 && ` ${reaching} of ${layout.edges.length} ${layout.edges.length === 1 ? 'relationship reaches' : 'relationships reach'} outside their own folder.`}
         {' '}Scroll to zoom, drag to pan.
       </p>
@@ -87,10 +99,16 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
         selectedId={selectedId}
         cameFromId={cameFromId}
         riskBands={riskBands}
-        openDetailFor={openDetailFor}
+        inspectedId={decisions ? inspectedId : undefined}
+        codePanel={inspectedDecision
+          ? <DiffReviewChangeMapCode
+              decision={inspectedDecision}
+              onClose={() => setInspectedId(null)}
+              onOpenInDiff={() => onSelect(inspectedDecision.id)}
+            />
+          : undefined}
         selectedEdgeId={selectedEdgeId}
-        onSelect={onSelect}
-        onOpenDetail={onOpenDetail}
+        onSelect={decisions ? (decisionId) => setInspectedId((current) => (current === decisionId ? null : decisionId)) : onSelect}
         onSelectEdge={setSelectedEdgeId}
       />
       <p className="change-map-explanation" role="status">
@@ -98,7 +116,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, sele
           ? plainRelationText(selectedEdge.explanation)
           : layout.edges.length === 0
             ? 'Nothing in this diff references anything else in it. Each change stands alone.'
-            : 'Select a line to read why two changes are related, or a disc to open that decision — risk score and AI assist included.'}
+            : 'Select a line to read why two changes are related, or a disc to read its code beside the diagram.'}
       </p>
       <ChangeMapProgressLegend nodes={map.nodes} cameFromId={cameFromId} />
       {/* Colour is a claim about what kind of code a change is, so the claim is

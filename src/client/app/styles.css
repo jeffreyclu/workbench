@@ -416,12 +416,11 @@ nav { display: grid; gap: 3px; }
 .diff-file-info { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
 .workspace-diff-file pre { min-width: 0; max-width: 100%; margin: 0; padding: 8px 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; background: #10100f; font: 11px/1.55 var(--code-font); tab-size: 2; }
 .diff-line { position: relative; display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; font-family: var(--code-font); font-variant-ligatures: none; tab-size: 2; white-space: pre-wrap; }
-/* One hover handle per row, not per block: floats over the line-number gutter
- * so every line — not just the top of a chunk — can open the simplified
- * review/ask/AI-assist popup without reshaping the line-number grid. */
-.diff-line-simple-marker { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); z-index: 2; display: grid; place-items: center; width: 18px; height: 18px; color: #8a8980; border: 1px solid transparent; border-radius: 4px; background: #131311; cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
-.diff-line:hover .diff-line-simple-marker, .diff-line-simple-marker:hover, .diff-line-simple-marker:focus-visible { opacity: 1; }
-.diff-line-simple-marker:hover, .diff-line-simple-marker:focus-visible { color: var(--acid); border-color: #2f2f2a; outline: 0; }
+/* The handle that floats over a reviewer's own text highlight — portalled to
+ * `body` and positioned from the selection's rect, so it reads exactly where
+ * the highlight ends rather than at a fixed spot in the gutter. */
+.diff-review-lines-select-btn { display: flex; align-items: center; gap: 5px; z-index: 20; padding: 5px 9px; color: #d5d4cb; border: 1px solid var(--acid); border-radius: 6px; background: #17170f; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); font: 500 11px/1 var(--ui-font, inherit); white-space: nowrap; cursor: pointer; }
+.diff-review-lines-select-btn:hover, .diff-review-lines-select-btn:focus-visible { color: var(--acid); outline: 0; }
 .diff-line > span { padding: 0 8px; }
 .diff-line > span:last-child, .diff-line-code { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 /* A wrapped long line restarts at the code column, not under the gutter, and is
@@ -501,6 +500,14 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-canvas { position: relative; overflow: hidden; margin: 0 14px 10px; border: 1px solid #24241f; border-radius: 9px; background: #101010; touch-action: none; }
 .change-map-canvas:focus-visible { outline: 1px solid var(--acid); outline-offset: -3px; }
 .change-map-surface { display: block; cursor: grab; }
+/* Reading a disc's code narrows the drawing rather than covering it or moving
+   the page: the column lives in this frame, so nothing outside it scrolls. */
+.change-map-canvas.with-code { display: flex; align-items: stretch; }
+.change-map-canvas.with-code .change-map-surface { flex: 1 1 0; min-width: 0; }
+.change-map-canvas.with-code > .change-map-code { flex: 0 0 clamp(280px, 40%, 460px); }
+/* The zoom control belongs over the drawing, so it moves off the edge the
+   column now occupies. */
+.change-map-canvas.with-code .change-map-zoom { right: auto; left: 8px; }
 .change-map-canvas.panning .change-map-surface { cursor: grabbing; }
 .change-map-zoom { position: absolute; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid #35352c; border-radius: 7px; background: #161614e6; }
 .change-map-zoom button { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; color: #a9a89f; border: 0; border-radius: 5px; background: none; cursor: pointer; }
@@ -551,6 +558,10 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
    fact most worth catching from across the diagram. */
 .change-map-node.crosses-package .change-map-node-body { stroke-width: 2; }
 .change-map-node.dimmed { opacity: 0.38; }
+/* The disc whose code is open in the column. It is not the review's selection
+   — reading is not deciding — so it is marked in its own way. */
+.change-map-node.inspected { opacity: 1; }
+.change-map-node.inspected .change-map-node-body { fill-opacity: 0.55; stroke: #e6e5de; stroke-width: 2.5; stroke-opacity: 1; }
 /* An accepted change recedes on both surfaces at once: the map node and the
    hunk itself. It is still there, still selectable, and comes back to full
    strength the moment it is selected, hovered, or focused — dimming marks read
@@ -719,16 +730,17 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .decision-popover.with-aside > .decision-popover-aside { overflow-y: auto; overscroll-behavior: contain; max-height: min(74vh, 620px); }
 .decision-popover.with-aside.stacked { grid-template-columns: minmax(0, 1fr); overflow-y: auto; overscroll-behavior: contain; max-height: min(74vh, 620px); }
 .decision-popover.with-aside.stacked > .decision-popover-panel, .decision-popover.with-aside.stacked > .decision-popover-aside { overflow: visible; max-height: none; }
-/* Code needs more column than a diagram does, and the popover's own measuring
-   uses the same two widths, so these must move together with WIDE_ASIDE_WIDTH
-   in decision-popover.tsx. */
-.decision-popover.with-aside.wide-aside { grid-template-columns: 336px 420px; }
-.decision-popover.with-aside.wide-aside.stacked { grid-template-columns: minmax(0, 1fr); }
-.decision-popover.with-aside.wide-aside > .decision-popover-aside { display: grid; align-content: start; gap: 10px; }
-.change-map-code { overflow: hidden; border: 1px solid #45443e; border-radius: 9px; background: #131311; box-shadow: 0 14px 38px #000a; }
+.change-map-code { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 0; border-left: 1px solid #2b2b25; background: #131311; }
 .change-map-code > header { display: flex; align-items: center; gap: 7px; padding: 10px 14px 8px; color: #85847d; font: 10px 'DM Mono'; }
 .change-map-code > header h4 { margin: 0; color: #85847d; font: inherit; letter-spacing: 0.04em; text-transform: uppercase; }
 .change-map-code > header small { margin-left: auto; font: 9px 'DM Mono'; }
+.change-map-code-goto { padding: 2px 7px; color: #a9a89f; border: 1px solid #35352c; border-radius: 6px; background: none; font: 9px 'DM Mono'; cursor: pointer; }
+.change-map-code-goto:hover, .change-map-code-goto:focus-visible { color: var(--acid); border-color: var(--acid); outline: 0; }
+.change-map-code-close { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; color: #85847d; border: 0; border-radius: 5px; background: none; cursor: pointer; }
+.change-map-code-close:hover, .change-map-code-close:focus-visible { color: var(--acid); background: #22221c; outline: 0; }
+/* Only this column scrolls, and it keeps its scroll to itself: a wheel that
+   ran off its end and took the page with it would be the popover's bug again. */
+.change-map-code-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .change-map-code > header small .added { color: #8fb59c; }
 .change-map-code > header small .removed { color: #c9a3a7; }
 .change-map-code-hunk + .change-map-code-hunk { border-top: 1px solid #242421; }
@@ -737,9 +749,9 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
    name, which is the part that identifies the hunk. */
 .change-map-code-path { min-width: 0; color: #c9c8c1; overflow-wrap: anywhere; }
 .change-map-code-location { margin-left: auto; flex: 0 0 auto; color: #77766f; font-size: 9px; }
-/* The lines are the diff pane's lines, at the size a popup can hold. Tall
-   changes scroll inside the panel rather than pushing the popover off screen. */
-.change-map-code-lines { max-height: 280px; overflow: auto; overscroll-behavior: contain; font-size: 10px; }
+/* The lines are the diff pane's lines, at the size the column can hold. The
+   column itself scrolls, so a tall change never grows the frame. */
+.change-map-code-lines { font-size: 10px; }
 .change-map-code-lines .diff-line { grid-template-columns: 32px 32px minmax(0, 1fr); font-size: 10px; }
 .change-map-code-lines .diff-line > span { padding: 0 6px; }
 .change-map-code-lines .diff-line > span:last-child { padding-left: calc(6px + 2ch); text-indent: -2ch; }

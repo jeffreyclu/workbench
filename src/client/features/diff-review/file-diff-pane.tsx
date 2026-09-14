@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, LoaderCircle, MessageSquare, MessageSquareText, TriangleAlert } from 'lucide-react';
 import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
 import { CHANGE_RELATION_LABELS, type ChangeMap } from '../../../shared/change-map.js';
@@ -47,6 +48,23 @@ function StateGlyph({ state }: { state: ReviewDecision['state'] }) {
   return null;
 }
 
+/** A line's identity, `${hunkRange}:${index into hunk.lines}`, split back out.
+ * The gutter marker and the highlight-to-ask handle both key off this rather
+ * than a line number, because line numbers repeat across hunks and go stale
+ * the moment a reader is in final-reading mode. */
+function lineCoords(key: string): { hunkRange: string; index: number } {
+  const separator = key.lastIndexOf(':');
+  return { hunkRange: key.slice(0, separator), index: Number(key.slice(separator + 1)) };
+}
+
+/** The line row, if any, a selection endpoint landed in. Selection endpoints
+ * are frequently text nodes, which have no `closest`, so the element to
+ * search from is the node itself or its parent. */
+function closestLineRow(node: Node | null): HTMLElement | null {
+  const element = node instanceof Element ? node : node?.parentElement ?? null;
+  return element?.closest<HTMLElement>('[data-line-key]') ?? null;
+}
+
 function fileTail(filePath: string): string {
   const parts = filePath.split('/');
   return parts.length <= 2 ? filePath : `…/${parts.slice(-2).join('/')}`;
@@ -81,7 +99,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onOpenSimpleDetail, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onOpenLinesDetail, onToggleReadingMode }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -121,11 +139,13 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   modeTitle?: string;
   onSelect: (decisionId: string) => void;
   onOpenDetail?: (decisionId: string, anchor: HTMLElement) => void;
-  /** A second, hover-revealed gutter handle beside the decision marker. It
-   * selects the same block but opens the simplified popup — review, ask and
-   * AI assist only, with no heuristics or risk score — instead of the full
-   * decision detail. Omitted, no such handle is drawn. */
-  onOpenSimpleDetail?: (decisionId: string, anchor: HTMLElement) => void;
+  /** Fired when the reviewer highlights code in this pane and presses the
+   * handle that appears over the selection. Carries exactly the lines they
+   * highlighted — a range into one hunk — so the simplified popup it opens
+   * (review, ask and AI assist, no heuristics or risk score) can build its
+   * context from that range instead of the whole chunk the lines sit in.
+   * Omitted, highlighting draws no handle. */
+  onOpenLinesDetail?: (decisionId: string, lines: { hunkRange: string; startIndex: number; endIndex: number }, anchor: HTMLElement) => void;
   /** Supplying this is what puts the reading-mode switch in the header: a
    * surface that cannot change the mode should not advertise a control. */
   onToggleReadingMode?: () => void;
@@ -144,6 +164,11 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   // can still open any one of them by hand. Keyed by block, not by decision, so
   // opening one hunk of a multi-hunk change does not unfold all of them.
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
+  // The reviewer's own text highlight, read back from `data-line-key` on
+  // whichever rows its two ends landed in — not a chunk the block splitter
+  // guessed at. Cleared the moment the selection collapses, so the handle it
+  // drives never outlives what it points at.
+  const [lineSelection, setLineSelection] = useState<{ decisionId: string; hunkRange: string; startIndex: number; endIndex: number; rect: DOMRect } | null>(null);
   const language = languageFromPath(filePath);
   const decisionByHunkId = new Map(decisions.flatMap((decision) => decision.hunks.map((hunk) => [hunk.id, decision] as const)));
   // Only spotlight when the selected decision actually lives in this file:
@@ -337,10 +362,52 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
     return () => { if (frame !== undefined) window.cancelAnimationFrame?.(frame); };
   }, [activeDecisionId, filePath, selectionTick]);
 
+  useEffect(() => {
+    // Watched document-wide, like any selection, so it has to be checked
+    // against this pane's own body before touching state — otherwise
+    // highlighting text in an unrelated pane would steal this one's handle.
+    if (!onOpenLinesDetail) return;
+    const onSelectionChange = () => {
+      const body = diffBody.current;
+      const selection = window.getSelection();
+      if (!body || !selection || selection.isCollapsed || selection.rangeCount === 0
+        || !body.contains(selection.anchorNode) || !body.contains(selection.focusNode)) {
+        setLineSelection(null);
+        return;
+      }
+      const startRow = closestLineRow(selection.anchorNode);
+      const endRow = closestLineRow(selection.focusNode);
+      const decisionId = startRow?.dataset.decisionId;
+      // Cross-block and cross-hunk highlights are left unhandled rather than
+      // widened to cover them: a lines-only context is only honest when it
+      // is all one hunk, and stitching two together would misnumber it.
+      if (!startRow || !endRow || !decisionId || decisionId !== endRow.dataset.decisionId) {
+        setLineSelection(null);
+        return;
+      }
+      const start = lineCoords(startRow.dataset.lineKey ?? '');
+      const end = lineCoords(endRow.dataset.lineKey ?? '');
+      if (start.hunkRange !== end.hunkRange) {
+        setLineSelection(null);
+        return;
+      }
+      setLineSelection({
+        decisionId,
+        hunkRange: start.hunkRange,
+        startIndex: Math.min(start.index, end.index),
+        endIndex: Math.max(start.index, end.index),
+        rect: selection.getRangeAt(0).getBoundingClientRect(),
+      });
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, [onOpenLinesDetail]);
+
   useEffect(() => setPeekDecisionId(null), [filePath]);
   // Block keys are ranges, which repeat across files: carrying them over would
   // unfold an unrelated block in the next file.
   useEffect(() => setUnfolded(new Set()), [filePath]);
+  useEffect(() => setLineSelection(null), [filePath]);
 
   const selectRelated = (decisionId: string) => {
     setPeekDecisionId(null);
@@ -397,29 +464,6 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         // the change, its severity is the more useful thing to show.
         const band = riskBands?.get(decisionId) ?? ((decision?.riskSignals.length ?? 0) > 0 ? 'signals' : null);
         const awaiting = state === null && !handled && Boolean(delegating?.has(decisionId));
-        // Every line gets its own hover handle, not just the block: a reviewer
-        // hovering any row should be able to jump straight into the simplified
-        // review/ask/AI-assist popup for the chunk that row belongs to.
-        const simpleMarker = (lineKey: string) => onOpenSimpleDetail && <button
-          key={lineKey}
-          type="button"
-          className="diff-line-simple-marker"
-          // Every line in the block shares the same attribute value on purpose:
-          // the popover only needs to re-find *a* live marker for this decision
-          // after a re-render, and any line in the block is an equally valid
-          // anchor for that.
-          data-decision-simple-marker={decisionId}
-          aria-haspopup="dialog"
-          aria-label={`Review, ask and get AI assist on ${hunk.location}`}
-          title="Review, ask and AI assist"
-          onClick={(event) => {
-            const anchor = event.currentTarget;
-            onSelect(decisionId);
-            onOpenSimpleDetail(decisionId, anchor);
-          }}
-        >
-          <MessageSquareText size={11} aria-hidden="true" />
-        </button>;
         return <section
           key={hunk.range}
           ref={scrollTarget ? activeBlock : undefined}
@@ -527,19 +571,16 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
                     <span aria-hidden="true">−</span>
                     <span>{row.lines.length} {row.lines.length === 1 ? 'line' : 'lines'} removed</span>
                   </button>
-                  {openRemovals.has(row.key) && row.lines.map((removed) => <div key={removed.key} className="diff-line final was-removed">
-                    {simpleMarker(removed.key)}
+                  {openRemovals.has(row.key) && row.lines.map((removed) => <div key={removed.key} className="diff-line final was-removed" data-line-key={removed.key} data-decision-id={decisionId}>
                     <span>{removed.oldLine ?? ''}</span>
                     <span><SyntaxHighlight code={removed.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
                   </div>)}
                 </div>
-                : <div key={row.line.key} className={`diff-line final ${row.line.kind}`}>
-                  {simpleMarker(row.line.key)}
+                : <div key={row.line.key} className={`diff-line final ${row.line.kind}`} data-line-key={row.line.key} data-decision-id={decisionId}>
                   <span>{row.line.newLine ?? ''}</span>
                   <span><SyntaxHighlight code={row.line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
                 </div>)
-              : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}`}>
-                {simpleMarker(line.key)}
+              : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}`} data-line-key={line.key} data-decision-id={decisionId}>
                 <span>{line.oldLine ?? ''}</span>
                 <span>{line.newLine ?? ''}</span>
                 <span><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
@@ -548,5 +589,33 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         </section>;
       })}
     </div>
+    {lineSelection && onOpenLinesDetail && createPortal(
+      <button
+        type="button"
+        className="diff-review-lines-select-btn"
+        style={{ position: 'fixed', top: Math.max(8, lineSelection.rect.top - 34), left: Math.min(window.innerWidth - 190, Math.max(8, lineSelection.rect.right - 170)) }}
+        // Re-found by the popover it opens after a re-render, the same way the
+        // gutter markers are — this handle is not standing chrome, so without
+        // this a re-render while the popover is open would detach it.
+        data-decision-lines-marker={lineSelection.decisionId}
+        aria-haspopup="dialog"
+        aria-label={`Review, ask and get AI assist on the ${lineSelection.endIndex - lineSelection.startIndex + 1} highlighted ${lineSelection.endIndex === lineSelection.startIndex ? 'line' : 'lines'}`}
+        // A left-click here must not collapse the highlight it reads before the
+        // click handler runs — the browser's default is to clear a text
+        // selection on mousedown outside it, but this button is the one place
+        // outside it a click is supposed to keep the selection alive for.
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={(event) => {
+          const anchor = event.currentTarget;
+          const { decisionId, hunkRange, startIndex, endIndex } = lineSelection;
+          onSelect(decisionId);
+          onOpenLinesDetail(decisionId, { hunkRange, startIndex, endIndex }, anchor);
+        }}
+      >
+        <MessageSquareText size={12} aria-hidden="true" />
+        Review these lines
+      </button>,
+      document.body,
+    )}
   </article>;
 });

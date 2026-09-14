@@ -396,6 +396,17 @@ export function reviewStateShortLabel(state: DiffHunkReviewState | null): string
   return 'To do';
 }
 
+/** Narrows a decision to the lines a reviewer actually highlighted, so an
+ * assist request built from the result carries only the code they selected —
+ * not the whole surrounding chunk the decision was grouped into. The hunk not
+ * named by `hunkRange` is dropped entirely rather than left full, since a
+ * mixed payload would silently widen the context back out. */
+export function restrictReviewDecisionToLines(decision: ReviewDecision, hunkRange: string, startIndex: number, endIndex: number): ReviewDecision {
+  const hunk = decision.hunks.find((candidate) => candidate.hunkRange === hunkRange);
+  if (!hunk) return decision;
+  return { ...decision, hunks: [{ ...hunk, lines: hunk.lines.slice(startIndex, endIndex + 1) }] };
+}
+
 /** The one place a decision is turned into an AI-assist request payload. Both
  * the reviewer's click and the background scorer go through it, so a decision
  * hashes to the same cache key from either side. */

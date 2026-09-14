@@ -15,12 +15,11 @@ import { DecisionRelationshipDiagram } from '../diff-review/decision-relationshi
 import { DiffReviewDecisionQueue } from '../diff-review/decision-queue.js';
 import { DiffReviewFileDiffPane } from '../diff-review/file-diff-pane.js';
 import type { ReviewDecision } from '../diff-review/logic.js';
-import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, fixRequestPrompt, nextPendingDecisionId, orderReviewDecisions, parseAiRiskScore, reviewStateLabel } from '../diff-review/logic.js';
+import { aiRiskBand, buildFileDiffHunks, buildReviewDecisions, fixRequestPrompt, nextPendingDecisionId, orderReviewDecisions, parseAiRiskScore, restrictReviewDecisionToLines, reviewStateLabel } from '../diff-review/logic.js';
 import { useAutoReviewScores } from '../diff-review/auto-score.js';
 import { DiffReviewActions } from '../diff-review/review-actions.js';
 import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { DiffReviewChangeMap } from '../diff-review/change-map.js';
-import { DiffReviewChangeMapCode } from '../diff-review/change-map-code.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { useGitHubPullRequestDiff, useGitHubPullRequestFile } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
@@ -133,7 +132,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // The desktop decision detail is popover content opened from a block's gutter
   // marker, so the open state has to carry the marker that opened it: the
   // popover positions itself off that element's rect.
-  const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: DecisionPopoverAnchor; anchorAttribute: string; simple?: boolean } | null>(null);
+  const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: DecisionPopoverAnchor; anchorAttribute: string; simple?: boolean; lines?: { hunkRange: string; startIndex: number; endIndex: number } } | null>(null);
   const [isHandoffOpen, setIsHandoffOpen] = useState(false);
   // null means "automatically show the latest record when Git is clean";
   // an empty string is the user's explicit choice to view current changes.
@@ -396,7 +395,15 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // turned the marker into a dead click. Resolving by the anchored id keeps it
   // open, falling back to the selected decision so it always has content.
   const popoverDecision = detailAnchor
-    ? orderedDecisions.find((decision) => decision.id === detailAnchor.decisionId) ?? selectedDecision
+    ? (() => {
+        const decision = orderedDecisions.find((candidate) => candidate.id === detailAnchor.decisionId) ?? selectedDecision;
+        // A highlight opens the same card as the chunk gutter, but the AI
+        // context it builds must be exactly what the reviewer selected — not
+        // the decision's whole chunk — or the popup is lying about what it read.
+        return detailAnchor.lines && decision
+          ? restrictReviewDecisionToLines(decision, detailAnchor.lines.hunkRange, detailAnchor.lines.startIndex, detailAnchor.lines.endIndex)
+          : decision;
+      })()
     : null;
   const fileHunkGroups = useMemo(() => selectedFiles.map((file) => ({ file, hunks: buildFileDiffHunks(file) })), [selectedFiles]);
   const fileHunks = fileHunkGroups[0]?.hunks ?? [];
@@ -506,11 +513,11 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     setDetailAnchor((current) => (current?.decisionId === decisionId && !current.simple ? null : { decisionId, anchor, anchorAttribute }));
   };
 
-  // The chunk gutter's simplified popup: same decision detail popover, but
-  // opened from its own hover handle and marked so the render below swaps in
-  // the simplified card instead of the full one.
-  const openSimpleDecisionDetail = (decisionId: string, anchor: DecisionPopoverAnchor) => {
-    setDetailAnchor((current) => (current?.decisionId === decisionId && current.simple ? null : { decisionId, anchor, anchorAttribute: 'data-decision-simple-marker', simple: true }));
+  // The handle that appears over a highlighted selection: same simplified
+  // popover the chunk gutter would open, but scoped to exactly the lines the
+  // reviewer highlighted rather than the chunk they sit in.
+  const openLinesDecisionDetail = (decisionId: string, lines: { hunkRange: string; startIndex: number; endIndex: number }, anchor: DecisionPopoverAnchor) => {
+    setDetailAnchor({ decisionId, anchor, anchorAttribute: 'data-decision-lines-marker', simple: true, lines });
   };
 
   const selectDecision = useCallback((decisionId: string) => {
@@ -708,7 +715,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
             : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
               : <div className="workspace-diff-layout diff-review-layout">
                 <DiffReviewSummaryView decisions={decisions} />
-                <DiffReviewChangeMap map={changeMap} selectedId={selectedDecision?.id ?? null} riskBands={riskBands} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={(decisionId, anchor) => openDecisionDetail(decisionId, anchor, 'data-change-map-node')} />
+                <DiffReviewChangeMap map={changeMap} decisions={decisions} selectedId={selectedDecision?.id ?? null} riskBands={riskBands} onSelect={selectDecision} />
                 {autoScores.running && <p className="muted" role="status">Scoring changes in the background — {autoScores.completed} of {autoScores.total} decisions.</p>}
                 {!autoScores.running && autoScores.skipped > 0 && <p className="muted">{autoScores.skipped} decisions past the background scoring limit were not scored automatically; use Score risk on those.</p>}
                 {(delegation.running || delegation.failed > 0 || delegation.skipped > 0) && <p className="muted" role="status">
@@ -734,15 +741,8 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                         remaining files stay readable as diffs underneath it
                         rather than disappearing with the mode switch. */}
                     {(readingMode === 'file' ? fileHunkGroups.slice(1) : fileHunkGroups).map(({ file, hunks }) =>
-                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onOpenSimpleDetail={openSimpleDecisionDetail} onToggleReadingMode={toggleReadingMode} />)}
-                    {/* A popover opened from a disc carries the change's code:
-                        the diagram can say how big a change is and what it
-                        reaches, but not what it does, and the reviewer who
-                        clicked the disc is asking exactly that. Opened from
-                        the gutter the code is already on screen, so it is not
-                        repeated there. */}
-                    {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" wideAside={detailAnchor.anchorAttribute === 'data-change-map-node'} aside={detailAnchor.simple ? undefined : <>
-                      {detailAnchor.anchorAttribute === 'data-change-map-node' && <DiffReviewChangeMapCode decision={popoverDecision} />}
+                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onOpenLinesDetail={openLinesDecisionDetail} onToggleReadingMode={toggleReadingMode} />)}
+                    {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={detailAnchor.simple ? undefined : <>
                       <DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />
                     </>} onClose={() => setDetailAnchor(null)}>
                       <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null} hideJudging={detailAnchor.simple}>

@@ -642,3 +642,50 @@ buy-in — something a component gallery detached from the app's data cannot do.
 
 Base the branch on whatever in-flight branch the prototype depends on rather than on `main`, so the
 demo includes the plumbing it builds upon.
+
+## One ticket means one branch and one worktree
+
+On 2026-09-11, two agents each set up their own CON-270 checkout — Claude created the branch
+`jeffrey/CON-270/basic-auth-blank-password` while Codex created `con-270-basic-auth` in the worktree
+`~/dev/writer-monorepo-con-270-basic-auth`. Jeffrey's reaction was "i don't want a worktree and a
+branch - consolidate for fucks sake." This echoes an earlier correction on 2026-09-03: "why aren't you
+just wholesale swapping the worktree into my working branch??????"
+
+A single ticket gets exactly one branch in exactly one worktree. When parallel agents explore the same
+ticket, reconcile their output into that one location before reporting — delete the duplicate branch,
+rename the survivor to the repository convention (`jeffrey/CON-<number>/<slug>`, matching
+`jeffrey/CON-230/connector-search`), and leave no second checkout behind. Jeffrey should never have to
+choose between two half-set-up copies of the same work, and asking him which branch to keep is itself
+the failure.
+
+## Never run a full test suite in a Writer repository
+
+On 2026-09-11, while verifying the CON-270 basic-auth change, an agent reached for a repository-wide
+test run and Jeffrey cut it off: "stop trying to run the full fucking test suite."
+
+In every Writer repository, only run an explicit, directly relevant test file path — for example
+`vitest run frontend/src/components/agents/manage-tabs/connectors-tab.test.tsx`. Never run `npm test`,
+`pnpm test`, `yarn test`, a bare `vitest`/`jest`, or `vitest run -- <test-name>`, because the trailing
+form still triggers full-suite discovery. The monorepo suite is large and slow enough that running it
+burns Jeffrey's machine and his patience for no added signal.
+
+This also applies to git hooks: the monorepo's `pre-push` hook launches the full suite, so pushes use
+`git push --no-verify`, and the skipped hook is reported alongside whatever focused verification did
+run. If focused tests cannot cover the change, report the verification gap instead of widening the
+command.
+
+## Hand over the concrete artifact, not just the click path
+
+On 2026-09-11, during CON-270, Jeffrey asked how to create a Basic-auth custom connector by clicking.
+He was given the route, the button, and the wizard tabs — but not the thing the wizard actually
+demands. His reply: "ok AND WHAT FUCKING FILE OR URL DO I UPLOAD???"
+
+When instructions end at an input — a file picker, a URL field, a token box, a config value — the
+answer is incomplete until the exact artifact is supplied: produce the file at a stated absolute path,
+give the literal URL, or say plainly that no such value exists and what to use instead. A navigation
+path that dead-ends at an empty field is not an answer, and Jeffrey should never have to ask a second
+time for the payload.
+
+Before producing such an artifact, search for one already on disk — in that same task, a spec file had
+been written hours earlier at `~/dev/companies-house-basic-auth.openapi.json` and a second copy was
+created in `~/Downloads` before the duplicate was caught and deleted.

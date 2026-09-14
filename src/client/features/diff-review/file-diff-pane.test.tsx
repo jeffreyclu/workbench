@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildFileDiffHunks, type ReviewDecision } from './logic.js';
 import { DiffReviewFileDiffPane } from './file-diff-pane.js';
 
@@ -46,6 +46,51 @@ function renderPane(activeDecisionId: string) {
 }
 
 describe('review file diff pane', () => {
+  it('opens the lines-only popup scoped to exactly the highlighted rows, not the whole chunk', () => {
+    const onSelect = vi.fn();
+    const onOpenLinesDetail = vi.fn();
+    const { container } = render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={hunks}
+      decisions={[decision(null)]}
+      activeDecisionId={hunks[0].decisionId}
+      onSelect={onSelect}
+      onOpenLinesDetail={onOpenLinesDetail}
+    />);
+    const rows = container.querySelectorAll('[data-line-key]');
+    expect(rows.length).toBeGreaterThan(2);
+    // jsdom's Range has no layout, so getBoundingClientRect is not
+    // implemented; the component only reads it to place the handle.
+    Range.prototype.getBoundingClientRect = () => new DOMRect();
+    // Highlighting only the first two rows must scope the handle to indices
+    // 0-1, not to every line the chunk splitter would have grouped them with.
+    window.getSelection()?.setBaseAndExtent(rows[0], 0, rows[1], 0);
+    fireEvent(document, new Event('selectionchange'));
+
+    const handle = screen.getByRole('button', { name: /review, ask and get ai assist on the 2 highlighted lines/i });
+    fireEvent.click(handle);
+
+    expect(onSelect).toHaveBeenCalledWith(hunks[0].decisionId);
+    expect(onOpenLinesDetail).toHaveBeenCalledWith(hunks[0].decisionId, { hunkRange: hunks[0].range, startIndex: 0, endIndex: 1 }, expect.any(HTMLElement));
+  });
+
+  it('draws no highlight handle when nothing is passed to open it', () => {
+    const { container } = render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={hunks}
+      decisions={[decision(null)]}
+      activeDecisionId={hunks[0].decisionId}
+      onSelect={() => {}}
+    />);
+    const rows = container.querySelectorAll('[data-line-key]');
+    window.getSelection()?.setBaseAndExtent(rows[0], 0, rows[1], 0);
+    fireEvent(document, new Event('selectionchange'));
+    expect(screen.queryByRole('button', { name: /highlighted/i })).not.toBeInTheDocument();
+  });
+
+
   it('collapses a handled block to its header and still lets it be opened by hand', () => {
     const { container } = render(<DiffReviewFileDiffPane
       filePath="src/example.ts"

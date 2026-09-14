@@ -714,7 +714,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     expect(within(popover).getByRole('region', { name: 'Related changes for this decision' })).toBeInTheDocument();
   });
 
-  it('shows the code of the change behind a disc clicked in the change map', async () => {
+  it('shows the code of the change behind a disc inside the diagram itself', async () => {
     const declaration: WorkspaceDiffFile = {
       path: 'src/scale.ts', previousPath: null, status: 'modified', additions: 2, deletions: 1, isBinary: false,
       patch: '@@ -1,2 +1,3 @@ export function scale(value)\n-export function scale(value) {\n+export function scale(value, ratio) {\n+  return value * ratio',
@@ -738,11 +738,15 @@ describe('WorkspaceDiffView pull-request source', () => {
     const diagram = await screen.findByRole('group', { name: 'Change map diagram' });
     fireEvent.click(within(diagram).getByRole('button', { name: /^Decision 2:/ }));
 
-    const popover = await screen.findByRole('dialog', { name: /./ });
-    const code = within(popover).getByRole('region', { name: 'Code for change 2' });
+    // Inside the diagram, not over it: no dialog opens, so nothing scrolls the
+    // page away from the disc that was clicked.
+    const code = within(diagram).getByRole('region', { name: 'Code for change 2' });
     expect(within(code).getByText('src/render.ts')).toBeInTheDocument();
     expect([...code.querySelectorAll('.diff-line-code')].map((line) => line.textContent))
       .toEqual(expect.arrayContaining(['const size = scale(base, ratio)', 'const size = scale(base)']));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // The review stays where it was; the diff pane below has no reason to move.
+    expect(selectedDecisionChip()).toHaveTextContent('1');
   });
 });
 

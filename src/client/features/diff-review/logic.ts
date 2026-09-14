@@ -2,7 +2,7 @@ import type { DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/con
 import type { ChangeMap } from '../../../shared/change-map.js';
 // Derivation lives in shared code so the server's background scorer builds the
 // same decisions, with the same ids, as the queue the reviewer is reading.
-export { REVIEW_RISK_SIGNALS, buildReviewDecisions, reviewAssistDecisionPayload, reviewStateLabel, reviewStateShortLabel } from '../../../shared/review-decisions.js';
+export { REVIEW_RISK_SIGNALS, buildReviewDecisions, restrictReviewDecisionToLines, reviewAssistDecisionPayload, reviewStateLabel, reviewStateShortLabel } from '../../../shared/review-decisions.js';
 export type { ReviewDecision, ReviewDecisionHunk, ReviewRiskSignal } from '../../../shared/review-decisions.js';
 export { REVIEW_CHANGE_TYPES, changeTypeLabel, explainChangeType } from '../../../shared/change-type.js';
 export type { ChangeTypeExplanation, ChangeTypeFacts, ChangeTypeRule, ChangeTypeRuleOutcome, ReviewChangeType } from '../../../shared/change-type.js';
