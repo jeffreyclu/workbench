@@ -9,16 +9,21 @@ function fingerprint(signal: SourceSignal): string {
   return createHash('sha256').update(identity).digest('hex');
 }
 
-const connectorPattern = /\bconnectors?\b|connector[-_ ]gateway|manage connectors|agent studio/i;
+const focusAreaPattern = /\bconnectors?\b|connector[-_. ]gateway|mcp[-_. ]gateway|manage connectors|writer[-_ ]?agent|agent studio/i;
 const reviewPattern = /\b(code|pr|pull request|implementation)\s+review\b|\breview(?:ed|ing)?\s+(?:this|my|the)?\s*(?:pr|pull request|code|change)|review-requested|github\.com\/.+\/pull\//i;
 const actionablePattern = /\b(?:please|can you|could you|would you|need you to|assigned|action item|follow[- ]?up|todo|to do|blocker|blocked|investigate|fix|implement|prepare|decide|respond|reply|review)\b/i;
+const primaryProviders = new Set(['slack', 'linear', 'github']);
 export const DISCOVERY_RUN_MAX_AGE_MS = 15 * 60_000;
 
 export function discoveryPriority(signal: SourceSignal): number {
   if (signal.referenceOnly) return 0;
   const text = `${signal.title}\n${signal.summary}\n${signal.url ?? ''}`;
-  if (connectorPattern.test(text) || reviewPattern.test(text)) return 2;
-  if (signal.activeWork || signal.provider === 'linear' || actionablePattern.test(text)) return 1;
+  const isFocusArea = focusAreaPattern.test(text);
+  const isActionable = signal.activeWork || signal.provider === 'linear' || actionablePattern.test(text) || reviewPattern.test(text);
+  if (!isActionable && !isFocusArea) return 0;
+  if (primaryProviders.has(signal.provider)) return isFocusArea ? 4 : 3;
+  if (isFocusArea || reviewPattern.test(text)) return 2;
+  if (isActionable) return 1;
   return 0;
 }
 

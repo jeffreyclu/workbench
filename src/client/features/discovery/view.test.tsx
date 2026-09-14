@@ -22,7 +22,7 @@ const inbox: DiscoveryInbox = {
     updatedAt: '2026-01-01T00:00:00Z',
     snoozedUntil: null,
     workItemId: null,
-    relevance: 1,
+    relevance: 4,
     suggestedWorkItemId: null,
   }],
   pendingCount: 1,
@@ -55,6 +55,7 @@ describe('DiscoveryInboxView inbox query failures', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByText(inbox.candidates[0].title)).toBeInTheDocument();
+    expect(screen.getByText('Focus')).toBeInTheDocument();
     expect(inboxRequests).toBe(2);
   });
 });

@@ -45,7 +45,7 @@ Return exactly one block and no other text:
   if (!Array.isArray(result.signals)) throw new Error('Slack connector returned malformed signals.');
   return result.signals.slice(0, 30).flatMap((signal) => {
     if (typeof signal.title !== 'string' || typeof signal.summary !== 'string') return [];
-    return [{ provider: 'slack', title: signal.title.slice(0, 240), summary: signal.summary.slice(0, 12_000), url: typeof signal.url === 'string' ? signal.url : null, occurredAt: typeof signal.occurredAt === 'string' ? signal.occurredAt : null }];
+    return [{ provider: 'slack', title: signal.title.slice(0, 240), summary: signal.summary.slice(0, 12_000), url: typeof signal.url === 'string' ? signal.url : null, occurredAt: typeof signal.occurredAt === 'string' ? signal.occurredAt : null, activeWork: true }];
   });
 }
 

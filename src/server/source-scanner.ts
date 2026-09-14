@@ -33,6 +33,7 @@ async function scanGitHub(settings: Record<string, string>, fetchForPolicy: Outb
       { query: 'is:open is:pr review-requested:@me', context: 'GitHub review requested from you.' },
       { query: 'is:open assignee:@me', context: 'Open GitHub work assigned to you.' },
       { query: 'is:open is:pr author:@me review:changes_requested', context: 'Your open pull request has requested changes.' },
+      { query: 'is:open is:pr involves:@me', context: 'Open GitHub pull request involving you.' },
     ];
   const organizations = ['writer', 'WriterInternal', 'WriterColab'];
   const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${settings.token}`, 'User-Agent': 'workbench-local' };
@@ -51,7 +52,10 @@ async function scanGitHub(settings: Record<string, string>, fetchForPolicy: Outb
     }
   }
   return [...unique.values()].sort((left, right) => right.item.updated_at.localeCompare(left.item.updated_at)).slice(0, 30)
-    .map(({ item, contexts }) => ({ provider: 'github', title: item.title, summary: `${[...new Set(contexts)].join(' ')}\n${item.body?.slice(0, 1_000) || item.repository_url}`, url: item.html_url, occurredAt: item.updated_at, activeWork: true }));
+    .map(({ item, contexts }) => {
+      const repository = item.repository_url.replace(/^https:\/\/api\.github\.com\/repos\//, '');
+      return { provider: 'github', title: item.title, summary: `${[...new Set(contexts)].join(' ')}\nRepository: ${repository}\n${item.body?.slice(0, 1_000) ?? ''}`.trim(), url: item.html_url, occurredAt: item.updated_at, activeWork: true };
+    });
 }
 
 async function scanConfluence(settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {

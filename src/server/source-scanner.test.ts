@@ -25,7 +25,7 @@ describe('source scanners outbound transport', () => {
   it('uses the shared policy factory for GitHub, Atlassian, and Gmail API requests', async () => {
     const github = fetchFactory(() => ({ items: [] }));
     await scanSource('github', { token: 'test' }, github.factory);
-    expect(github.policies).toEqual(Array(9).fill('github-api'));
+    expect(github.policies).toEqual(Array(12).fill('github-api'));
 
     const atlassian = fetchFactory(() => ({ results: [] }));
     await scanSource('confluence', { siteUrl: 'https://writer.atlassian.net', email: 'test@example.com', token: 'test' }, atlassian.factory);
@@ -52,6 +52,24 @@ describe('source scanners outbound transport', () => {
       title: 'Fix connector retry handling',
       activeWork: true,
       summary: expect.stringContaining('assigned to you'),
+    })]);
+    expect(signals[0]?.summary).toContain('Repository: writer/repo');
+  });
+
+  it('includes open pull requests involving Jeffrey in GitHub discovery', async () => {
+    const github = fetchFactory((url) => url.includes('involves%3A%40me') ? { items: [{
+      title: 'Improve Writer Agent connector setup',
+      body: null,
+      html_url: 'https://github.com/WriterInternal/be.mcp-gateway/pull/1301',
+      updated_at: '2026-09-14T00:00:00.000Z',
+      repository_url: 'https://api.github.com/repos/WriterInternal/be.mcp-gateway',
+    }] } : { items: [] });
+
+    const signals = await scanSource('github', { token: 'test' }, github.factory);
+
+    expect(signals).toEqual([expect.objectContaining({
+      title: 'Improve Writer Agent connector setup',
+      summary: expect.stringContaining('Open GitHub pull request involving you.'),
     })]);
   });
 

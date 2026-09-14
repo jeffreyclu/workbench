@@ -88,7 +88,7 @@ export async function scanSlackMcp(settings: Record<string, string>): Promise<So
     const result = await client.callTool({ name: tool.name, arguments: args });
     const text = textFromResult(result);
     if (!text) return [];
-    return [{ provider: 'slack', title: 'Slack activity requiring attention', summary: text.slice(0, 12_000), url: null, occurredAt: new Date().toISOString() }];
+    return [{ provider: 'slack', title: 'Slack activity requiring attention', summary: text.slice(0, 12_000), url: null, occurredAt: new Date().toISOString(), activeWork: true }];
   } finally {
     await client.close().catch(() => undefined);
   }
