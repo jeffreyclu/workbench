@@ -112,6 +112,27 @@ describe('runDiscovery review cycle', () => {
     expect(repository.getDiscoveryInbox('pending').candidates.map((candidate) => candidate.title)).toEqual(['Old but still open work']);
   });
 
+  it('re-scores older pending cards when source priorities change', async () => {
+    const { scanConnectedSources } = await import('./source-scanner.js');
+    const previous = repository.startDiscoveryRun();
+    repository.upsertDiscoveryCandidate({
+      fingerprint: 'older-slack-card',
+      provider: 'slack',
+      title: 'Older pending request',
+      description: 'Previously reviewed by the scanner.',
+      sourceUrl: 'https://writer.slack.com/archives/C/p1',
+      occurredAt: null,
+      runId: previous.id,
+      relevance: 1,
+    });
+    repository.finishDiscoveryRun(previous.id, 1, []);
+    vi.mocked(scanConnectedSources).mockResolvedValue({ signals: [], errors: [] });
+
+    await runDiscovery(repository);
+
+    expect(repository.getDiscoveryInbox('pending').candidates[0]).toEqual(expect.objectContaining({ relevance: 3 }));
+  });
+
   it('recovers a stale durable run so a crashed scan cannot permanently block discovery', async () => {
     const { scanConnectedSources } = await import('./source-scanner.js');
     const abandoned = repository.startDiscoveryRun();

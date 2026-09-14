@@ -67,6 +67,19 @@ export async function runDiscovery(repository: WorkItemRepository): Promise<void
       const inserted = repository.upsertDiscoveryCandidate({ fingerprint: candidateFingerprint, provider: signal.provider, title: signal.title.trim(), description: signal.summary.trim(), sourceUrl: signal.url, occurredAt: signal.occurredAt, runId: run.id, relevance: priority });
       added += Number(inserted);
     }
+    // Re-score the complete inbox, not only signals refreshed during this run.
+    // Otherwise older pending cards retain obsolete source priorities forever.
+    for (const candidate of repository.getDiscoveryInbox('pending').candidates) {
+      const priority = discoveryPriority({
+        provider: candidate.provider,
+        title: candidate.title,
+        summary: candidate.description,
+        url: candidate.sourceUrl,
+        occurredAt: candidate.occurredAt,
+        activeWork: primaryProviders.has(candidate.provider),
+      });
+      repository.updatePendingDiscoveryRelevance(candidate.id, priority);
+    }
     repository.finishDiscoveryRun(run.id, added, errors);
     publishRealtimeEvent('discovery', 'work-items');
     if (added > 0) {

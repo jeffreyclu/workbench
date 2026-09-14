@@ -102,6 +102,10 @@ export class DiscoveryRepository {
     return true;
   }
 
+  updatePendingCandidateRelevance(id: string, relevance: number): void {
+    this.database.prepare("UPDATE discovery_candidates SET relevance = ? WHERE id = ? AND status = 'pending'").run(relevance, id);
+  }
+
   /** Suggested existing work item for a source URL, used to pre-link a candidate at upsert time. */
   findSuggestedWorkItemId(sourceUrl: string | null): string | null {
     if (!sourceUrl) return null;

@@ -297,6 +297,10 @@ export class WorkItemRepository {
     return this.discovery.upsertCandidate({ ...input, suggestedWorkItemId });
   }
 
+  updatePendingDiscoveryRelevance(id: string, relevance: number): void {
+    this.discovery.updatePendingCandidateRelevance(id, relevance);
+  }
+
   resolveDiscoveryCandidate(id: string, action: 'convert' | 'dismiss' | 'snooze' | 'merge', workItemId?: string): DiscoveryCandidate | null {
     return this.transaction(() => {
       const candidate = this.discovery.getPendingCandidate(id);
