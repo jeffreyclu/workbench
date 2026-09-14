@@ -20,6 +20,8 @@ describe('discovery relevance', () => {
     expect(discoveryPriority({ provider: 'linear', title: 'Billing cleanup', summary: 'Payments team', url: null, occurredAt: null })).toBe(1);
     expect(discoveryPriority({ provider: 'slack', title: 'Weekly update', summary: 'Jeffrey was mentioned in an announcement', url: null, occurredAt: null })).toBe(0);
     expect(discoveryPriority({ provider: 'confluence', title: 'Benefits enrollment', summary: 'Annual policy update', url: null, occurredAt: null })).toBe(0);
+    expect(discoveryPriority({ provider: 'figma', title: 'Connectors design', summary: 'Connector screens', url: null, occurredAt: null, referenceOnly: true })).toBe(0);
+    expect(discoveryPriority({ provider: 'grafana', title: 'Latency alert', summary: 'Threshold exceeded', url: null, occurredAt: null, activeWork: true })).toBe(1);
   });
 });
 
@@ -88,6 +90,25 @@ describe('runDiscovery review cycle', () => {
 
     // The already-pending candidate refreshes and the three new ones are added.
     expect(repository.getDiscoveryInbox('pending').candidates).toHaveLength(4);
+  });
+
+  it('surfaces unresolved work even when it predates the incremental scan window', async () => {
+    const { scanConnectedSources } = await import('./source-scanner.js');
+    vi.mocked(scanConnectedSources).mockResolvedValue({
+      signals: [{
+        provider: 'linear',
+        title: 'Old but still open work',
+        summary: 'Open work in the configured Linear scope.',
+        url: 'https://linear.app/writer/issue/CON-112',
+        occurredAt: '2026-01-01T00:00:00.000Z',
+        activeWork: true,
+      }],
+      errors: [],
+    });
+
+    await runDiscovery(repository);
+
+    expect(repository.getDiscoveryInbox('pending').candidates.map((candidate) => candidate.title)).toEqual(['Old but still open work']);
   });
 
   it('recovers a stale durable run so a crashed scan cannot permanently block discovery', async () => {

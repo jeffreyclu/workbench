@@ -80,4 +80,10 @@ Execution history, outputs, evidence, and handoffs belong to the task—not to e
 
 The domain model is source-neutral. Each adapter provides authentication, URL recognition, entity resolution, incremental scanning, and normalized context. Initial adapters are Linear, Slack, GitHub, Confluence, and Gmail.
 
+Discovery scans source-specific work feeds rather than treating every searchable object as a task. Open
+assigned issues, requested reviews, and firing alerts remain eligible until reviewed even if their last
+update predates the incremental event window. Passive references such as Figma roots and Grafana
+dashboards remain available to source search but do not enter the discovery inbox. A reviewed candidate
+does not reappear merely to manufacture representation from each source.
+
 The local connection layer supports GitHub personal access tokens, Slack user tokens with `search:read`, Confluence email/API-token basic authentication, and Gmail OAuth access tokens. Secrets are stored only in the local SQLite database and are omitted from every read response. Gmail access tokens expire and must currently be replaced manually; refresh-token OAuth is a future hardening step.

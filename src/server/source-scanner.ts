@@ -5,7 +5,17 @@ import { isMcpReauthenticationError, mcpAuthenticationMessage, scanRemoteMcp } f
 import { scanSlackWithCodex } from './slack-codex.js';
 import { assertApprovedMcpServer, createOutboundFetch, type OutboundPolicyName } from './outbound-policy.js';
 
-export interface SourceSignal { provider: string; title: string; summary: string; url: string | null; occurredAt: string | null; }
+export interface SourceSignal {
+  provider: string;
+  title: string;
+  summary: string;
+  url: string | null;
+  occurredAt: string | null;
+  /** Current work remains discoverable until reviewed, even when it was last updated before the incremental window. */
+  activeWork?: boolean;
+  /** Passive source references are useful for search, but are not discovery tasks. */
+  referenceOnly?: boolean;
+}
 
 async function requestJson<T>(url: string, headers: Record<string, string>, fetchImpl: typeof fetch): Promise<T> {
   const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(20_000) });
@@ -16,15 +26,32 @@ async function requestJson<T>(url: string, headers: Record<string, string>, fetc
 type OutboundFetchFactory = (policy: OutboundPolicyName) => typeof fetch;
 
 async function scanGitHub(settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
-  const query = (settings.query || 'is:open is:pr review-requested:@me').replace(/\b(?:org|user):(?:"[^"]+"|\S+)/gi, '').trim();
+  const configuredQuery = settings.query?.replace(/\b(?:org|user):(?:"[^"]+"|\S+)/gi, '').trim();
+  const queries = configuredQuery
+    ? [{ query: configuredQuery, context: 'Matched your configured GitHub discovery scope.' }]
+    : [
+      { query: 'is:open is:pr review-requested:@me', context: 'GitHub review requested from you.' },
+      { query: 'is:open assignee:@me', context: 'Open GitHub work assigned to you.' },
+      { query: 'is:open is:pr author:@me review:changes_requested', context: 'Your open pull request has requested changes.' },
+    ];
   const organizations = ['writer', 'WriterInternal', 'WriterColab'];
   const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${settings.token}`, 'User-Agent': 'workbench-local' };
-  const responses = await Promise.all(organizations.map((organization) => requestJson<{ items: Array<{ title: string; body: string | null; html_url: string; updated_at: string; repository_url: string }> }>(
-    `https://api.github.com/search/issues?q=${encodeURIComponent(`${query} org:${organization}`)}&sort=updated&order=desc&per_page=15`, headers, fetchForPolicy('github-api'),
-  )));
-  const unique = new Map(responses.flatMap((response) => response.items).map((item) => [item.html_url, item]));
-  return [...unique.values()].sort((left, right) => right.updated_at.localeCompare(left.updated_at)).slice(0, 30)
-    .map((item) => ({ provider: 'github', title: item.title, summary: item.body?.slice(0, 1_000) || item.repository_url, url: item.html_url, occurredAt: item.updated_at }));
+  const responses = await Promise.all(queries.flatMap(({ query, context }) => organizations.map(async (organization) => ({
+    context,
+    items: (await requestJson<{ items: Array<{ title: string; body: string | null; html_url: string; updated_at: string; repository_url: string }> }>(
+      `https://api.github.com/search/issues?q=${encodeURIComponent(`${query} org:${organization}`)}&sort=updated&order=desc&per_page=15`, headers, fetchForPolicy('github-api'),
+    )).items,
+  }))));
+  const unique = new Map<string, { item: (typeof responses)[number]['items'][number]; contexts: string[] }>();
+  for (const response of responses) {
+    for (const item of response.items) {
+      const existing = unique.get(item.html_url);
+      if (existing) existing.contexts.push(response.context);
+      else unique.set(item.html_url, { item, contexts: [response.context] });
+    }
+  }
+  return [...unique.values()].sort((left, right) => right.item.updated_at.localeCompare(left.item.updated_at)).slice(0, 30)
+    .map(({ item, contexts }) => ({ provider: 'github', title: item.title, summary: `${[...new Set(contexts)].join(' ')}\n${item.body?.slice(0, 1_000) || item.repository_url}`, url: item.html_url, occurredAt: item.updated_at, activeWork: true }));
 }
 
 async function scanConfluence(settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
@@ -59,16 +86,29 @@ const GRAFANA_URL = 'https://grafana.observability.writer.com';
 
 async function scanGrafana(settings: Record<string, string>, fetchForPolicy: OutboundFetchFactory = createOutboundFetch): Promise<SourceSignal[]> {
   if (!settings.token) throw new Error('Grafana service-account token is missing. Add it in Sources.');
-  const params = new URLSearchParams({ query: settings.query ?? '', type: 'dash-db', limit: '30' });
-  const dashboards = await requestJson<Array<{ uid?: string; title?: string; uri?: string; url?: string; folderTitle?: string; tags?: string[] }>>(
-    `${GRAFANA_URL}/api/search?${params}`,
+  const alerts = await requestJson<Array<{
+    annotations?: Record<string, string>;
+    labels?: Record<string, string>;
+    generatorURL?: string;
+    startsAt?: string;
+    updatedAt?: string;
+    status?: { state?: string; silencedBy?: string[]; inhibitedBy?: string[] };
+  }>>(
+    `${GRAFANA_URL}/api/alertmanager/grafana/api/v2/alerts?active=true&silenced=false&inhibited=false`,
     { Accept: 'application/json', Authorization: `Bearer ${settings.token}` }, fetchForPolicy('grafana-api'),
   );
-  return dashboards.flatMap((dashboard) => {
-    if (typeof dashboard.title !== 'string') return [];
-    const path = typeof dashboard.url === 'string' ? dashboard.url : typeof dashboard.uri === 'string' ? dashboard.uri : dashboard.uid ? `/d/${dashboard.uid}` : '';
-    return [{ provider: 'grafana', title: dashboard.title.slice(0, 240), summary: [dashboard.folderTitle, ...(dashboard.tags ?? [])].filter(Boolean).join(' · '), url: path ? `${GRAFANA_URL}${path}` : null, occurredAt: null }];
-  });
+  const query = settings.query?.trim().toLowerCase();
+  return alerts.flatMap((alert) => {
+    if (alert.status?.state && alert.status.state !== 'active') return [];
+    if (alert.status?.silencedBy?.length || alert.status?.inhibitedBy?.length) return [];
+    const labels = alert.labels ?? {};
+    const annotations = alert.annotations ?? {};
+    const name = labels.rulename || labels.alertname || annotations.summary || 'Grafana alert';
+    const summary = [annotations.summary, annotations.description, labels.grafana_folder ? `Folder: ${labels.grafana_folder}` : null]
+      .filter((value): value is string => Boolean(value)).join('\n');
+    if (query && !`${name}\n${summary}\n${Object.values(labels).join(' ')}`.toLowerCase().includes(query)) return [];
+    return [{ provider: 'grafana', title: `Investigate Grafana alert: ${name}`.slice(0, 240), summary: summary || 'A Grafana alert is firing and requires investigation.', url: alert.generatorURL || null, occurredAt: alert.updatedAt || alert.startsAt || null, activeWork: true }];
+  }).slice(0, 30);
 }
 
 const scanners: Partial<Record<SourceProvider, (settings: Record<string, string>, fetchForPolicy?: OutboundFetchFactory) => Promise<SourceSignal[]>>> = { github: scanGitHub, slack: scanSlackMcp, confluence: scanConfluence, grafana: scanGrafana, gmail: scanGmail };

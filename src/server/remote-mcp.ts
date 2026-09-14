@@ -189,6 +189,97 @@ function toolText(result: unknown): string {
   return content.filter((entry) => entry.type === 'text').map((entry) => entry.text ?? '').join('\n').trim();
 }
 
+function parseToolJson<T>(result: unknown, label: string): T {
+  const text = toolText(result);
+  if ((result as { isError?: boolean }).isError) throw new Error(text || `${label} failed.`);
+  try { return JSON.parse(text) as T; }
+  catch { throw new Error(`${label} returned malformed data.`); }
+}
+
+async function scanAtlassianAssignedWork(client: Client, toolNames: Set<string>): Promise<SourceSignal[]> {
+  if (!toolNames.has('getAccessibleAtlassianResources') || !toolNames.has('searchJiraIssuesUsingJql')) return [];
+  const resources = parseToolJson<Array<{ id?: unknown; url?: unknown }>>(
+    await client.callTool({ name: 'getAccessibleAtlassianResources', arguments: {} }),
+    'Atlassian resource lookup',
+  );
+  const resource = resources.find((entry) => typeof entry.id === 'string' && typeof entry.url === 'string');
+  if (!resource || typeof resource.id !== 'string' || typeof resource.url !== 'string') throw new Error('Atlassian returned no accessible Jira or Confluence site.');
+  const resourceId = resource.id;
+  const resourceUrl = resource.url;
+
+  const jiraResult = parseToolJson<{ issues?: Array<{
+    key?: unknown;
+    fields?: {
+      summary?: unknown;
+      description?: unknown;
+      updated?: unknown;
+      status?: { name?: unknown };
+      priority?: { name?: unknown };
+      project?: { name?: unknown };
+    };
+  }> }>(await client.callTool({
+    name: 'searchJiraIssuesUsingJql',
+    arguments: {
+      cloudId: resourceId,
+      jql: 'assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC',
+      maxResults: 30,
+      fields: ['summary', 'description', 'status', 'priority', 'updated', 'assignee', 'project'],
+      responseContentFormat: 'markdown',
+    },
+  }), 'Atlassian Jira search');
+
+  const jiraSignals = (jiraResult.issues ?? []).flatMap((issue): SourceSignal[] => {
+    const fields = issue.fields ?? {};
+    if (typeof issue.key !== 'string' || typeof fields.summary !== 'string') return [];
+    const context = [
+      `Open Jira work assigned to you (${issue.key}).`,
+      typeof fields.status?.name === 'string' ? `Status: ${fields.status.name}` : null,
+      typeof fields.priority?.name === 'string' ? `Priority: ${fields.priority.name}` : null,
+      typeof fields.project?.name === 'string' ? `Project: ${fields.project.name}` : null,
+      typeof fields.description === 'string' ? fields.description : null,
+    ].filter((value): value is string => Boolean(value)).join('\n');
+    return [{
+      provider: 'confluence',
+      title: `${issue.key} · ${fields.summary}`.slice(0, 240),
+      summary: context.slice(0, 12_000),
+      url: `${resourceUrl.replace(/\/$/, '')}/browse/${encodeURIComponent(issue.key)}`,
+      occurredAt: typeof fields.updated === 'string' ? fields.updated : null,
+      activeWork: true,
+    }];
+  });
+
+  if (!toolNames.has('searchConfluenceUsingCql')) return jiraSignals;
+  const mentionResult = parseToolJson<{ results?: Array<{
+    title?: unknown;
+    excerpt?: unknown;
+    url?: unknown;
+    lastModified?: unknown;
+    content?: { _links?: { webui?: unknown }; title?: unknown };
+  }> }>(await client.callTool({
+    name: 'searchConfluenceUsingCql',
+    arguments: {
+      cloudId: resourceId,
+      cql: 'type = comment AND mention = currentUser() ORDER BY created DESC',
+      limit: 30,
+      expand: 'content.version,content.history',
+    },
+  }), 'Atlassian Confluence mention search');
+  const mentionSignals = (mentionResult.results ?? []).flatMap((entry): SourceSignal[] => {
+    const title = typeof entry.title === 'string' ? entry.title : typeof entry.content?.title === 'string' ? entry.content.title : null;
+    if (!title) return [];
+    const path = typeof entry.url === 'string' ? entry.url : typeof entry.content?._links?.webui === 'string' ? entry.content._links.webui : null;
+    return [{
+      provider: 'confluence',
+      title: `Confluence mention: ${title}`.slice(0, 240),
+      summary: `A Confluence comment mentions you.${typeof entry.excerpt === 'string' && entry.excerpt.trim() ? `\n${entry.excerpt.trim().slice(0, 2_000)}` : ''}`,
+      url: path ? new URL(path, resourceUrl).toString() : null,
+      occurredAt: typeof entry.lastModified === 'string' ? entry.lastModified : null,
+      activeWork: true,
+    }];
+  });
+  return [...jiraSignals, ...mentionSignals];
+}
+
 export async function scanRemoteMcp(provider: RemoteMcpProvider, settings: Record<string, unknown>, requestedQuery?: string, saveCredentials?: (stored: Record<string, unknown>) => void): Promise<SourceSignal[]> {
   const stored = settings as unknown as StoredOAuth;
   if (!stored.serverUrl || !stored.tokens) throw new Error('MCP OAuth credentials are missing. Reconnect this source.');
@@ -212,8 +303,12 @@ export async function scanRemoteMcp(provider: RemoteMcpProvider, settings: Recor
         });
         const text = toolText(result);
         if ((result as { isError?: boolean }).isError) throw new Error(text || 'Figma MCP request failed.');
-        return { provider, title: target.title, summary: text.slice(0, 12_000), url: target.url, occurredAt: null };
+        return { provider, title: target.title, summary: text.slice(0, 12_000), url: target.url, occurredAt: null, referenceOnly: true };
       }));
+    }
+    if (provider === 'confluence' && !requestedQuery) {
+      const assignedWork = await scanAtlassianAssignedWork(client, new Set(tools.map((entry) => entry.name)));
+      if (assignedWork.length > 0 || tools.some((entry) => entry.name === 'searchJiraIssuesUsingJql')) return assignedWork;
     }
     const tool = tools.find((entry) => entry.name === 'search') ?? tools.find((entry) => /search/i.test(entry.name)) ?? tools.find((entry) => /list|query/i.test(entry.name));
     if (!tool) throw new Error('The MCP server did not expose a searchable tool.');

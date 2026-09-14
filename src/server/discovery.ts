@@ -15,9 +15,10 @@ const actionablePattern = /\b(?:please|can you|could you|would you|need you to|a
 export const DISCOVERY_RUN_MAX_AGE_MS = 15 * 60_000;
 
 export function discoveryPriority(signal: SourceSignal): number {
+  if (signal.referenceOnly) return 0;
   const text = `${signal.title}\n${signal.summary}\n${signal.url ?? ''}`;
   if (connectorPattern.test(text) || reviewPattern.test(text)) return 2;
-  if (signal.provider === 'linear' || actionablePattern.test(text)) return 1;
+  if (signal.activeWork || signal.provider === 'linear' || actionablePattern.test(text)) return 1;
   return 0;
 }
 
@@ -47,7 +48,7 @@ export async function runDiscovery(repository: WorkItemRepository): Promise<void
       try {
         const config = repository.getLinearConfig();
         const issues = await new LinearProvider(process.env.LINEAR_API_KEY, config.teamIds, config.projectIds).fetchOpenIssues();
-        signals.push(...issues.map((issue) => ({ provider: 'linear', title: issue.title, summary: `${issue.projectName ?? ''}\n${issue.labels.join(', ')}\n${issue.description}`, url: issue.sourceUrl, occurredAt: issue.providerUpdatedAt })));
+        signals.push(...issues.map((issue) => ({ provider: 'linear', title: issue.title, summary: `${issue.sourceIdentifier ?? 'Linear'} · Open work in your configured Linear scope.\n${issue.projectName ?? ''}\n${issue.labels.join(', ')}\n${issue.description}`, url: issue.sourceUrl, occurredAt: issue.providerUpdatedAt, activeWork: true })));
       } catch (error) { errors.push(`linear: ${error instanceof Error ? error.message : 'Scan failed.'}`); }
     }
     let added = 0;
@@ -56,7 +57,7 @@ export async function runDiscovery(repository: WorkItemRepository): Promise<void
       .sort((left, right) => right.priority - left.priority || String(right.signal.occurredAt ?? '').localeCompare(String(left.signal.occurredAt ?? '')));
     for (const { signal, priority } of rankedSignals) {
       if (!signal.title.trim()) continue;
-      if (signal.occurredAt && new Date(signal.occurredAt) < since) continue;
+      if (!signal.activeWork && signal.occurredAt && new Date(signal.occurredAt) < since) continue;
       const candidateFingerprint = fingerprint(signal);
       const inserted = repository.upsertDiscoveryCandidate({ fingerprint: candidateFingerprint, provider: signal.provider, title: signal.title.trim(), description: signal.summary.trim(), sourceUrl: signal.url, occurredAt: signal.occurredAt, runId: run.id, relevance: priority });
       added += Number(inserted);

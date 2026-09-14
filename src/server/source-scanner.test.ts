@@ -25,7 +25,7 @@ describe('source scanners outbound transport', () => {
   it('uses the shared policy factory for GitHub, Atlassian, and Gmail API requests', async () => {
     const github = fetchFactory(() => ({ items: [] }));
     await scanSource('github', { token: 'test' }, github.factory);
-    expect(github.policies).toEqual(['github-api', 'github-api', 'github-api']);
+    expect(github.policies).toEqual(Array(9).fill('github-api'));
 
     const atlassian = fetchFactory(() => ({ results: [] }));
     await scanSource('confluence', { siteUrl: 'https://writer.atlassian.net', email: 'test@example.com', token: 'test' }, atlassian.factory);
@@ -34,5 +34,43 @@ describe('source scanners outbound transport', () => {
     const gmail = fetchFactory(() => ({ messages: [] }));
     await scanSource('gmail', { accessToken: 'test' }, gmail.factory);
     expect(gmail.policies).toEqual(['gmail-api']);
+  });
+
+  it('discovers current GitHub assignments and review requests as active work', async () => {
+    const github = fetchFactory((url) => url.includes('assignee%3A%40me') ? { items: [{
+      title: 'Fix connector retry handling',
+      body: 'Retry the failed connector request.',
+      html_url: 'https://github.com/writer/repo/issues/42',
+      updated_at: '2026-08-01T00:00:00.000Z',
+      repository_url: 'https://api.github.com/repos/writer/repo',
+    }] } : { items: [] });
+
+    const signals = await scanSource('github', { token: 'test' }, github.factory);
+
+    expect(signals).toEqual([expect.objectContaining({
+      provider: 'github',
+      title: 'Fix connector retry handling',
+      activeWork: true,
+      summary: expect.stringContaining('assigned to you'),
+    })]);
+  });
+
+  it('returns firing Grafana alerts instead of passive dashboards', async () => {
+    const grafana = fetchFactory(() => [{
+      labels: { rulename: 'Connector error rate', grafana_folder: 'Connectors' },
+      annotations: { summary: 'Connector failures crossed the threshold.' },
+      generatorURL: 'https://grafana.observability.writer.com/alerting/grafana/example/view',
+      startsAt: '2026-09-14T12:00:00.000Z',
+      status: { state: 'active', silencedBy: [], inhibitedBy: [] },
+    }]);
+
+    const signals = await scanSource('grafana', { token: 'test' }, grafana.factory);
+
+    expect(grafana.policies).toEqual(['grafana-api']);
+    expect(signals).toEqual([expect.objectContaining({
+      provider: 'grafana',
+      title: 'Investigate Grafana alert: Connector error rate',
+      activeWork: true,
+    })]);
   });
 });
