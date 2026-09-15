@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type SharedMessage } from '../../../shared/contracts';
 import { conversationCacheSpendWarning } from './cache-spend';
-import { composerSelectionForConversation, composerSelectionFromConversation, executionKindForConversationSend, latestConversationExecutionKind, replyBadge } from './view';
+import { composerSelectionForConversation, composerSelectionFromConversation, conversationRenderRowsForMessages, executionKindForConversationSend, latestConversationExecutionKind, replyBadge } from './view';
+
+const renderMessage = (changes: Partial<SharedMessage>): SharedMessage => ({
+  id: 'message', conversationId: 'conversation', author: 'jeffrey', body: '', pinned: false, status: 'completed', error: '', createdAt: '2026-09-15T00:00:00.000Z', completedAt: '2026-09-15T00:00:01.000Z', attachments: [], model: null, accountProfile: null, executionProfile: null, inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none', attempt: 0, maxAttempts: 3, nextAttemptAt: null, queuePriority: 0, interjectionStreamOffset: null, retrievedMemoryCount: null, dispatchGroupId: null, kind: null,
+  ...changes,
+});
 
 describe('replyBadge', () => {
   it('shows the actual model alongside the compact agent, profile, usage, and duration telemetry', () => {
@@ -159,5 +164,22 @@ describe('conversationCacheSpendWarning', () => {
     expect(conversationCacheSpendWarning([
       { cacheReadInputTokens: CACHE_READ_SOFT_LIMIT_TOKENS - 1 },
     ] as SharedMessage[])).toBeNull();
+  });
+});
+
+describe('conversationRenderRowsForMessages', () => {
+  it('keeps direct Palmyra visible but collapses Palmyra companions behind their own row', () => {
+    const both = renderMessage({ id: 'both', dispatchTarget: 'both' });
+    const direct = renderMessage({ id: 'direct', dispatchTarget: 'palmyra' });
+    const rows = conversationRenderRowsForMessages([
+      both,
+      renderMessage({ id: 'codex', author: 'codex', dispatchGroupId: both.id }),
+      renderMessage({ id: 'claude', author: 'claude', dispatchGroupId: both.id }),
+      renderMessage({ id: 'background-palmyra', author: 'palmyra', dispatchGroupId: both.id }),
+      direct,
+      renderMessage({ id: 'direct-palmyra', author: 'palmyra', dispatchGroupId: direct.id }),
+    ]);
+
+    expect(rows.map((row) => row.type)).toEqual(['single', 'pair', 'palmyra-companion', 'single', 'single']);
   });
 });

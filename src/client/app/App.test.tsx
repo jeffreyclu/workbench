@@ -564,6 +564,34 @@ describe('shared room', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'How did we do?' })).toBeNull());
   });
 
+  it('keeps a background Palmyra reply collapsed until Jeffrey opens it', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const conversationId = '00000000-0000-4000-8000-000000000096';
+    const timestamp = '2026-01-01T00:00:00Z';
+    const conversation = { id: conversationId, title: 'Background Palmyra', workItemId: null, archivedAt: null, state: 'finished', createdAt: timestamp, updatedAt: timestamp };
+    const request = { id: 'request-1', conversationId, author: 'jeffrey', body: 'Inspect it.', pinned: false, status: 'completed', error: '', createdAt: timestamp, attachments: [], model: null, executionProfile: 'standard', dispatchTarget: 'codex' };
+    const messages = [
+      request,
+      { id: 'codex-1', conversationId, author: 'codex', body: 'Visible answer.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: 'gpt-5.6', accountProfile: 'default', executionProfile: 'standard', inputTokens: null, cacheReadInputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none', dispatchGroupId: request.id },
+      { id: 'palmyra-1', conversationId, author: 'palmyra', body: 'Background answer.', pinned: false, status: 'completed', error: '', createdAt: timestamp, completedAt: timestamp, attachments: [], model: 'palmyra-x5', accountProfile: 'default', executionProfile: 'palmyra-x5', inputTokens: null, cacheReadInputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null, dispatchTarget: 'none', dispatchGroupId: request.id },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/shared/conversations')) return new Response(JSON.stringify({ conversations: [conversation], conversation, nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages')) return new Response(JSON.stringify({ messages }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/feedback')) return new Response(JSON.stringify({ feedback: null }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
+
+    const summary = await screen.findByText('Palmyra background response');
+    const disclosure = summary.closest('details') as HTMLDetailsElement;
+    expect(disclosure.open).toBe(false);
+    fireEvent.click(summary.closest('summary')!);
+    expect(disclosure.open).toBe(true);
+  });
+
   it('shows the agent, model, account profile, usage, and duration on an agent reply', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000005';

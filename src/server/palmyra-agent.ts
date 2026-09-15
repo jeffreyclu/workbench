@@ -187,7 +187,7 @@ export interface PalmyraAgentResult {
   fallbackFrom: null;
   fallbackReason: null;
   sessionId: null;
-  costUsd: null;
+  costUsd: 0;
   messages: PalmyraMessage[];
   peakContextTokens: number;
 }
@@ -364,7 +364,7 @@ export async function runPalmyraAgent(options: {
       }
       const output = finalAnswerFragments.join('\n\n');
       if (!output) throw new Error('Palmyra returned progress but no synthesized final response.');
-      return { output, agent: 'palmyra', usage, fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: null, messages: messagesForPersistence(messages), peakContextTokens };
+      return { output, agent: 'palmyra', usage, fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: 0, messages: messagesForPersistence(messages), peakContextTokens };
     }
     if (responseContent) {
       progress = appendProgress(progress, responseContent);

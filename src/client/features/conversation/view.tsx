@@ -99,6 +99,35 @@ function isProviderMessage(message: Pick<SharedMessage, 'author'>): boolean {
   return message.author === 'codex' || message.author === 'claude' || message.author === 'palmyra';
 }
 
+export type ConversationRenderRow =
+  | { type: 'single'; message: SharedMessage }
+  | { type: 'pair'; a: SharedMessage; b: SharedMessage }
+  | { type: 'palmyra-companion'; message: SharedMessage };
+
+export function conversationRenderRowsForMessages(messages: SharedMessage[]): ConversationRenderRow[] {
+  const requests = new Map(messages.filter((message) => !isProviderMessage(message) && message.dispatchTarget !== 'none').map((message) => [message.id, message]));
+  const isBackgroundPalmyra = (message: SharedMessage) => message.author === 'palmyra'
+    && Boolean(message.dispatchGroupId)
+    && requests.get(message.dispatchGroupId!)?.dispatchTarget !== 'palmyra';
+  const rows: ConversationRenderRow[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (isBackgroundPalmyra(message)) {
+      rows.push({ type: 'palmyra-companion', message });
+      continue;
+    }
+    const next = messages[index + 1];
+    const isVisiblePairAgent = (candidate: SharedMessage) => candidate.author === 'codex' || candidate.author === 'claude';
+    if (next && isVisiblePairAgent(message) && isVisiblePairAgent(next) && message.author !== next.author && message.dispatchGroupId === next.dispatchGroupId) {
+      rows.push({ type: 'pair', a: message, b: next });
+      index += 1;
+    } else {
+      rows.push({ type: 'single', message });
+    }
+  }
+  return rows;
+}
+
 const defaultComposerSelection = (): ComposerSelection => ({
   aiProvider: 'auto',
   executionProfile: null,
@@ -706,21 +735,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   // Consecutive codex+claude replies with no jeffrey message between them came
   // from the same "both" dispatch — render them as one side-by-side group
   // instead of two look-alike rows stacked on top of each other.
-  const conversationRenderRows = useMemo(() => {
-    const rows: ({ type: 'single'; message: SharedMessage } | { type: 'pair'; a: SharedMessage; b: SharedMessage })[] = [];
-    for (let i = 0; i < renderedConversationMessages.length; i++) {
-      const message = renderedConversationMessages[i];
-      const next = renderedConversationMessages[i + 1];
-      const isAgent = (m: SharedMessage) => m.author === 'codex' || m.author === 'claude';
-      if (next && isAgent(message) && isAgent(next) && message.author !== next.author) {
-        rows.push({ type: 'pair', a: message, b: next });
-        i++;
-      } else {
-        rows.push({ type: 'single', message });
-      }
-    }
-    return rows;
-  }, [renderedConversationMessages]);
+  const conversationRenderRows = useMemo(() => conversationRenderRowsForMessages(renderedConversationMessages), [renderedConversationMessages]);
   useEffect(() => {
     if (!conversationId || selectionHydratedFor === conversationId) return;
     // The rail already has the selected conversation in the normal case. Do
@@ -1469,7 +1484,16 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
               </article>
               </div>;
             };
-            const rowContent = row.type === 'single' ? renderMessage(row.message, false) : (() => {
+            const rowContent = row.type === 'single' ? renderMessage(row.message, false) : row.type === 'palmyra-companion' ? (() => {
+              const status = row.message.status === 'running' ? 'Working…'
+                : row.message.status === 'completed' ? 'Completed'
+                  : row.message.status === 'failed' ? 'Failed'
+                    : row.message.status === 'canceled' ? 'Canceled' : 'Queued';
+              return <details className="palmyra-companion">
+                <summary><Bot size={13} /><span>Palmyra background response</span><small>{status}</small></summary>
+                <div className="palmyra-companion-content">{renderMessage(row.message, false)}</div>
+              </details>;
+            })() : (() => {
               const runningCount = [row.a, row.b].filter((message) => message.status === 'running').length;
               return <div className="thread-virtual-row reply-group">
                 <div className="reply-group-header">{runningCount > 0 ? `${runningCount} agent${runningCount > 1 ? 's' : ''} responding` : 'Codex + Claude replied'}</div>
@@ -1481,7 +1505,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
             })();
             return row.type === 'single'
               ? <div key={row.message.id}>{rowContent}</div>
-              : <div key={`${row.a.id}-${row.b.id}`}>{rowContent}</div>;
+              : row.type === 'palmyra-companion'
+                ? <div key={row.message.id}>{rowContent}</div>
+                : <div key={`${row.a.id}-${row.b.id}`}>{rowContent}</div>;
           })}
           </div>
           {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small>{completeLinkedTask.error && <small className="completion-prompt-error">Could not complete the task. Try again.</small>}</span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={() => completeLinkedTask.mutate()} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { rmSync } from 'node:fs';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { dispatchNextSharedTurn } from './shared-room.js';
+import { cancelSharedReply, dispatchNextSharedTurn, isSharedReplyActive } from './shared-room.js';
+import { fakeAgentDirectory } from './test-fake-agent.js';
 
 const palmyraOutputs = vi.hoisted(() => ({ queued: [] as string[] }));
 
@@ -16,7 +18,7 @@ vi.mock('./palmyra-agent.js', async (importOriginal) => ({
     return {
       output, agent: 'palmyra',
       usage: { inputTokens: 12, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: 7 },
-      fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: null,
+      fallbackFrom: null, fallbackReason: null, sessionId: null, costUsd: 0,
       messages: [{ role: 'user', content: 'What is a database index?' }, { role: 'assistant', content: output }],
       peakContextTokens: 12,
     };
@@ -53,10 +55,59 @@ describe('Palmyra as a conversation provider', () => {
       expect(current.body).not.toContain('Decision:');
       expect(current.body).not.toContain('Palmyra used');
       expect(current.model).toBe('palmyra-x5');
+      expect(current.estimatedCostUsd).toBe(0);
+      expect(current.costSource).toBe('provider');
     });
     expect(repository.getConversationPalmyraContext(conversation.id)).toContain('database index');
     database.close();
   });
+
+  it('runs Palmyra beside a visible Codex conversation turn by default', async () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const conversation = repository.createConversation('Background Palmyra', null);
+    repository.createSharedMessage('jeffrey', 'Explain this function.', 'queued', conversation.id, [], 'codex');
+    const previousPath = process.env.PATH;
+    process.env.WORKBENCH_TEST_PALMYRA_COMPANION = 'true';
+    const { directory } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Codex answer\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Claude answer\"}'");
+    try {
+      const replies = dispatchNextSharedTurn(repository, conversation.id);
+      expect(replies.map((reply) => reply.author)).toEqual(['codex', 'palmyra']);
+      for (const reply of replies) cancelSharedReply(repository, reply.id);
+      await vi.waitFor(() => expect(replies.some((reply) => isSharedReplyActive(reply.id))).toBe(false), { timeout: 5_000 });
+    } finally {
+      delete process.env.WORKBENCH_TEST_PALMYRA_COMPANION;
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+      database.close();
+    }
+  });
+
+  it('runs all three agents for Both and creates one grouped synthesis', async () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const conversation = repository.createConversation('Three-agent synthesis', null);
+    const request = repository.createSharedMessage('jeffrey', 'Compare the approaches.', 'queued', conversation.id, [], 'both');
+    const previousPath = process.env.PATH;
+    process.env.WORKBENCH_TEST_PALMYRA_COMPANION = 'true';
+    palmyraOutputs.queued.push('## Problem\nCompare approaches.\n\n## Solution\nUse the safer option.\n\n## Context\nPalmyra checked independently.');
+    const answer = "printf '%s\\n' '{\"type\":\"result\",\"result\":\"## Problem\\nCompare approaches.\\n\\n## Solution\\nUse the safer option.\\n\\n## Context\\nVerified independently.\"}'";
+    const { directory } = fakeAgentDirectory(answer, answer);
+    try {
+      const replies = dispatchNextSharedTurn(repository, conversation.id);
+      expect(replies.map((reply) => reply.author)).toEqual(['codex', 'claude', 'palmyra']);
+      await vi.waitFor(() => {
+        const synthesis = repository.listAllSharedMessages(conversation.id).find((message) => message.author === 'system' && message.body.startsWith('Synthesis:'));
+        expect(synthesis).toMatchObject({ status: 'completed', dispatchGroupId: request.id });
+      }, { timeout: 8_000 });
+      expect(repository.listAllSharedMessages(conversation.id).filter((message) => message.author === 'system' && message.body.startsWith('Synthesis:'))).toHaveLength(1);
+    } finally {
+      delete process.env.WORKBENCH_TEST_PALMYRA_COMPANION;
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+      database.close();
+    }
+  }, 10_000);
 
   it('fails the turn with the reason when no Writer key is configured', async () => {
     delete process.env.WRITER_API_KEY;

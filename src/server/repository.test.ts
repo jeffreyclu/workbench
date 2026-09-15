@@ -1475,13 +1475,17 @@ describe('WorkItemRepository', () => {
     const request = repository.createSharedMessage('jeffrey', 'Give me a verbose response to the current dual request', 'completed', conversation.id, [], 'both');
     const codex = repository.createSharedMessage('codex', 'Current Codex answer', 'completed', conversation.id, [], 'none', null, null, request.id);
     const claude = repository.createSharedMessage('claude', '', 'failed', conversation.id, [], 'none', null, null, request.id);
+    const palmyra = repository.createSharedMessage('palmyra', 'Palmyra independently confirmed the fix.', 'running', conversation.id, [], 'none', null, null, request.id);
     repository.updateSharedMessage(claude.id, { error: 'Claude unavailable.' });
 
+    expect(synthesisSource(repository, conversation.id, codex.id)).toBeNull();
+    repository.updateSharedMessage(palmyra.id, { status: 'completed' });
     const source = synthesisSource(repository, conversation.id, codex.id);
 
     expect(source?.prompt).toContain('Give me a verbose response to the current dual request');
     expect(source?.prompt).toContain('Current Codex answer');
     expect(source?.prompt).toContain('Claude unavailable.');
+    expect(source?.prompt).toContain('Palmyra independently confirmed the fix.');
     expect(source?.prompt).not.toContain('Earlier Codex answer');
     expect(source?.verbose).toBe(true);
   });

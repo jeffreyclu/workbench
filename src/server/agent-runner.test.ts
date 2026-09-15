@@ -8,6 +8,7 @@ import { agentSubprocessEnv } from './agent-security.js';
 import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
+import { withPalmyraCompanion } from './palmyra-companion.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
 
 // The background risk scorer spawns model turns. Runner tests only care that it
@@ -1091,6 +1092,9 @@ fi`;
     expect(resolveAgents('review', 'claude')).toEqual(['claude']);
     expect(resolveAgents('review', 'both')).toEqual(['codex', 'claude']);
     expect(resolveAgents('execute', 'palmyra')).toEqual(['palmyra']);
+    expect(withPalmyraCompanion(['codex'])).toEqual(['codex']);
+    expect(withPalmyraCompanion(['codex'], true)).toEqual(['codex', 'palmyra']);
+    expect(withPalmyraCompanion(['palmyra'], true)).toEqual(['palmyra']);
     expect(classifyExecution(item('Review a complex cross-team PR', 'x'.repeat(2_000))).kind).toBe('review');
   });
 
