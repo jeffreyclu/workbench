@@ -1180,7 +1180,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   };
   const resolvedAgents = resolveAgents(taskKind, queued.dispatchTarget);
   const agents = queued.dispatchTarget === 'auto'
-    ? [repository.selectBalancedAgent(resolvedAgents[0])]
+    ? [repository.selectBalancedAgent(resolvedAgents[0], ['codex', 'claude'])]
     : resolvedAgents;
   if (linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled' && linkedItem.status !== 'pinned') {
     repository.update(linkedItem.id, { status: 'in_progress' }, false, { actor: 'jeffrey', source: 'shared_room' });

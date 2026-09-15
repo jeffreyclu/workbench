@@ -1325,6 +1325,7 @@ describe('WorkItemRepository', () => {
     expect(repository.selectBalancedAgent('codex')).toBe('claude');
     repository.createRun(task.id, 'execute', 'auto', 'claude', 'second');
     expect(repository.selectBalancedAgent('claude')).toBe('palmyra');
+    expect(repository.selectBalancedAgent('claude', ['codex', 'claude'])).toBe('codex');
     repository.createRun(task.id, 'execute', 'auto', 'palmyra', 'third');
     expect(repository.selectBalancedAgent('palmyra')).toBe('codex');
     repository.createRun(task.id, 'execute', 'codex', 'codex', 'explicit selection');

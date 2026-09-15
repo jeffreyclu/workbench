@@ -94,4 +94,28 @@ describe('WorkbenchAdminService.startWorkItemExecution', () => {
       expect.objectContaining({ agent: 'codex', requestedTarget: 'auto' }),
     ]);
   });
+
+  it('never selects Palmyra for a task\'s first Auto execution', async () => {
+    const loaded = repository.create({ title: 'Existing load', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.createRun(loaded.id, 'execute', 'auto', 'codex', 'first');
+    repository.createRun(loaded.id, 'execute', 'auto', 'claude', 'second');
+    const task = repository.create({ title: 'First execution', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.setClassification(task.id, { kind: 'execute', agent: 'codex', complex: false, instructions: '' });
+
+    const result = await admin.startWorkItemExecution(task.id, { executionProfile: null, force: false });
+
+    expect('run' in result && result.run.agent).toBe('codex');
+    expect(repository.listRuns(task.id).map((run) => run.agent)).toEqual(['codex']);
+  });
+
+  it('never selects Palmyra for a manual Auto task run', async () => {
+    const loaded = repository.create({ title: 'Existing manual load', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.createRun(loaded.id, 'execute', 'auto', 'codex', 'first');
+    repository.createRun(loaded.id, 'execute', 'auto', 'claude', 'second');
+    const task = repository.create({ title: 'Manual Auto run', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+
+    const result = await admin.startAgentRun(task.id, { kind: 'execute', target: 'auto', instructions: '', executionProfile: null }, { actor: 'jeffrey', force: false });
+
+    expect('runs' in result && result.runs.map((run) => run.agent)).toEqual(['codex']);
+  });
 });

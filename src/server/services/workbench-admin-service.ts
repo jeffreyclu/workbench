@@ -85,7 +85,7 @@ export class WorkbenchAdminService {
     const conversation = this.repository.getOrCreateWorkConversation(item.id, item.title);
     this.repository.createSharedMessage('system', `Requested ${input.kind}: ${input.instructions || item.description}`, 'completed', conversation.id);
     const resolvedAgents = resolveAgents(input.kind, input.target);
-    const agents = input.target === 'auto' ? [this.repository.selectBalancedAgent(resolvedAgents[0])] : resolvedAgents;
+    const agents = input.target === 'auto' ? [this.repository.selectBalancedAgent(resolvedAgents[0], ['codex', 'claude'])] : resolvedAgents;
     const accountProfile = input.accountProfile ?? defaultAccountProfileForTask(item);
     const runs = agents.map((agent) => {
       const reply = this.repository.createSharedMessage(agent, '', 'running', conversation.id);
@@ -173,7 +173,9 @@ export class WorkbenchAdminService {
       classified = this.repository.setClassification(item.id, fresh);
     }
     const explicitlyAssigned = this.repository.getExplicitAgentAssignees(item.id);
-    const agents = explicitlyAssigned.length ? explicitlyAssigned : [this.repository.selectBalancedAgent(classified.agent)];
+    // The first Auto execution is a primary-agent decision. Palmyra remains
+    // available only through an explicit assignment/selection.
+    const agents = explicitlyAssigned.length ? explicitlyAssigned : [this.repository.selectBalancedAgent(classified.agent, ['codex', 'claude'])];
     const classification = { ...classified, agent: agents[0] };
     if (!explicitlyAssigned.length) this.repository.updateAutomaticAgentAssignees(item.id, agents);
     let conversation = this.repository.getOrCreateWorkConversation(item.id, item.title);

@@ -148,7 +148,7 @@ export class RunRepository {
     return this.list(workItemId).find((run) => run.id === id)!;
   }
 
-  selectBalancedAgent(preferred: AgentRun['agent']): AgentRun['agent'] {
+  selectBalancedAgent(preferred: AgentRun['agent'], candidates: AgentRun['agent'][] = ['codex', 'claude', 'palmyra']): AgentRun['agent'] {
     const rows = this.database.prepare(`
       SELECT agent, SUM(weight) AS load
       FROM (
@@ -166,9 +166,10 @@ export class RunRepository {
     `).all() as Array<{ agent: AgentRun['agent']; load: number }>;
     const load: Record<AgentRun['agent'], number> = { codex: 0, claude: 0, palmyra: 0 };
     for (const row of rows) load[row.agent] = Number(row.load);
-    if (Object.values(load).every((value) => value === 0)) return preferred;
-    const lowest = Math.min(...Object.values(load));
-    const available = (Object.keys(load) as AgentRun['agent'][]).filter((agent) => load[agent] === lowest);
+    const allowed = candidates.length ? [...new Set(candidates)] : ['codex', 'claude', 'palmyra'] as AgentRun['agent'][];
+    if (allowed.every((agent) => load[agent] === 0)) return allowed.includes(preferred) ? preferred : allowed[0];
+    const lowest = Math.min(...allowed.map((agent) => load[agent]));
+    const available = allowed.filter((agent) => load[agent] === lowest);
     if (available.length > 1) {
       const latest = this.database.prepare(`
         SELECT agent FROM agent_runs

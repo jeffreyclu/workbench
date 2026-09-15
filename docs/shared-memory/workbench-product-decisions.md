@@ -1214,6 +1214,9 @@ beside Codex, Claude, Auto, or Both. It runs only when Jeffrey explicitly
 selects Palmyra. The Writer-employee zero-dollar accounting rule remains in
 force for those direct Palmyra turns.
 
+This explicit-selection rule includes a task's first execution: Auto balances
+only between Codex and Claude and must never assign Palmyra.
+
 ### Palmyra live activity is replaced by a synthesized final answer
 
 *Decision from Jeffrey, 2026-09-03.* Palmyra's `Decision:` messages, streamed

@@ -892,7 +892,7 @@ export class WorkItemRepository {
       if (!['auto', 'codex', 'claude', 'palmyra', 'both'].includes(row.dispatch_target)) continue;
       const dispatchTarget = row.dispatch_target as 'auto' | 'codex' | 'claude' | 'palmyra' | 'both';
       const agents = dispatchTarget === 'both' ? ['codex', 'claude'] as const
-        : dispatchTarget === 'auto' ? [this.selectBalancedAgent('codex')] : [dispatchTarget];
+        : dispatchTarget === 'auto' ? [this.selectBalancedAgent('codex', ['codex', 'claude'])] : [dispatchTarget];
       if (agents.some((agent) => busyAgents.has(agent))) continue;
       const message = this.getSharedMessageById(row.id);
       if (message) return { message, dispatchTarget };
@@ -2073,8 +2073,8 @@ export class WorkItemRepository {
     return this.runs.create(workItemId, kind, requestedTarget, agent, instructions, conversationId, messageId, origin, accountProfile);
   }
 
-  selectBalancedAgent(preferred: AgentRun['agent']): AgentRun['agent'] {
-    return this.runs.selectBalancedAgent(preferred);
+  selectBalancedAgent(preferred: AgentRun['agent'], candidates?: AgentRun['agent'][]): AgentRun['agent'] {
+    return this.runs.selectBalancedAgent(preferred, candidates);
   }
 
   updateRun(id: string, changes: RunPatch): void {

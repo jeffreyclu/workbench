@@ -81,6 +81,29 @@ describe('Palmyra as a conversation provider', () => {
     }
   });
 
+  it('never selects Palmyra for an Auto conversation turn', async () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const loaded = repository.create({ title: 'Existing chat load', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.createRun(loaded.id, 'analysis', 'auto', 'codex', 'first');
+    repository.createRun(loaded.id, 'analysis', 'auto', 'claude', 'second');
+    const conversation = repository.createConversation('Auto without Palmyra', null);
+    repository.createSharedMessage('jeffrey', 'Explain this function.', 'queued', conversation.id, [], 'auto');
+    const previousPath = process.env.PATH;
+    const { directory } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Codex answer\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Claude answer\"}'");
+    try {
+      const replies = dispatchNextSharedTurn(repository, conversation.id);
+      expect(replies).toHaveLength(1);
+      expect(replies[0].author).not.toBe('palmyra');
+      cancelSharedReply(repository, replies[0].id);
+      await vi.waitFor(() => expect(isSharedReplyActive(replies[0].id)).toBe(false), { timeout: 5_000 });
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+      database.close();
+    }
+  });
+
   it('fails the turn with the reason when no Writer key is configured', async () => {
     delete process.env.WRITER_API_KEY;
     const database = openDatabase(':memory:');
