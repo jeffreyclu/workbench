@@ -1486,11 +1486,11 @@ describe('WorkItemRepository', () => {
     expect(source?.verbose).toBe(true);
   });
 
-  it('retrieves one shared memory snapshot before concurrent Codex and Claude replies', async () => {
+  it('retrieves one shared memory snapshot for a dated repeat request before concurrent replies', async () => {
     const task = repository.create({ title: 'Connectors retrieval', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Concurrent retrieval', task.id);
     repository.createSharedMessage('jeffrey', 'The durable fact has several relevant details.', 'completed', conversation.id);
-    repository.createSharedMessage('jeffrey', 'Continue the durable fact investigation.', 'queued', conversation.id, [], 'both');
+    repository.createSharedMessage('jeffrey', 'I need another one for Sept 6 - Sept 13. Include the tasks completed since Sept 1.', 'queued', conversation.id, [], 'both');
     const retrieval = vi.spyOn(repository, 'searchActivityMemory');
     const previousPath = process.env.PATH;
     const { directory, log } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'");

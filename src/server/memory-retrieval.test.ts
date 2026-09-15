@@ -43,6 +43,10 @@ describe('durable memory prefetch', () => {
     expect(shouldPrefetchDurableMemory('review', 'Review why this failed again.')).toBe(true);
     expect(shouldPrefetchDurableMemory('execute', "Let's keep working on this problem and finish the lossless handoff part 2.")).toBe(true);
     expect(shouldPrefetchDurableMemory('execute', 'Resume the previous implementation.')).toBe(true);
+    expect(shouldPrefetchDurableMemory('execute', 'ok cool now i need one for this week with the same parameters as before')).toBe(true);
+    expect(shouldPrefetchDurableMemory('execute', 'ok i need another one for sept 6 - sept 13. include the pluto tasks completed since sept 1')).toBe(true);
+    expect(shouldPrefetchDurableMemory('execute', 'Publish artifact.')).toBe(false);
+    expect(shouldPrefetchDurableMemory('execute', 'Run this check before publishing.')).toBe(false);
     expect(shouldPrefetchDurableMemory('analysis', 'Explain this function.')).toBe(false);
   });
 
