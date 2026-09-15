@@ -1984,7 +1984,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const profile = decision.profile;
     // Palmyra's tier is a model choice, not an effort profile: it never feeds
     // effortFor/autocompactCeilingFor, which stay codex/claude-only concerns.
-    const palmyraTier: 'palmyra-x5' | 'palmyra-x6' = run.executionProfile === 'palmyra-x6' ? 'palmyra-x6' : 'palmyra-x5';
+    // Writer's API currently exposes X5, not X6. Normalize legacy saved X6
+    // selections before recording or dispatching the provider request.
+    const palmyraTier = 'palmyra-x5' as const;
     const model = run.agent === 'palmyra' ? palmyraTier : modelFor(run.agent, profile);
     const recordedProfile = run.agent === 'palmyra' ? palmyraTier : profile;
     repository.updateRun(run.id, { model, executionProfile: recordedProfile });

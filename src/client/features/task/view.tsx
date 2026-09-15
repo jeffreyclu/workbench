@@ -114,7 +114,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   // Normalize the request to that same visible value so a reload cannot show
   // X5 while silently posting null (or preserve a stale Codex/Claude profile).
   const selectedExecutionProfile: AgentRun['executionProfile'] = detail.data?.item.assignees.includes('palmyra')
-    ? executionProfile === 'palmyra-x6' ? 'palmyra-x6' : 'palmyra-x5'
+    ? 'palmyra-x5'
     : executionProfile === 'palmyra-x5' || executionProfile === 'palmyra-x6' ? null : executionProfile;
   const { accountProfile, setAccountProfile } = useTaskAccountProfile(id, detail.data?.item);
   const [newAccountProfile, setNewAccountProfile] = useState('');

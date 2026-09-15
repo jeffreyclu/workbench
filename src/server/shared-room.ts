@@ -1391,7 +1391,9 @@ export async function replyInSharedRoom(
         : await judgeExecutionProfile(latestUserMessage || 'analysis', cwd, controller.signal);
     // Palmyra's tier is a model choice, not an effort profile: it never feeds
     // effortFor/autocompactCeilingFor, which stay codex/claude-only concerns.
-    const palmyraTier: 'palmyra-x5' | 'palmyra-x6' = target.executionProfile === 'palmyra-x6' ? 'palmyra-x6' : 'palmyra-x5';
+    // Writer's API currently exposes X5, not X6. Persist the model that is
+    // actually sent even when an older conversation saved the removed X6 value.
+    const palmyraTier = 'palmyra-x5' as const;
     const model = agent === 'palmyra' ? palmyraTier : modelFor(agent, profile);
     const recordedProfile = agent === 'palmyra' ? palmyraTier : profile;
     const modelForResult = (resultAgent: AgentRun['agent']) => resultAgent === 'palmyra' ? palmyraTier : modelFor(resultAgent, profile);

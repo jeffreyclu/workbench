@@ -142,7 +142,15 @@ export function palmyraApiKey(): string | null {
 }
 
 export function palmyraModel(): string {
-  return process.env.WORKBENCH_PALMYRA_MODEL?.trim() || DEFAULT_MODEL;
+  const configured = process.env.WORKBENCH_PALMYRA_MODEL?.trim();
+  // X6 is not a Writer API model ID. Keep this compatibility mapping so an
+  // old environment or persisted Workbench selection cannot send a request
+  // that the API will always reject.
+  return configured === 'palmyra-x6' ? DEFAULT_MODEL : configured || DEFAULT_MODEL;
+}
+
+export function supportedPalmyraModel(model?: string): string {
+  return model === 'palmyra-x6' ? DEFAULT_MODEL : model || palmyraModel();
 }
 
 export function isPalmyraConfigured(): boolean {
@@ -156,7 +164,7 @@ export async function chatWithPalmyra(request: PalmyraChatRequest, fetchImpl: ty
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
-      model: request.model ?? palmyraModel(),
+      model: supportedPalmyraModel(request.model),
       messages: request.messages,
       max_tokens: request.maxTokens ?? palmyraMaxOutputTokens(request.model),
       temperature: request.temperature ?? 0,
@@ -202,7 +210,7 @@ export async function streamChatWithPalmyra(
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify({
-      model: request.model ?? palmyraModel(),
+      model: supportedPalmyraModel(request.model),
       messages: request.messages,
       max_tokens: request.maxTokens ?? palmyraMaxOutputTokens(request.model),
       temperature: request.temperature ?? 0,

@@ -74,7 +74,7 @@ describe('Palmyra as a conversation provider', () => {
     database.close();
   });
 
-  it('retains the selected X6 model label when the harness recovers a response', async () => {
+  it('normalizes a legacy X6 conversation to the supported X5 model', async () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
     const conversation = repository.createConversation('Palmyra X6 recovery', null);
@@ -87,7 +87,8 @@ describe('Palmyra as a conversation provider', () => {
       expect(repository.getSharedMessageById(reply.id)).toMatchObject({
         status: 'completed',
         body: 'Recovered after inspecting the available evidence.',
-        model: 'palmyra-x6',
+        model: 'palmyra-x5',
+        executionProfile: 'palmyra-x5',
       });
     });
     database.close();

@@ -2896,13 +2896,13 @@ describe('self-assigned ownership', () => {
     expect(within(document.querySelector('.assignee-picker')!).getByRole('button', { name: /claude/i }).hasAttribute('disabled')).toBe(false);
   });
 
-  it('offers Palmyra ownership and X5/X6 execution without a CLI account profile', async () => {
+  it('offers Palmyra ownership and supported X5 execution without a CLI account profile', async () => {
     const fetchMock = renderDetail(['palmyra']);
 
     const owners = (await screen.findByText('Owners')).parentElement!.querySelector('.assignee-picker') as HTMLElement;
     expect(within(owners).getByRole('button', { name: /palmyra/i })).toHaveClass('selected');
     const model = screen.getByLabelText('Model choice') as HTMLSelectElement;
-    expect(Array.from(model.options).map((option) => option.value)).toEqual(['palmyra-x5', 'palmyra-x6']);
+    expect(Array.from(model.options).map((option) => option.value)).toEqual(['palmyra-x5']);
     expect(screen.queryByLabelText('Account profile')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Edit profile' })).toBeNull();
     const execute = screen.getByRole('button', { name: 'Execute task' });

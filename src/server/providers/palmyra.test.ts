@@ -5,6 +5,7 @@ import {
   isPalmyraConfigured,
   palmyraMaxOutputTokens,
   palmyraModel,
+  supportedPalmyraModel,
   streamChatWithPalmyra,
   type PalmyraTool,
   type PalmyraToolCall,
@@ -52,13 +53,14 @@ describe('palmyra client', () => {
     });
   });
 
-  it('honors the model override', async () => {
+  it('normalizes the removed X6 model to the supported X5 model', async () => {
     process.env.WORKBENCH_PALMYRA_MODEL = 'palmyra-x6';
     const stub = stubFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }));
-    await completeWithPalmyra({ messages: [{ role: 'user', content: 'hi' }] }, stub.fetch);
+    await chatWithPalmyra({ model: 'palmyra-x6', messages: [{ role: 'user', content: 'hi' }] }, stub.fetch);
 
-    expect(palmyraModel()).toBe('palmyra-x6');
-    expect(JSON.parse(String(stub.calls[0].init.body)).model).toBe('palmyra-x6');
+    expect(palmyraModel()).toBe('palmyra-x5');
+    expect(supportedPalmyraModel('palmyra-x6')).toBe('palmyra-x5');
+    expect(JSON.parse(String(stub.calls[0].init.body)).model).toBe('palmyra-x5');
   });
 
   it('sends custom tools and decodes Writer tool calls with usage', async () => {
