@@ -19,7 +19,6 @@ import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutRea
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
-import { withPalmyraCompanion } from './palmyra-companion.js';
 import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
@@ -1180,12 +1179,9 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
       : Promise.resolve([]),
   };
   const resolvedAgents = resolveAgents(taskKind, queued.dispatchTarget);
-  const visibleAgents = queued.dispatchTarget === 'auto'
+  const agents = queued.dispatchTarget === 'auto'
     ? [repository.selectBalancedAgent(resolvedAgents[0])]
     : resolvedAgents;
-  // Palmyra is Jeffrey's no-cost background companion. Direct Palmyra turns
-  // stay single-agent; every other conversation execution runs it in parallel.
-  const agents = withPalmyraCompanion(visibleAgents);
   if (linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled' && linkedItem.status !== 'pinned') {
     repository.update(linkedItem.id, { status: 'in_progress' }, false, { actor: 'jeffrey', source: 'shared_room' });
     const attachmentText = queued.message.attachments.length ? ` · ${queued.message.attachments.length} attachment${queued.message.attachments.length === 1 ? '' : 's'}` : '';
@@ -1794,7 +1790,7 @@ export async function interjectQueuedSharedMessage(
   const message = repository.promoteQueuedSharedMessage(messageId);
   if (!message) return null;
   const targets = message.dispatchTarget === 'both'
-    ? ['codex', 'claude', 'palmyra']
+    ? ['codex', 'claude']
     : message.dispatchTarget === 'auto'
       ? ['codex', 'claude', 'palmyra']
       : [message.dispatchTarget];
@@ -1861,7 +1857,7 @@ export async function deliverPendingSharedInterjections(
   }
 }
 
-export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): { prompt: string; requestId: string; codex: SharedMessage; claude: SharedMessage; palmyra?: SharedMessage; verbose: boolean } | null {
+export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): { prompt: string; requestId: string; codex: SharedMessage; claude: SharedMessage; verbose: boolean } | null {
   const messages = repository.listAllSharedMessages(conversationId);
   const reply = messages.find((message) => message.id === replyId);
   // A timestamp is not an identity. Multiple messages can share a timestamp,
@@ -1870,15 +1866,14 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
     ? messages.find((message) => message.id === reply.dispatchGroupId && message.author === 'jeffrey' && message.dispatchTarget === 'both')
     : null;
   if (!request) return null;
-  const replies = messages.filter((message) => message.dispatchGroupId === request.id && (message.author === 'codex' || message.author === 'claude' || message.author === 'palmyra'));
+  const replies = messages.filter((message) => message.dispatchGroupId === request.id && (message.author === 'codex' || message.author === 'claude'));
   const requestedAgentFor = (message: SharedMessage) => repository.getRunByMessage(message.id)?.requestedAgent ?? message.author;
   const codex = [...replies].reverse().find((message) => requestedAgentFor(message) === 'codex');
   const claude = [...replies].reverse().find((message) => requestedAgentFor(message) === 'claude');
-  const palmyra = [...replies].reverse().find((message) => requestedAgentFor(message) === 'palmyra');
   const terminal = (message: SharedMessage) => message.status === 'completed' || message.status === 'failed' || message.status === 'canceled';
   // A partial result still needs a durable conclusion. Only an explicitly
   // canceled pair avoids spending another provider turn on a summary.
-  if (!codex || !claude || !terminal(codex) || !terminal(claude) || (palmyra && !terminal(palmyra)) || (codex.status === 'canceled' && claude.status === 'canceled' && (!palmyra || palmyra.status === 'canceled'))) return null;
+  if (!codex || !claude || !terminal(codex) || !terminal(claude) || (codex.status === 'canceled' && claude.status === 'canceled')) return null;
   const alreadySynthesized = messages.some((message) => message.id !== ignoredSynthesisMessageId && message.author === 'system' && message.dispatchGroupId === request.id && message.body.startsWith('Synthesis:'));
   if (alreadySynthesized) return null;
   // Synthesis is a bounded reading task. Agent reports can contain huge live
@@ -1886,16 +1881,15 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   // into an expensive long-context provider turn.
   const response = (label: string, message: SharedMessage) => `${label} (${message.status}):\n${(message.body || message.error || 'No response was produced.').slice(0, 12_000)}`;
   return {
-    requestId: request.id, codex, claude, ...(palmyra ? { palmyra } : {}), verbose: verboseResponseRequested(request.body),
-    prompt: `${EXTERNAL_ACTION_CONTRACT}\n\nWrite a concise synthesis of the supplied agent responses below. You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nJeffrey: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}${palmyra ? `\n\n${response('Palmyra background response', palmyra)}` : ''}`,
+    requestId: request.id, codex, claude, verbose: verboseResponseRequested(request.body),
+    prompt: `${EXTERNAL_ACTION_CONTRACT}\n\nWrite a concise synthesis of the two supplied agent responses below. You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nJeffrey: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
   };
 }
 
 async function synthesizeSharedTurn(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): Promise<boolean> {
   const source = synthesisSource(repository, conversationId, replyId, ignoredSynthesisMessageId);
   if (!source) return false;
-  const participants = source.palmyra ? 'Codex, Claude, and Palmyra' : 'Codex and Claude';
-  const message = repository.createSharedMessage('system', `Synthesis: combining ${participants}…`, 'running', conversationId, [], 'none', null, null, source.requestId);
+  const message = repository.createSharedMessage('system', 'Synthesis: combining Codex and Claude…', 'running', conversationId, [], 'none', null, null, source.requestId);
   // A synthesis is never implementation or research. Keep its cost and
   // latency independent of words (for example "migration") in the reports.
   const agent: AgentRun['agent'] = 'claude';

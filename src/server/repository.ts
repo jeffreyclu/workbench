@@ -27,7 +27,6 @@ import { WorkItemService } from './services/work-item-service.js';
 import { ConversationService } from './services/conversation-service.js';
 import { ShortTermMemoryStore } from './short-term-memory.js';
 import { normalizeLabels, providerSyncFields, providerValues, sameProviderValue, type ProviderFieldValue, type ProviderSnapshotRow, type ProviderSnapshotValues } from './repositories/provider-sync-support.js';
-import { withPalmyraCompanion } from './palmyra-companion.js';
 
 export type { ProviderWorkItem } from './services/provider-sync-service.js';
 
@@ -892,9 +891,8 @@ export class WorkItemRepository {
     for (const row of rows) {
       if (!['auto', 'codex', 'claude', 'palmyra', 'both'].includes(row.dispatch_target)) continue;
       const dispatchTarget = row.dispatch_target as 'auto' | 'codex' | 'claude' | 'palmyra' | 'both';
-      const primaryAgents = dispatchTarget === 'both' ? ['codex', 'claude'] as const
+      const agents = dispatchTarget === 'both' ? ['codex', 'claude'] as const
         : dispatchTarget === 'auto' ? [this.selectBalancedAgent('codex')] : [dispatchTarget];
-      const agents = withPalmyraCompanion([...primaryAgents]);
       if (agents.some((agent) => busyAgents.has(agent))) continue;
       const message = this.getSharedMessageById(row.id);
       if (message) return { message, dispatchTarget };

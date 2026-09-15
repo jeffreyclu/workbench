@@ -1381,16 +1381,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .reply-group-columns { display: flex; gap: 10px; width: 100%; align-items: flex-start; }
 .reply-group-columns .thread-virtual-row.reply-group-message { position: static; flex: 1 1 0; min-width: 0; padding-bottom: 0; }
 .reply-group-columns .shared-message { display: flex; flex-direction: column; }
-.palmyra-companion { width: min(94%, 640px); border: 1px solid #30352a; border-radius: 8px; background: #10120e; }
-.palmyra-companion > summary { display: flex; align-items: center; gap: 7px; padding: 8px 11px; color: #989f86; cursor: pointer; list-style: none; font: 9px 'DM Mono'; letter-spacing: .04em; }
-.palmyra-companion > summary::-webkit-details-marker { display: none; }
-.palmyra-companion > summary::before { content: ''; width: 5px; height: 5px; border-right: 1px solid #879461; border-bottom: 1px solid #879461; transform: rotate(-45deg); transition: transform var(--motion-fast) var(--motion-ease); }
-.palmyra-companion[open] > summary::before { transform: rotate(45deg); }
-.palmyra-companion > summary span { margin-right: auto; }
-.palmyra-companion > summary small { color: #6e755f; }
-.palmyra-companion-content { padding: 0 8px 8px; }
-.palmyra-companion-content .thread-virtual-row { padding-bottom: 0; }
-.palmyra-companion-content .shared-message { width: 100%; }
 .shared-thread > .completion-prompt, .shared-thread > .preview-approval, .shared-thread > .chat-plan, .shared-thread > .finding-progress, .shared-thread > .list-state { margin-top: 10px; }
 .conversation-cache-warning { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 10px; padding: 9px 11px; color: #d8c77d; background: #241f12; border: 1px solid #5a4b20; border-radius: 8px; font: 10px/1.45 'DM Mono'; }
 .conversation-cache-warning svg { flex: 0 0 auto; margin-top: 1px; color: #e0bd48; }

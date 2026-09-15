@@ -24,7 +24,6 @@ describe('WorkbenchAdminService.dispatchConversationTurn', () => {
   });
 
   afterEach(() => {
-    delete process.env.WORKBENCH_TEST_PALMYRA_COMPANION;
     database.close();
   });
 
@@ -66,7 +65,6 @@ describe('WorkbenchAdminService.startWorkItemExecution', () => {
   });
 
   afterEach(() => {
-    delete process.env.WORKBENCH_TEST_PALMYRA_COMPANION;
     database.close();
   });
 
@@ -95,23 +93,5 @@ describe('WorkbenchAdminService.startWorkItemExecution', () => {
     expect(repository.listRuns(task.id)).toEqual([
       expect.objectContaining({ agent: 'codex', requestedTarget: 'auto' }),
     ]);
-  });
-
-  it('runs Palmyra beside a task execution and groups it under the request', async () => {
-    process.env.WORKBENCH_TEST_PALMYRA_COMPANION = 'true';
-    const task = repository.create({ title: 'Fix automatic task with Palmyra', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.setClassification(task.id, { kind: 'execute', agent: 'codex', complex: false, instructions: '' });
-
-    await admin.startWorkItemExecution(task.id, { executionProfile: null, force: false });
-
-    expect(repository.listRuns(task.id).map((run) => run.agent)).toEqual(['codex', 'palmyra']);
-    const messages = repository.listAllSharedMessages(repository.listConversationsForWorkItem(task.id)[0].id);
-    const request = messages.find((message) => message.author === 'system' && message.body.startsWith('Execute:'));
-    expect(request?.dispatchTarget).toBe('codex');
-    expect(messages.filter((message) => message.author === 'codex' || message.author === 'palmyra'))
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ author: 'codex', dispatchGroupId: request?.id }),
-        expect.objectContaining({ author: 'palmyra', dispatchGroupId: request?.id }),
-      ]));
   });
 });

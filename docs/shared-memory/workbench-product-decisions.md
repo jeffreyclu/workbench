@@ -1209,13 +1209,10 @@ limits required by the Writer API are still valid protocol constraints; they
 must be sourced from the API rather than guessed or derived from Claude/Codex
 subscription budgeting.
 
-*Expanded by Jeffrey, 2026-09-15.* Every conversation or task execution
-addressed to Codex, Claude, Auto, or Both also runs Palmyra in parallel.
-Palmyra-only turns remain direct. The companion reply is collapsed by default
-in the conversation and can be opened on demand. A Both turn waits for Codex,
-Claude, and Palmyra, then produces one grouped synthesis from all three results.
-Palmyra usage is recorded as zero dollars for Jeffrey's Writer-employee
-environment.
+*Decision changed by Jeffrey, 2026-09-15.* Palmyra does not run automatically
+beside Codex, Claude, Auto, or Both. It runs only when Jeffrey explicitly
+selects Palmyra. The Writer-employee zero-dollar accounting rule remains in
+force for those direct Palmyra turns.
 
 ### Palmyra live activity is replaced by a synthesized final answer
 
