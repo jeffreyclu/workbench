@@ -1457,6 +1457,13 @@ is rejected. Workbench recovers the same tracked turn once with the existing
 capability; a repeated unsupported denial fails inside the harness instead of
 being delivered to Jeffrey as a blocker.
 
+Writer's test guard evaluates commands by the executable at each shell-command
+boundary. Merely inspecting or mentioning `node_modules/.bin/vitest`—for
+example with `ls`, `find`, or `cat`—is not a test invocation and must never be
+labeled or blocked as a full-suite run. An actual unscoped runner remains
+blocked, while a runner given an explicit `.test.*` or `.spec.*` file remains
+allowed.
+
 ### The code relationship map is a zoomable domain map (2026-09-11)
 
 *Decision from Jeffrey.* Node area reflects the amount of changed code in the

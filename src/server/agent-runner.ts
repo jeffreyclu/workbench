@@ -193,13 +193,20 @@ export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountPr
 
 const WRITER_TEST_FILE_ARGUMENT = /(?:^|\/)[^\s/]+\.(?:test|spec)\.[cm]?[jt]sx?(?=$|\s)/i;
 
+function shellCommandSegments(command: string): string[] {
+  return command.replace(/\\\n/g, ' ').split(/(?:&&|\|\||;|\n|(?<!\|)\|(?!\|))/).map((segment) => segment.trim()).filter(Boolean);
+}
+
+const COMMAND_PREFIX = String.raw`(?:(?:env|command|time)\s+)*(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+)\s+)*`;
+const DIRECT_TEST_RUNNER = new RegExp(`^${COMMAND_PREFIX}(?:node\\s+)?[^\\s]*\\/(?:[^\\s]*\\/)*(?:vitest|jest)(?:\\.m?js)?(?:\\s|$)`, 'i');
+const NAMED_TEST_RUNNER = new RegExp(`^${COMMAND_PREFIX}(?:npx\\s+(?:--\\S+\\s+)*(?:vitest|jest)|(?:vitest|jest)(?:\\.m?js)?)(?:\\s|$)`, 'i');
+const PACKAGE_TEST_RUNNER = new RegExp(`^${COMMAND_PREFIX}(?:npm|pnpm|yarn)\\b[^;&|]*(?:\\btest(?::[\\w-]+)?\\b|\\brun\\s+test(?::[\\w-]+)?\\b)`, 'i');
+
 /** PATH shims cover normal launchers; this catches direct binary bypasses in provider shell events. */
 export function blockedWriterTestSuiteCommand(command: string): boolean {
   const normalized = command.replace(/\\\n/g, ' ').replace(/\s+/g, ' ').trim();
   if (!normalized || WRITER_TEST_FILE_ARGUMENT.test(normalized)) return false;
-  const runsPackageSuite = /\b(?:npm|pnpm|yarn)\b[^\n;&|]*(?:\btest(?::[\w-]+)?\b|\brun\s+test(?::[\w-]+)?\b)/i.test(normalized);
-  const runsTestRunner = /(?:^|[\s;&|])(?:npx\s+(?:--\S+\s+)*(?:vitest|jest)|(?:\S*\/)?(?:vitest|jest)(?:\.m?js)?)(?:\s|$)/i.test(normalized);
-  return runsPackageSuite || runsTestRunner;
+  return shellCommandSegments(normalized).some((segment) => PACKAGE_TEST_RUNNER.test(segment) || NAMED_TEST_RUNNER.test(segment) || DIRECT_TEST_RUNNER.test(segment));
 }
 
 /**
@@ -214,7 +221,7 @@ export function blockedWriterTestSuiteCommand(command: string): boolean {
  */
 export function bypassesWriterTestCommandGuard(command: string): boolean {
   const normalized = command.replace(/\\\n/g, ' ').replace(/\s+/g, ' ').trim();
-  return /(?:^|[\s;&|])(?:node\s+)?[^\s;&|]*\/(?:[^\s;&|]*\/)*(?:vitest|jest)(?:\.m?js)?(?:\s|$)/i.test(normalized);
+  return shellCommandSegments(normalized).some((segment) => DIRECT_TEST_RUNNER.test(segment));
 }
 
 /** Worktree dependencies are runtime-provisioned; a bootstrap install is never an agent task. */

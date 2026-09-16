@@ -24,9 +24,13 @@ describe('Writer agent test command guard', () => {
     expect(blockedWriterTestSuiteCommand('node node_modules/vitest/vitest.mjs run')).toBe(true);
     expect(blockedWriterTestSuiteCommand('pnpm --filter frontend test:unit')).toBe(true);
     expect(blockedWriterTestSuiteCommand('node_modules/.bin/vitest run src/components/feature.test.ts')).toBe(false);
+    expect(blockedWriterTestSuiteCommand('ls -la node_modules/.bin/vitest 2>&1 | head -3')).toBe(false);
+    expect(blockedWriterTestSuiteCommand('find . -path node_modules/.bin/vitest -print')).toBe(false);
     expect(bypassesWriterTestCommandGuard('npx vitest run')).toBe(false);
     expect(bypassesWriterTestCommandGuard('node node_modules/vitest/vitest.mjs run')).toBe(true);
     expect(bypassesWriterTestCommandGuard('/repo/node_modules/.bin/vitest run')).toBe(true);
+    expect(bypassesWriterTestCommandGuard('ls -la node_modules/.bin/vitest 2>&1 | head -3')).toBe(false);
+    expect(bypassesWriterTestCommandGuard('cd /private/tmp/con403-worktree && ls -la node_modules/.bin/vitest')).toBe(false);
   });
 
   it('scopes the executable test guard to the shell current working directory', () => {
