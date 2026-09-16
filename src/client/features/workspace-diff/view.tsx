@@ -694,23 +694,28 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
 
   return <section className="workspace-diff" aria-label={isPullRequestSource ? 'Pull request changes' : 'Current workspace changes'}>
     <header>
-      {isPullRequestSource
-        ? <div><span className="workspace-diff-eyebrow"><GitPullRequest size={14} /> {pullRequest ? `${pullRequest.repository} #${pullRequest.number}` : selectedPullRequestUrl ? pullRequestLabel(selectedPullRequestUrl) : 'GitHub pull request'}</span><h2>{pullRequest?.title ?? 'Review pull-request decisions'}</h2><small>{displayedDiff?.branch}</small>{pullRequest && <p className="workspace-diff-pr-status">
-              <span className={`workspace-diff-pr-badge workspace-diff-pr-badge-${pullRequest.state}`}>{pullRequest.draft ? 'Draft' : pullRequest.state === 'open' ? 'Open' : pullRequest.state === 'merged' ? 'Merged' : 'Closed'}</span>
-              {pullRequest.state === 'open' && pullRequest.mergeableState !== 'unknown' && <span className="workspace-diff-pr-mergeable">{pullRequest.mergeableState}</span>}
-              {pullRequest.reviewDecision && <span className={`workspace-diff-pr-review-decision workspace-diff-pr-review-decision-${pullRequest.reviewDecision}`}>{pullRequest.reviewDecision === 'approved' ? 'Approved' : pullRequest.reviewDecision === 'changes_requested' ? 'Changes requested' : 'Review required'}</span>}
-              {pullRequest.comments?.available
-                ? <span className="workspace-diff-pr-comments">{pullRequest.comments.total} review comment{pullRequest.comments.total === 1 ? '' : 's'}{pullRequest.comments.partial ? ' (partial)' : ''}</span>
-                : <span className="workspace-diff-pr-comments muted">Comments unavailable</span>}
-            </p>}<p>Review behavior decisions in priority order for this pull-request revision. Decisions are recorded against its head commit, so new commits return their hunks to review.</p>{selectedPullRequestUrl && <small className="workspace-diff-provenance"><a href={selectedPullRequestUrl} target="_blank" rel="noreferrer">Open on GitHub <ExternalLink size={13} /></a></small>}</div>
-        : isBranchSource ? <div><span className="workspace-diff-eyebrow"><GitBranch size={14} /> Branch</span><h2>{selectedBranchName || 'Review a branch'}</h2><div className="workspace-diff-record-metadata"><small>{selectedBranchName ? `${selectedBranchName}${baseBranch ? ` → ${baseBranch}` : ''}` : 'No branch selected'}</small><span>{baseBranch ? `Everything this branch adds since ${baseBranch}, including work already committed.` : 'Everything this branch adds since its base, including work already committed.'}</span></div></div>
-        : isRepositorySource ? <div><span className="workspace-diff-eyebrow"><GitCommitHorizontal size={14} /> Repository</span><h2>Commit</h2><div className="workspace-diff-record-metadata"><small>{selectedCommit ? `${selectedCommit.shortSha} · ${selectedCommit.title}` : displayedDiff?.branch ?? 'No commit selected'}</small><span>This commit, compared against the one before it.</span></div></div>
-        : <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Workspace review'}</span>{selectedSnapshot && <><h2>Workspace review record</h2><div className="workspace-diff-record-metadata"><small>{displayedDiff?.branch}</small><span>Captured {new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved in the history.</span><small>{selectedSnapshot.originatingAgentRunId ? `Agent run ${selectedSnapshot.originatingAgentRunId}` : 'No originating agent run recorded'}{selectedSnapshot.commitHash ? ` · Commit ${selectedSnapshot.commitHash.slice(0, 12)}` : ' · No commit recorded'}</small></div></>}</div>}
-      <div className="workspace-diff-actions">
-        <button className="workspace-diff-browse" type="button" aria-expanded={isSourceBrowserOpen} onClick={() => setIsSourceBrowserOpen((open) => !open)}><FolderSearch size={13} />Browse other changes</button>
-        <AiProviderSelect value={aiProvider} onChange={setAiProvider} ariaLabel="AI provider for diff scoring and delegated review" />
-        {!isPullRequestSource && <button className="workspace-diff-handoff" type="button" onClick={() => setIsHandoffOpen(true)}><ClipboardCheck size={14} />Agentic handoff</button>}
-        <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
+      <div className="workspace-diff-topbar">
+        <div className="workspace-diff-identity">
+          {isPullRequestSource
+            ? <><span className="workspace-diff-eyebrow"><GitPullRequest size={14} /> {pullRequest ? `${pullRequest.repository} #${pullRequest.number}` : selectedPullRequestUrl ? pullRequestLabel(selectedPullRequestUrl) : 'GitHub pull request'}</span><h2>{pullRequest?.title ?? 'Review pull-request decisions'}</h2><small>{displayedDiff?.branch}</small>{pullRequest && <p className="workspace-diff-pr-status">
+                  <span className={`workspace-diff-pr-badge workspace-diff-pr-badge-${pullRequest.state}`}>{pullRequest.draft ? 'Draft' : pullRequest.state === 'open' ? 'Open' : pullRequest.state === 'merged' ? 'Merged' : 'Closed'}</span>
+                  {pullRequest.state === 'open' && pullRequest.mergeableState !== 'unknown' && <span className="workspace-diff-pr-mergeable">{pullRequest.mergeableState}</span>}
+                  {pullRequest.reviewDecision && <span className={`workspace-diff-pr-review-decision workspace-diff-pr-review-decision-${pullRequest.reviewDecision}`}>{pullRequest.reviewDecision === 'approved' ? 'Approved' : pullRequest.reviewDecision === 'changes_requested' ? 'Changes requested' : 'Review required'}</span>}
+                  {pullRequest.comments?.available
+                    ? <span className="workspace-diff-pr-comments">{pullRequest.comments.total} review comment{pullRequest.comments.total === 1 ? '' : 's'}{pullRequest.comments.partial ? ' (partial)' : ''}</span>
+                    : <span className="workspace-diff-pr-comments muted">Comments unavailable</span>}
+                </p>}<p>Review behavior decisions in priority order for this pull-request revision. Decisions are recorded against its head commit, so new commits return their hunks to review.</p>{selectedPullRequestUrl && <small className="workspace-diff-provenance"><a href={selectedPullRequestUrl} target="_blank" rel="noreferrer">Open on GitHub <ExternalLink size={13} /></a></small>}</>
+            : isBranchSource ? <><span className="workspace-diff-eyebrow"><GitBranch size={14} /> Branch</span><h2>{selectedBranchName || 'Review a branch'}</h2><div className="workspace-diff-record-metadata"><small>{selectedBranchName ? `${selectedBranchName}${baseBranch ? ` → ${baseBranch}` : ''}` : 'No branch selected'}</small><span>{baseBranch ? `Everything this branch adds since ${baseBranch}, including work already committed.` : 'Everything this branch adds since its base, including work already committed.'}</span></div></>
+              : isRepositorySource ? <><span className="workspace-diff-eyebrow"><GitCommitHorizontal size={14} /> Repository</span><h2>Commit</h2><div className="workspace-diff-record-metadata"><small>{selectedCommit ? `${selectedCommit.shortSha} · ${selectedCommit.title}` : displayedDiff?.branch ?? 'No commit selected'}</small><span>This commit, compared against the one before it.</span></div></>
+                : selectedSnapshot ? <><h2>Workspace review record</h2><div className="workspace-diff-record-metadata"><small>{displayedDiff?.branch}</small><span>Captured {new Date(selectedSnapshot.capturedAt).toLocaleString()}</span><small title={selectedSnapshot.originatingAgentRunId ?? undefined}>{selectedSnapshot.originatingAgentRunId ? `Run ${selectedSnapshot.originatingAgentRunId.slice(0, 8)}` : 'No run recorded'}{selectedSnapshot.commitHash ? ` · Commit ${selectedSnapshot.commitHash.slice(0, 12)}` : ' · No commit recorded'}</small></div></>
+                  : <span className="workspace-diff-eyebrow"><FileDiff size={14} /> Workspace review</span>}
+        </div>
+        <div className="workspace-diff-actions">
+          <button className="workspace-diff-browse" type="button" aria-expanded={isSourceBrowserOpen} onClick={() => setIsSourceBrowserOpen((open) => !open)}><FolderSearch size={13} />Browse other changes</button>
+          <AiProviderSelect value={aiProvider} onChange={setAiProvider} ariaLabel="AI provider for diff scoring and delegated review" />
+          {!isPullRequestSource && <button className="workspace-diff-handoff" type="button" onClick={() => setIsHandoffOpen(true)}><ClipboardCheck size={14} />Agentic handoff</button>}
+          <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
+        </div>
       </div>
       {relevantWorkspaces.length > 1 && <nav className="workspace-conversation-repositories" aria-label="Conversation repositories">
         <span>Repositories</span>
@@ -718,7 +723,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       </nav>}
       {conversationSources.length > 0
         ? <nav className="workspace-conversation-sources" aria-label="Conversation change sets">
-            <span>Conversation changes</span>
             {conversationSources.map((source) => <button key={source.value} type="button" aria-current={source.value === primarySourceValue ? 'true' : undefined} onClick={() => selectConversationSource(source.value)}>{source.label}</button>)}
           </nav>
         : <p className="muted">This conversation produced no changes.</p>}

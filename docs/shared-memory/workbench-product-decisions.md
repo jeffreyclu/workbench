@@ -1147,6 +1147,10 @@ record**, the metadata immediately beneath the title—branch, capture status,
 and run/commit provenance—is exactly one compact row. Do not confuse this
 with agent-branch decision rows or hide it behind a disclosure. On a narrow
 viewport it may wrap safely rather than overflow.
+The identity and actions share one top row when space allows. The provenance is
+short—not prose—and the conversation change sets use a quiet segmented strip;
+the selected source must not become a full-width neon banner. All header
+actions share the same compact control language rather than browser defaults.
 
 Update 2026-08-26: Option 2 design resolved (Jeffrey delegated: "you decide
 what's best"). The pool serves ONLY the ephemeral/one-shot lane (research,

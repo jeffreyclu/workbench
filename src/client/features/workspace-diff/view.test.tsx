@@ -273,8 +273,9 @@ describe('WorkspaceDiffView decision queue', () => {
     const metadata = document.querySelector('.workspace-diff-record-metadata');
     expect(metadata).toHaveTextContent('review');
     expect(metadata).toHaveTextContent('Captured');
-    expect(metadata).toHaveTextContent('Agent run run-1 · Commit abcdef123456');
+    expect(metadata).toHaveTextContent('Run run-1 · Commit abcdef123456');
     expect(metadata?.children).toHaveLength(3);
+    expect(document.querySelector('.workspace-diff-topbar')).toContainElement(screen.getByRole('button', { name: 'Browse other changes' }));
     expect(screen.getByLabelText('Full diff for src/recovered.ts')).toBeInTheDocument();
     expect(screen.queryByText('No uncommitted changes to review.')).toBeNull();
   });
@@ -594,7 +595,7 @@ describe('WorkspaceDiffView decision queue', () => {
 
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'review · saved · 1 file' })).toHaveAttribute('aria-current', 'true');
-    expect(screen.getByText(/Agent run run-123/)).toBeInTheDocument();
+    expect(screen.getByText(/Run run-123/)).toBeInTheDocument();
     expect(selectedDecisionChip()).toHaveAccessibleName(/Adds behavior in src\/preserved\.ts\./);
   });
 });
