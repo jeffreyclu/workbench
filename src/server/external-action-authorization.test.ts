@@ -8,6 +8,7 @@ const authorizedCommands = [
   'force-push the branch',
   'delete the remote branch',
   'open a PR',
+  'open another draft pr',
   'update PR #15135 description',
   'approve the PR',
   'merge the pull request',
@@ -79,6 +80,15 @@ describe('external action authorization command catalog', () => {
     })).resolves.toEqual(expect.objectContaining({
       granted: true,
       operation: expect.stringMatching(/Create the requested Linear ticket.*create_linear_issue/),
+    }));
+  });
+
+  it('treats opening a draft PR as authorization for its required branch push', async () => {
+    await expect(classifyExternalActionAuthorization({
+      currentMessage: 'open another draft pr',
+    })).resolves.toEqual(expect.objectContaining({
+      granted: true,
+      operation: expect.stringMatching(/Push the named branch if needed and create or open the named pull request/),
     }));
   });
 

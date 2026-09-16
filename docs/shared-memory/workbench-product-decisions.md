@@ -1428,6 +1428,11 @@ resume. It must also wait for app-server to report the Workbench MCP server as
 loading gives the model a permanently incomplete tool catalog for that turn.
 MCP calls must be recorded as tool events in the conversation decision graph.
 
+An explicit command to create or open a pull request is also authorization to
+push the named branch required by that pull request. Natural forms such as
+“open another draft PR” are complete commands; agents must not demand a second
+push or PR-creation permission prompt.
+
 ### The code relationship map is a zoomable domain map (2026-09-11)
 
 *Decision from Jeffrey.* Node area reflects the amount of changed code in the
