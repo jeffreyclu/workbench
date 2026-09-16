@@ -1506,6 +1506,23 @@ describe('WorkItemRepository', () => {
     expect(repository.listPendingSynthesisReplies()).toEqual([]);
   });
 
+  it('never schedules recovery synthesis for archived conversations or archived tasks', () => {
+    const task = repository.create({ title: 'Archived task', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const taskConversation = repository.createConversation('Archived task conversation', task.id);
+    const taskRequest = repository.createSharedMessage('system', 'Execute archived task', 'completed', taskConversation.id, [], 'both');
+    repository.createSharedMessage('codex', 'Codex result', 'completed', taskConversation.id, [], 'none', null, null, taskRequest.id);
+    repository.createSharedMessage('claude', 'Claude result', 'completed', taskConversation.id, [], 'none', null, null, taskRequest.id);
+    repository.archive(task.id, false);
+
+    const conversation = repository.createConversation('Archived conversation');
+    const request = repository.createSharedMessage('jeffrey', 'Archived dual request', 'completed', conversation.id, [], 'both');
+    repository.createSharedMessage('codex', 'Codex result', 'completed', conversation.id, [], 'none', null, null, request.id);
+    repository.createSharedMessage('claude', 'Claude result', 'completed', conversation.id, [], 'none', null, null, request.id);
+    repository.setConversationArchived(conversation.id, true);
+
+    expect(repository.listPendingSynthesisReplies()).toEqual([]);
+  });
+
   it('retrieves one shared memory snapshot for a dated repeat request before concurrent replies', async () => {
     const task = repository.create({ title: 'Connectors retrieval', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Concurrent retrieval', task.id);

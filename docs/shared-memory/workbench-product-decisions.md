@@ -1327,8 +1327,10 @@ task-execution paths. Every Codex-and-Claude pair belongs to one durable
 conversation dispatch group. Whenever either reply becomes terminal, the
 conversation supervisor checks the pair and creates exactly one system
 synthesis after both are terminal, including failed or canceled pairs. A
-durable recovery sweep must create any synthesis missed by a restart. No caller
-may decide independently whether synthesis runs.
+durable recovery sweep must create any synthesis missed by a restart, but it
+must never backfill an archived conversation or a conversation linked to an
+archived task. Archival is a hard stop for new agent work. No caller may decide
+independently whether synthesis runs.
 
 Code-review output must expose the work from every required pass. Each of the
 five pass sections contains its actual Blocking or Non-blocking findings with

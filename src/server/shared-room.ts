@@ -1929,6 +1929,9 @@ export async function superviseConversationAfterReply(repository: WorkItemReposi
   const reply = repository.getSharedMessageById(replyId);
   if (!reply || reply.conversationId !== conversationId) return false;
   if (!['codex', 'claude'].includes(reply.author) || !['completed', 'failed', 'canceled'].includes(reply.status)) return false;
+  const conversation = repository.getConversation(conversationId);
+  if (!conversation || conversation.archivedAt) return false;
+  if (conversation.workItemId && repository.get(conversation.workItemId)?.archivedAt) return false;
   return synthesizeSharedTurn(repository, conversationId, replyId);
 }
 

@@ -870,10 +870,14 @@ export class WorkItemRepository {
   listPendingSynthesisReplies(limit = 10): Array<{ conversationId: string; replyId: string }> {
     return (this.database.prepare(`SELECT request.conversation_id, MIN(reply.id) AS reply_id
       FROM shared_messages request
+      JOIN shared_conversations conversation ON conversation.id = request.conversation_id
+      LEFT JOIN work_items item ON item.id = conversation.work_item_id
       JOIN shared_messages reply ON reply.dispatch_group_id = request.id
       LEFT JOIN agent_runs run ON run.message_id = reply.id
       WHERE request.dispatch_target = 'both'
         AND request.author IN ('jeffrey', 'system')
+        AND conversation.archived_at IS NULL
+        AND (conversation.work_item_id IS NULL OR item.archived_at IS NULL)
         AND reply.author IN ('codex', 'claude')
         AND NOT EXISTS (
           SELECT 1 FROM shared_messages synthesis
