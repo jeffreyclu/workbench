@@ -1135,6 +1135,13 @@ branches, commits, and old versions behind a secondary **Browse other changes**
 control. A browser-local source choice from an earlier visit must not override
 the conversation-owned defaults on reopen.
 
+A checked-out branch is not conversation evidence by itself. A read-only or
+strategy conversation with no working-tree diff, recorded snapshot, or linked
+pull request must say that it produced no changes; its pre-existing branch stays
+under **Browse other changes**. Branch comparisons use the current
+remote-tracking default branch when it exists, while keeping the short branch
+name in the UI, so a stale local `main` cannot inflate the commit count or diff.
+
 *Clarification from Jeffrey, 2026-08-28.* In a recorded **Workspace review
 record**, the metadata immediately beneath the title—branch, capture status,
 and run/commit provenance—is exactly one compact row. Do not confuse this

@@ -338,6 +338,28 @@ describe('branch and worktree review sources', () => {
     expect(refs.worktrees).toEqual([{ path: expect.any(String), branch: 'main', current: true }]);
   });
 
+  it('compares branches with origin main when the local main branch is stale', async () => {
+    const workspace = repositoryWithBase();
+    const staleMain = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workspace, encoding: 'utf8' }).trim();
+    writeFileSync(join(workspace, 'base.ts'), 'const base = 1;\n');
+    execFileSync('git', ['add', 'base.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'remote base moved'], { cwd: workspace });
+    execFileSync('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], { cwd: workspace });
+    execFileSync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: workspace });
+    execFileSync('git', ['reset', '--hard', '--quiet', staleMain], { cwd: workspace });
+    execFileSync('git', ['checkout', '--quiet', '-b', 'feature', 'origin/main'], { cwd: workspace });
+    writeFileSync(join(workspace, 'feature.ts'), 'const feature = 1;\n');
+    execFileSync('git', ['add', 'feature.ts'], { cwd: workspace });
+    execFileSync('git', ['commit', '--quiet', '-m', 'feature work'], { cwd: workspace });
+
+    const refs = await listWorkspaceRefs(workspace);
+    expect(refs.base).toBe('main');
+    expect(refs.branches.find((branch) => branch.name === 'feature')).toEqual({ name: 'feature', current: true, ahead: 1 });
+
+    const diff = await getWorkspaceBranchDiff(workspace, 'feature');
+    expect(diff.files.map((file) => file.path)).toEqual(['feature.ts']);
+  });
+
   it('diffs a branch against its merge base rather than against the current checkout', async () => {
     const workspace = repositoryWithBase();
     execFileSync('git', ['checkout', '--quiet', '-b', 'feature'], { cwd: workspace });

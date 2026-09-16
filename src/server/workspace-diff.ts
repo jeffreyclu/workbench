@@ -438,18 +438,26 @@ const BASE_BRANCH_CANDIDATES = ['main', 'master', 'trunk'];
  * stale branches must not turn the source list into a git storm. */
 const MAX_LISTED_BRANCHES = 50;
 
-/** What a branch is worth reviewing against. Prefers whatever origin calls its
- * default, because that is the branch the work will actually merge into. */
-async function defaultBaseBranch(repositoryPath: string): Promise<string | null> {
+interface BaseBranch {
+  /** Human-facing branch name. */
+  name: string;
+  /** Exact ref used for comparisons. This may be a remote-tracking ref. */
+  ref: string;
+}
+
+/** What a branch is worth reviewing against. Prefers origin's current default
+ * ref, because a stale local `main` can be hundreds of commits behind and is
+ * not the branch this work will actually merge into. */
+async function defaultBaseBranch(repositoryPath: string): Promise<BaseBranch | null> {
   try {
     const head = await gitOutput(repositoryPath, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
     const name = head.replace(/^origin\//, '');
-    if (name) return name;
+    if (name) return { name, ref: head };
   } catch { /* No origin, or origin/HEAD was never recorded locally. */ }
   for (const candidate of BASE_BRANCH_CANDIDATES) {
     try {
       await gitOutput(repositoryPath, ['rev-parse', '--verify', `${candidate}^{commit}`]);
-      return candidate;
+      return { name: candidate, ref: candidate };
     } catch { /* Try the next conventional name. */ }
   }
   return null;
@@ -485,17 +493,17 @@ export async function listWorkspaceRefs(workspacePath: string): Promise<Workspac
     gitOutput(repositoryPath, ['worktree', 'list', '--porcelain']),
   ]);
   const candidates = names.split('\n').map((line) => line.trim()).filter(Boolean)
-    .filter((name) => name !== base)
+    .filter((name) => name !== base?.name)
     .slice(0, MAX_LISTED_BRANCHES);
   const branches: WorkspaceBranchRef[] = await Promise.all(candidates.map(async (name) => {
     let ahead = 0;
     if (base) {
-      try { ahead = Number(await gitOutput(repositoryPath, ['rev-list', '--count', `${base}..${name}`])) || 0; }
+      try { ahead = Number(await gitOutput(repositoryPath, ['rev-list', '--count', `${base.ref}..${name}`])) || 0; }
       catch { /* Unrelated histories still list, they just cannot report a count. */ }
     }
     return { name, current: name === current, ahead };
   }));
-  return { base, branches, worktrees: parseWorktreeList(worktreeList, repositoryPath) };
+  return { base: base?.name ?? null, branches, worktrees: parseWorktreeList(worktreeList, repositoryPath) };
 }
 
 /** A branch's own work: everything it added since it left the base, which is
@@ -507,8 +515,8 @@ async function branchRange(repositoryPath: string, branchName: string): Promise<
   const tip = await gitOutput(repositoryPath, ['rev-parse', '--verify', `refs/heads/${branchName}^{commit}`]);
   const base = await defaultBaseBranch(repositoryPath);
   if (!base) throw new Error(`Could not determine a comparison base for ${branchName}. This repository has no default branch.`);
-  try { return { mergeBase: await gitOutput(repositoryPath, ['merge-base', base, tip]), tip }; }
-  catch { throw new Error(`${branchName} shares no history with ${base}, so there is nothing to compare.`); }
+  try { return { mergeBase: await gitOutput(repositoryPath, ['merge-base', base.ref, tip]), tip }; }
+  catch { throw new Error(`${branchName} shares no history with ${base.name}, so there is nothing to compare.`); }
 }
 
 export async function getWorkspaceBranchDiff(workspacePath: string, branchName: string): Promise<WorkspaceDiff> {

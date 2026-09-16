@@ -183,11 +183,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // so it feeds the one decision queue rather than a second review surface.
   const [selectedBranchName, setSelectedBranchName] = useState('');
   const isBranchSource = reviewSource === 'branch';
-  // Branches are read either because the reviewer asked for them, or because
-  // this checkout is clean and therefore has nothing else to offer. A dirty
-  // checkout never pays for the ref walk.
+  // A conversation's primary sources require evidence created by that
+  // conversation. Merely opening a clean checkout is not evidence, so branch
+  // enumeration stays behind Browse other changes there. Work-item-only views
+  // retain their branch fallback for already-committed task work.
   const workspaceIsClean = !query.isPending && (query.data?.diff?.changedFiles ?? 0) === 0;
-  const refsQuery = useWorkspaceRefs(isBranchSource || workspaceIsClean ? scope : null);
+  const refsQuery = useWorkspaceRefs(isBranchSource || (!conversationId && workspaceIsClean) ? scope : null);
   const branches = refsQuery.data?.refs?.branches ?? [];
   const baseBranch = refsQuery.data?.refs?.base ?? null;
   const branchQuery = useWorkspaceRefDiff(isBranchSource && selectedBranchName ? scope : null, selectedBranchName ? `branch:${selectedBranchName}` : null);
@@ -247,6 +248,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // deliberately goes back to Workspace is not dragged out of it again.
   const autoBranchedForPath = useRef<string | null>(null);
   useEffect(() => {
+    if (conversationId) return;
     const path = explorer.data?.selectedPath ?? null;
     if (!path || autoBranchedForPath.current === path) return;
     if (reviewSource !== 'workspace' || query.isPending || snapshotsQuery.isPending || !refsQuery.data?.refs) return;
@@ -256,7 +258,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     autoBranchedForPath.current = path;
     setSelectedBranchName(current.name);
     setReviewSource('branch');
-  }, [explorer.data?.selectedPath, reviewSource, query.isPending, snapshotsQuery.isPending, refsQuery.data, diff?.changedFiles, snapshots.length]);
+  }, [conversationId, explorer.data?.selectedPath, reviewSource, query.isPending, snapshotsQuery.isPending, refsQuery.data, diff?.changedFiles, snapshots.length]);
   // The branch shown defaults to the one this checkout actually has out: it is
   // the branch the reviewer switched repository to see.
   const currentBranchName = (branches.find((branch) => branch.current) ?? branches[0])?.name ?? '';
@@ -644,12 +646,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     ...latestSnapshotsByBranch
       .filter((snapshot) => !((diff?.changedFiles ?? 0) > 0 && snapshot.diff.branch === diff?.branch))
       .map((snapshot) => ({ value: `history:${snapshot.id}`, label: `${snapshot.diff.branch} · saved · ${snapshot.diff.changedFiles} file${snapshot.diff.changedFiles === 1 ? '' : 's'}` })),
-    ...(currentBranch?.ahead && !latestSnapshotsByBranch.some((snapshot) => snapshot.diff.branch === currentBranch.name) && !((diff?.changedFiles ?? 0) > 0 && diff?.branch === currentBranch.name)
+    ...(!conversationId && currentBranch?.ahead && !latestSnapshotsByBranch.some((snapshot) => snapshot.diff.branch === currentBranch.name) && !((diff?.changedFiles ?? 0) > 0 && diff?.branch === currentBranch.name)
       ? [{ value: `branch:${currentBranch.name}`, label: `${currentBranch.name} · ${currentBranch.ahead} commit${currentBranch.ahead === 1 ? '' : 's'}` }]
       : []),
     ...availablePullRequests.map((url) => ({ value: url, label: pullRequestLabel(url) })),
   ];
-  if (conversationSources.length === 0) conversationSources.push({ value: 'workspace', label: 'Current workspace' });
+  if (!conversationId && conversationSources.length === 0) conversationSources.push({ value: 'workspace', label: 'Current workspace' });
   const primarySourceValue = reviewSource === 'workspace' ? 'workspace'
     : reviewSource === 'history' && selectedSnapshot ? `history:${selectedSnapshot.id}`
       : isBranchSource && selectedBranchName ? `branch:${selectedBranchName}`
@@ -714,10 +716,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
         <span>Repositories</span>
         {relevantWorkspaces.map((workspace) => <button key={workspace.path} type="button" aria-current={workspace.path === explorer.data?.selectedPath ? 'true' : undefined} onClick={() => void selectWorkspaceContext(workspace.path)}>{workspace.label}</button>)}
       </nav>}
-      <nav className="workspace-conversation-sources" aria-label="Conversation change sets">
-        <span>Conversation changes</span>
-        {conversationSources.map((source) => <button key={source.value} type="button" aria-current={source.value === primarySourceValue ? 'true' : undefined} onClick={() => selectConversationSource(source.value)}>{source.label}</button>)}
-      </nav>
+      {conversationSources.length > 0
+        ? <nav className="workspace-conversation-sources" aria-label="Conversation change sets">
+            <span>Conversation changes</span>
+            {conversationSources.map((source) => <button key={source.value} type="button" aria-current={source.value === primarySourceValue ? 'true' : undefined} onClick={() => selectConversationSource(source.value)}>{source.label}</button>)}
+          </nav>
+        : <p className="muted">This conversation produced no changes.</p>}
       {isSourceBrowserOpen && <div className="workspace-diff-source-browser" aria-label="Other changes">
         <div className="workspace-review-source" role="group" aria-label="Review source">
           <button type="button" aria-pressed={reviewSource === 'workspace'} onClick={selectWorkspaceSource}><FileDiff size={13} />Workspace</button>

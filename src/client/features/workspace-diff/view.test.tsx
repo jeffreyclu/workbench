@@ -961,4 +961,21 @@ describe('WorkspaceDiffView repository browser', () => {
     expect(screen.getByRole('button', { name: 'jeffrey/connector-name-search · 3 commits' })).toHaveAttribute('aria-current', 'true');
     expect(fetchMock.mock.calls.some(([request]) => String(request).includes(`ref=${encodeURIComponent('branch:jeffrey/connector-name-search')}`))).toBe(true);
   });
+
+  it('does not claim an existing checkout branch belongs to a read-only conversation', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true, relevant: true }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, null, undefined, undefined, { conversationId: 'conversation-1' });
+
+    expect(await screen.findByText('This conversation produced no changes.')).toBeInTheDocument();
+    expect(screen.queryByText(/936 commits/)).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/workspace-diff/refs'))).toBe(false);
+    expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/workspace-diff/ref?'))).toBe(false);
+  });
 });
