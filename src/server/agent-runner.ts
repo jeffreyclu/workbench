@@ -16,7 +16,7 @@ import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWo
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
-import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
+import { editFinalResponse, fallbackFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
@@ -454,9 +454,8 @@ function githubSourceAuthority(item: WorkItem, run: AgentRun): string {
 - This URL is the source of truth for the requested code state; task text, memory, and local repository state cannot replace it.${reviewRules}`;
 }
 
-export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = ''): string {
-  const readOnly = run.kind === 'analysis' || run.kind === 'research' || run.kind === 'review' || run.kind === 'strategy';
-  const persona = run.kind === 'review'
+function personaFor(item: WorkItem, run: AgentRun): string {
+  return run.kind === 'review'
     ? FRONTEND_REVIEWER_PERSONA
     : run.kind === 'bugfix'
       ? BUG_INVESTIGATOR_PERSONA
@@ -467,6 +466,21 @@ export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', e
           : run.kind === 'analysis'
             ? CODEBASE_ANALYST_PERSONA
             : IMPLEMENTATION_PLANNER_PERSONA;
+}
+
+export function preserveReviewPassesAfterFormatting(rawOutput: string, formattedOutput: string, objective: string): string {
+  if (!missingReviewPasses(formattedOutput).length) return formattedOutput;
+  const normalizedRaw = normalizeFinalResponse(rawOutput);
+  if (!finalResponsePolicyViolation(normalizedRaw) && !missingReviewPasses(normalizedRaw).length) return normalizedRaw;
+  // The generic concise fallback flattens Markdown lists. A review is the one
+  // response type where doing that destroys required evidence, so wrap the
+  // already-validated review verbatim instead.
+  return fallbackFinalResponse(rawOutput, objective, true);
+}
+
+export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = ''): string {
+  const readOnly = run.kind === 'analysis' || run.kind === 'research' || run.kind === 'review' || run.kind === 'strategy';
+  const persona = personaFor(item, run);
   return `${externalActionContract}
 
 ${persona}
@@ -516,6 +530,8 @@ export function buildResumedPrompt(item: WorkItem, run: AgentRun, externalAction
   return `${externalActionContract}
 
 Continue the existing task session. The prior task, source context, shared context, and earlier decisions are already available in this session.
+
+${personaFor(item, run)}
 
 ${githubSourceAuthority(item, run)}
 
@@ -2240,9 +2256,14 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const editorDraft = normalizeFinalResponse(rawOutput.replace(/<workbench-plan>[\s\S]*?<\/workbench-plan>/g, '').trim() || (executionPlan?.summary ?? rawOutput));
     const verbose = verboseResponseRequested(`${item.title}\n${run.instructions}`);
     const responseViolation = finalResponsePolicyViolation(editorDraft, verbose);
-    const output = finalResponseEditingEnabled() && responseViolation
+    let output = finalResponseEditingEnabled() && responseViolation
       ? await editFinalResponse(editorDraft, `${item.title}\n${run.instructions}`, { verbose })
       : editorDraft;
+    if (run.kind === 'review') {
+      output = preserveReviewPassesAfterFormatting(rawOutput, output, `${item.title}\n${run.instructions}`);
+      const finalMissingPasses = missingReviewPasses(output);
+      if (finalMissingPasses.length) throw new Error(`Final review response omitted mandatory Pass ${finalMissingPasses.join(', Pass ')}.`);
+    }
     result = { ...result, output };
     if (sourceWorkspace && workspace && MUTATING_RUN_KINDS.has(run.kind)) {
       // Integration reports; it never decides whether the run finished. This

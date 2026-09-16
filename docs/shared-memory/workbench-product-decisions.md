@@ -1345,6 +1345,10 @@ pinned to the PR head. If GitHub access fails, the review fails explicitly inste
 of silently falling back to local code. A newer URL in Jeffrey's current instruction
 overrides older task metadata.
 
+The review contract applies again on every resumed turn. Final-response formatting
+may wrap a review in Problem, Solution, and Context, but it may never flatten,
+summarize, or remove the five pass sections after they have been validated.
+
 ### The knowledge graph is a derived SQLite index, never a second source of truth
 
 *Decision from Jeffrey, 2026-09-09.* Workbench's canonical task, project,

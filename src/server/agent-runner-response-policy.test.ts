@@ -45,4 +45,32 @@ describe('task-run final response supervision', () => {
     database.close();
     rmSync(directory, { recursive: true, force: true });
   });
+
+  it('never lets final-response formatting remove review passes', async () => {
+    process.env.WORKBENCH_TEST_FINAL_RESPONSE_POLICY = '1';
+    editFinalResponse.mockResolvedValue('## Problem\nReview the PR.\n\n## Solution\nFive comment drafts.\n\n## Context\nNo additional context.');
+    const review = [1, 2, 3, 4, 5].map((pass) => (
+      `### Pass ${pass}\n\n- **Non-blocking:** src/a.ts:${pass} has a concrete issue. Correct it.`
+    )).join('\n\n');
+    const { directory } = fakeAgentDirectory(
+      `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: review } })}'`,
+      'exit 1',
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Review PR 5371', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'review', 'codex', 'codex', 'Review the remote PR.');
+
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+
+    const output = repository.getRun(run.id)?.output ?? '';
+    expect(repository.getRun(run.id)?.status).toBe('completed');
+    expect(output).toContain('## Problem');
+    expect(output).toContain('## Solution');
+    expect(output).toContain('### Pass 1');
+    expect(output).toContain('### Pass 5');
+    expect(output).not.toContain('Five comment drafts.');
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
 });

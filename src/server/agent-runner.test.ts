@@ -1185,6 +1185,7 @@ fi`,
 
     expect(prompt).toContain('PR URL: https://github.com/acme/new/pull/2');
     expect(prompt).not.toContain('PR URL: https://github.com/acme/old/pull/1');
+    expect(prompt).toContain('Complete these five review passes separately and in this order');
   });
 
   it('detects incomplete five-pass reviews and requests a complete replacement', () => {
