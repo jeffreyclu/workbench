@@ -58,6 +58,7 @@ import { FollowUpArchiveDialog } from '../../components/dialogs/follow-up-archiv
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../lib/formatters';
 import { clearLastOpenedItem, clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../lib/preferences';
 import { QueueExplanationList } from '../../components/queue-explanations';
+import { OpticallyCenteredNumber } from '../../components/optically-centered-number';
 import { ProjectColorDot } from '../../components/project/project-color';
 import { InlineProjectEditor } from '../../components/project/project-field';
 import { useValuePulse } from '../../hooks/use-value-pulse';
@@ -86,9 +87,10 @@ function isEditableTarget(target: EventTarget | null) {
   return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName));
 }
 
-function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong' | 'span' }) {
+function PulseCount({ value, as: Tag = 'strong', centerGlyph = false }: { value: number; as?: 'strong' | 'span'; centerGlyph?: boolean }) {
   const pulse = useValuePulse(value);
-  return <Tag className={pulse}><span>{value}</span></Tag>;
+  const className = [pulse, centerGlyph ? 'optically-centered-count' : ''].filter(Boolean).join(' ');
+  return <Tag className={className}>{centerGlyph ? <OpticallyCenteredNumber value={value} /> : value}</Tag>;
 }
 
 export function App() {
@@ -643,7 +645,7 @@ export function App() {
           {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{taskSearch.trim() ? `No tasks match “${taskSearch.trim()}”.` : view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench-project tasks yet.' : 'No archived tasks.'}</div>}
           <div className="queue-rows">
             {renderedSections.map((section, sectionIndex) => <Fragment key={`section-${section.header?.id ?? sectionIndex}`}>
-              {section.header && <div key={section.header.id} className={`stack-header stack-header-${section.header.group}`}><span>{section.header.label}</span><PulseCount value={section.header.count} /></div>}
+              {section.header && <div key={section.header.id} className={`stack-header stack-header-${section.header.group}`}><span>{section.header.label}</span><PulseCount value={section.header.count} centerGlyph /></div>}
               <SortableContext items={(view === 'active' || view === 'workbench') && selectedIds.size === 0 ? section.items.filter(({ item }) => item.status !== 'in_progress').map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
                 {section.items.map((rendered) => <div key={rendered.id} className={`task-group-row task-group-${rendered.group} ${enteringTaskIds.has(rendered.item.id) ? 'is-entering' : ''} ${exitingTaskIds.has(rendered.item.id) ? 'is-exiting' : ''}`}><TaskQueueItem item={rendered.item} index={renderedItems.indexOf(rendered.item)} selected={selectedId === rendered.item.id} focused={(focusedId ?? renderedItems[0]?.id) === rendered.item.id} draggable={(view === 'active' || view === 'workbench') && rendered.item.status !== 'in_progress' && !items.isFetchingNextPage && selectedIds.size === 0} onSelect={() => selectTaskInStack(rendered.item.id)} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onFocus={() => setFocusedId(rendered.item.id)} onKeyDown={(event) => handleQueueKeyDown(event, rendered.item.id)} /></div>)}
               </SortableContext>

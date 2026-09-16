@@ -3,9 +3,10 @@
 ### Attention-stack badge numerals use optical centering
 
 *Correction from Jeffrey, 2026-09-16.* Center the visible numeral ink in each task-stack header
-badge, not only its CSS line box. `place-items: center` and `line-height: 1` can still leave DM Mono
-digits visibly low. Keep the badge itself unchanged and apply the optical offset to an inner numeral
-span scoped to `.queue-rows .stack-header`, so conversation headers and other count pills do not move.
+badge, not only its CSS line box. `place-items: center`, `line-height`, and a fixed transform are all
+font- and glyph-specific guesses. Keep the badge itself unchanged and use the rendered font's
+`actualBoundingBox*` metrics to center each number on both axes. Scope that measured renderer to task
+stack headers so conversation headers and other count pills do not change.
 
 ### Compact desktop navigation icons share one center axis
 
