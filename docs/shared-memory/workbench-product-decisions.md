@@ -1415,6 +1415,9 @@ An authorized external mutation starts a fresh provider session. This keeps
 the one-turn capability out of later session history and forces Codex/Claude
 to load the current Workbench MCP tool catalog before acting; a persisted
 thread created before a new mutation tool existed must never hide that tool.
+Codex connects to the loopback Workbench MCP without a bearer-token option;
+setting `bearer_token_env_var` to an empty string makes Codex drop every
+Workbench tool as unauthenticated.
 
 ### The code relationship map is a zoomable domain map (2026-09-11)
 

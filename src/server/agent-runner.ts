@@ -965,12 +965,12 @@ export type AgentInputSteering = ((body: string) => Promise<boolean>) & {
 /**
  * Keep Codex's Workbench MCP connection independent of the active account's
  * personal config. The loopback endpoint is trusted by Workbench's auth gate,
- * so clear any inherited bearer-token setting instead of exposing the host's
- * WORKBENCH_TOKEN to the agent subprocess.
+ * so it needs no bearer-token setting. Supplying an empty
+ * `bearer_token_env_var` makes Codex discard the server's tools as
+ * unauthenticated instead of treating the connection as tokenless.
  */
 export const CODEX_WORKBENCH_MCP_ARGS = [
   '-c', 'mcp_servers.workbench.url="http://localhost:5180/mcp"',
-  '-c', 'mcp_servers.workbench.bearer_token_env_var=""',
 ] as const;
 
 export function commandFor(agent: CliAgent, cwd: string, profile: ExecutionProfile, modelOverride?: string, resumeSessionId?: string, _kind: AgentRun['kind'] = 'execute'): { command: string; args: string[] } {
