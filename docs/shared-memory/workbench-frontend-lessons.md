@@ -1,5 +1,12 @@
 ## Workbench frontend lessons
 
+### Attention-stack badge numerals use optical centering
+
+*Correction from Jeffrey, 2026-09-16.* Center the visible numeral ink in each task-stack header
+badge, not only its CSS line box. `place-items: center` and `line-height: 1` can still leave DM Mono
+digits visibly low. Keep the badge itself unchanged and apply the optical offset to an inner numeral
+span scoped to `.queue-rows .stack-header`, so conversation headers and other count pills do not move.
+
 ### Compact desktop navigation icons share one center axis
 
 *Correction from Jeffrey, 2026-08-30.* In the collapsed desktop sidebar, the W mark, every

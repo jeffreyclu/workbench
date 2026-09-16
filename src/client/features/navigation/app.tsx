@@ -88,7 +88,7 @@ function isEditableTarget(target: EventTarget | null) {
 
 function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong' | 'span' }) {
   const pulse = useValuePulse(value);
-  return <Tag className={pulse}>{value}</Tag>;
+  return <Tag className={pulse}><span>{value}</span></Tag>;
 }
 
 export function App() {
