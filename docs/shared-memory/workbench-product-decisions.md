@@ -1419,6 +1419,15 @@ Codex connects to the loopback Workbench MCP without a bearer-token option;
 setting `bearer_token_env_var` to an empty string makes Codex drop every
 Workbench tool as unauthenticated.
 
+Codex `exec --ignore-user-config` can use that tokenless connection directly,
+but Codex app-server always layers Jeffrey's personal configuration onto a
+thread. Workbench must override the inherited bearer-token variable with a
+non-secret loopback marker and pass the same override in every thread start or
+resume. It must also wait for app-server to report the Workbench MCP server as
+`ready` before starting the model turn; starting while the server is still
+loading gives the model a permanently incomplete tool catalog for that turn.
+MCP calls must be recorded as tool events in the conversation decision graph.
+
 ### The code relationship map is a zoomable domain map (2026-09-11)
 
 *Decision from Jeffrey.* Node area reflects the amount of changed code in the

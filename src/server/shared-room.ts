@@ -74,6 +74,11 @@ export function agentStreamEventForCodexAppServerItem(method: string, item: Reco
   if (method === 'item/started' && (type === 'commandExecution' || type === 'command_execution')) {
     return { kind: 'tool', detail: `command_execution: ${String(item.command ?? 'command').slice(0, 500)}` };
   }
+  if (method === 'item/started' && (type === 'mcpToolCall' || type === 'mcp_tool_call')) {
+    const server = String(item.server ?? 'mcp');
+    const tool = String(item.tool ?? 'tool');
+    return { kind: 'tool', detail: `${server}.${tool}`.slice(0, 500) };
+  }
   if (method === 'item/completed' && type === 'reasoning') {
     // App-server emits the requested reasoning summary as `summary[]`, while
     // older versions exposed it directly as `text`. Both are provider-recorded
@@ -118,8 +123,11 @@ interface CodexAppServerEvent {
   };
   params?: {
     delta?: unknown;
+    error?: unknown;
     itemId?: unknown;
     item?: unknown;
+    name?: unknown;
+    status?: unknown;
     turn?: { status?: unknown };
   };
 }
@@ -219,12 +227,19 @@ export function codexAppServerInitialRequest(cwd: string, resumeThreadId: string
 }
 
 export function codexThreadBootstrapRequest(cwd: string, resumeThreadId?: string | null): { method: 'thread/start' | 'thread/resume'; params: Record<string, unknown> } {
+  const config = {
+    'mcp_servers.workbench.url': 'http://localhost:5180/mcp',
+    'mcp_servers.workbench.bearer_token_env_var': 'WORKBENCH_LOCAL_MCP_TOKEN',
+  };
   return resumeThreadId
-    ? { method: 'thread/resume', params: { threadId: resumeThreadId, cwd, approvalPolicy: 'never', sandbox: 'danger-full-access' } }
-    : { method: 'thread/start', params: { cwd, ephemeral: false, model: null, approvalPolicy: 'never', sandbox: 'danger-full-access' } };
+    ? { method: 'thread/resume', params: { threadId: resumeThreadId, cwd, approvalPolicy: 'never', sandbox: 'danger-full-access', config } }
+    : { method: 'thread/start', params: { cwd, ephemeral: false, model: null, approvalPolicy: 'never', sandbox: 'danger-full-access', config } };
 }
 
-export const CODEX_APP_SERVER_ARGS = ['app-server', '--stdio', ...CODEX_WORKBENCH_MCP_ARGS];
+export const CODEX_APP_SERVER_ARGS = [
+  'app-server', '--stdio', ...CODEX_WORKBENCH_MCP_ARGS,
+  '-c', 'mcp_servers.workbench.bearer_token_env_var="WORKBENCH_LOCAL_MCP_TOKEN"',
+];
 
 function codexAppServerCommand(): string {
   return process.env.CODEX_BIN?.trim() || 'codex';
@@ -232,7 +247,13 @@ function codexAppServerCommand(): string {
 
 function spawnCodexAppServer(cwd: string, accountProfile: string) {
   return spawn(codexAppServerCommand(), CODEX_APP_SERVER_ARGS, {
-    cwd, env: agentAccountEnv('codex', accountProfile), stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
+    cwd,
+    // Codex refuses to start an HTTP MCP server whose configured bearer-token
+    // environment variable is absent. Workbench trusts its loopback peer, so
+    // this is an intentionally non-secret marker, not Jeffrey's UI token.
+    env: { ...agentAccountEnv('codex', accountProfile), WORKBENCH_LOCAL_MCP_TOKEN: 'loopback' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
   });
 }
 
@@ -303,6 +324,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     const initialized = Boolean(claimed);
     if (!process.env.VITEST) warmSharedRoomCodex(cwd, accountProfile);
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
+    let workbenchMcpReady = false; let turnStartRequested = false;
     let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     let peakContextTokens = 0;
     type PendingCodexSteer = { body: string; resolve: (accepted: boolean) => void };
@@ -374,6 +396,11 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
       });
       return id;
     };
+    const maybeStartTurn = () => {
+      if (!threadId || !workbenchMcpReady || turnStartRequested || settled) return;
+      turnStartRequested = true;
+      request('turn/start', codexTurnStartParams(threadId, cwd, prompt));
+    };
     const issueSteer = (pending: PendingCodexSteer) => {
       if (!threadId || !turnId || settled) {
         pending.resolve(false);
@@ -425,7 +452,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           const bootstrap = codexThreadBootstrapRequest(cwd, resumeThreadId);
           request(bootstrap.method, bootstrap.params);
         }
-        else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; request('turn/start', codexTurnStartParams(threadId, cwd, prompt)); }
+        else if (event.result?.thread?.id && !threadId) { threadId = event.result.thread.id; maybeStartTurn(); }
         else if (event.result?.turn?.id && !turnId) {
           turnId = event.result.turn.id;
           if (startupTimeout) clearTimeout(startupTimeout);
@@ -444,6 +471,16 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
             retrySteer(pending);
           }
           continue;
+        }
+        if (event.method === 'mcpServer/startupStatus/updated' && event.params?.name === 'workbench') {
+          const status = event.params.status;
+          if (status === 'ready') {
+            workbenchMcpReady = true;
+            maybeStartTurn();
+          } else if (status === 'failed' || status === 'cancelled') {
+            fail(new Error(`Codex could not load Workbench tools${typeof event.params.error === 'string' && event.params.error ? `: ${event.params.error}` : '.'}`));
+            return;
+          }
         }
         if (event.method === 'item/agentMessage/delta' && typeof event.params?.delta === 'string') {
           providerWatchdog?.activity();
@@ -521,7 +558,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     });
     const initialRequest = codexAppServerInitialRequest(cwd, resumeThreadId, initialized);
     request(initialRequest.method, initialRequest.params);
-    startupTimeout = setTimeout(() => fail(new Error('Codex app-server did not start a turn within 20 seconds.')), 20_000);
+    startupTimeout = setTimeout(() => fail(new Error('Codex app-server did not load Workbench tools and start a turn within 20 seconds.')), 20_000);
     startupTimeout.unref();
   });
 }

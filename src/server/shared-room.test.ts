@@ -615,6 +615,12 @@ describe('compactConversationHistory', () => {
 });
 
 describe('agentStreamEventForCodexAppServerItem', () => {
+  it('records Workbench MCP calls in the decision graph', () => {
+    expect(agentStreamEventForCodexAppServerItem('item/started', {
+      type: 'mcpToolCall', server: 'workbench', tool: 'create_linear_issue',
+    })).toEqual({ kind: 'tool', detail: 'workbench.create_linear_issue' });
+  });
+
   it('records the completed provider reasoning summary before the next tool call', () => {
     expect(agentStreamEventForCodexAppServerItem('item/started', { type: 'reasoning' })).toBeNull();
     expect(agentStreamEventForCodexAppServerItem('item/completed', {
@@ -632,8 +638,26 @@ describe('agentStreamEventForCodexAppServerItem', () => {
     expect(codexTurnStartParams('thread', '/workspace', 'Fix it')).toMatchObject({
       threadId: 'thread', cwd: '/workspace', effort: 'medium', summary: 'concise',
     });
-    expect(codexThreadBootstrapRequest('/workspace')).toEqual({ method: 'thread/start', params: { cwd: '/workspace', ephemeral: false, model: null, approvalPolicy: 'never', sandbox: 'danger-full-access' } });
-    expect(codexThreadBootstrapRequest('/workspace', 'thread-1')).toEqual({ method: 'thread/resume', params: { threadId: 'thread-1', cwd: '/workspace', approvalPolicy: 'never', sandbox: 'danger-full-access' } });
+    expect(codexThreadBootstrapRequest('/workspace')).toEqual({
+      method: 'thread/start',
+      params: {
+        cwd: '/workspace', ephemeral: false, model: null, approvalPolicy: 'never', sandbox: 'danger-full-access',
+        config: {
+          'mcp_servers.workbench.url': 'http://localhost:5180/mcp',
+          'mcp_servers.workbench.bearer_token_env_var': 'WORKBENCH_LOCAL_MCP_TOKEN',
+        },
+      },
+    });
+    expect(codexThreadBootstrapRequest('/workspace', 'thread-1')).toEqual({
+      method: 'thread/resume',
+      params: {
+        threadId: 'thread-1', cwd: '/workspace', approvalPolicy: 'never', sandbox: 'danger-full-access',
+        config: {
+          'mcp_servers.workbench.url': 'http://localhost:5180/mcp',
+          'mcp_servers.workbench.bearer_token_env_var': 'WORKBENCH_LOCAL_MCP_TOKEN',
+        },
+      },
+    });
     expect(codexTurnStartParams('thread-1', '/workspace', 'do it')).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } });
     expect(codexAppServerInitialRequest('/workspace', null, true)).toMatchObject({ method: 'thread/start' });
     expect(codexAppServerInitialRequest('/workspace', null, false)).toMatchObject({ method: 'initialize' });
@@ -693,6 +717,7 @@ describe('shared-room Codex warming', () => {
       `IFS= read -r bootstrap; printf '%s\n' "$bootstrap" >> '${log}'`,
       `if [ "$count" -eq 1 ]; then printf '%s\n' '{"jsonrpc":"2.0","id":2,"error":{"message":"no rollout found for thread id 01a058de-5fe3-7f32-8d47-6d4a306c2b3f"}}'; exit 0; fi`,
       `printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"fresh-thread"}}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"mcpServer/startupStatus/updated","params":{"threadId":"fresh-thread","name":"workbench","status":"ready","error":null,"failureReason":null}}'`,
       `IFS= read -r turn; printf '%s\n' "$turn" >> '${log}'`,
       `printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"fresh-turn"}}}'`,
       `printf '%s\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Completed from fresh thread."}}'`,
@@ -728,6 +753,7 @@ describe('shared-room Codex warming', () => {
       `count=0; if [ -f '${countFile}' ]; then read count < '${countFile}'; fi; count=$((count + 1)); printf '%s' "$count" > '${countFile}'`,
       `IFS= read -r initialize; printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
       `IFS= read -r bootstrap; printf '%s\n' "$bootstrap" >> '${log}'; printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread"}}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"mcpServer/startupStatus/updated","params":{"threadId":"thread","name":"workbench","status":"ready","error":null,"failureReason":null}}'`,
       `IFS= read -r turn; printf '%s\n' "$turn" >> '${log}'; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn"}}}'`,
       'if [ "$count" -eq 1 ]; then while IFS= read -r request; do :; done; fi',
       `printf '%s\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Recovered on a fresh thread."}}'`,
@@ -762,6 +788,7 @@ describe('shared-room Codex warming', () => {
       '#!/bin/sh',
       `IFS= read -r initialize; printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
       `IFS= read -r bootstrap; printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","method":"mcpServer/startupStatus/updated","params":{"threadId":"thread-1","name":"workbench","status":"ready","error":null,"failureReason":null}}'`,
       `IFS= read -r turn; printf '%s\\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}'`,
       `IFS= read -r steer1; printf '%s\\n' "$steer1" >> '${log}'; printf '%s\\n' '{"jsonrpc":"2.0","id":4,"error":{"message":"turn temporarily busy"}}'`,
       `IFS= read -r steer2; printf '%s\\n' "$steer2" >> '${log}'; printf '%s\\n' '{"jsonrpc":"2.0","id":5,"result":{"turnId":"turn-1"}}'`,
@@ -795,6 +822,7 @@ describe('shared-room Codex warming', () => {
       '#!/bin/sh',
       `IFS= read -r initialize; printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
       `IFS= read -r bootstrap; printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      `printf '%s\\n' '{"jsonrpc":"2.0","method":"mcpServer/startupStatus/updated","params":{"threadId":"thread-1","name":"workbench","status":"ready","error":null,"failureReason":null}}'`,
       `IFS= read -r turn; printf '%s\\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}'`,
       `IFS= read -r steer; printf '%s\\n' '{"jsonrpc":"2.0","id":4,"error":{"message":"turn temporarily busy"}}'`,
       `printf '%s\\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Initial answer."}}'`,
@@ -816,6 +844,28 @@ describe('shared-room Codex warming', () => {
 
     expect(result.output).toBe('Initial answer.');
     expect(accepted).toBe(false);
+  });
+
+  it('refuses to start a Codex turn when the Workbench MCP server fails', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-mcp-failure-'));
+    temporaryDirectories.push(directory);
+    const fakeAppServer = [
+      '#!/bin/sh',
+      'IFS= read -r initialize',
+      `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      'IFS= read -r bootstrap',
+      `printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"mcpServer/startupStatus/updated","params":{"threadId":"thread-1","name":"workbench","status":"failed","error":"missing bearer token","failureReason":null}}'`,
+      'while IFS= read -r request; do :; done',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+
+    await expect(runSteerableCodex(
+      'Do not start this turn.', directory, new AbortController().signal,
+      () => undefined, () => undefined, () => undefined, () => undefined,
+    )).rejects.toThrow('Codex could not load Workbench tools: missing bearer token');
   });
 
   it('contains a closed app-server stdin pipe to the turn instead of crashing Workbench', async () => {
@@ -853,6 +903,7 @@ describe('shared-room Codex warming', () => {
       `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
       'IFS= read -r bootstrap',
       `printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"mcpServer/startupStatus/updated","params":{"threadId":"thread-1","name":"workbench","status":"ready","error":null,"failureReason":null}}'`,
       'IFS= read -r turn',
       `printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}'`,
       `printf '%s\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"stream me"}}'`,
