@@ -293,10 +293,20 @@ This is a read-only review. All five passes are static:
   3. Conventions and existing patterns: repository rules, nearby implementations, shared abstractions, API contracts, naming, and consistency with established architecture. Prefer local conventions; recommend a different pattern only when the diff adds avoidable complexity or breaks correctness.
   4. UX issues and bugs: user flows, loading/empty/error/permission states, accessibility, responsive behavior, feedback, recovery, stale UI, races, and confusing or broken interactions.
   5. Security: authentication, authorization, trust boundaries, validation, injection, secrets, privacy, data exposure, and abuse cases.
-- Finish each pass before starting the next. In the final review, include a compact five-line Pass coverage section; each line must state either the material finding count or "No material issues." Then consolidate and deduplicate the actual findings by severity.
+- Finish each pass before starting the next. In the final review, include a compact five-line Pass coverage section using these exact labels: "Pass 1", "Pass 2", "Pass 3", "Pass 4", and "Pass 5". Each line must state either the material finding count or "No material issues." Then consolidate and deduplicate the actual findings by severity.
 - Label every finding or risk as Blocking or Non-blocking. Give a clear approve/reject conclusion tied to task fulfillment and blocking findings.
 - Keep investigation narration minimal. Return the review, not a transcript of file reads.
 `.trim();
+
+const REVIEW_PASS_NUMBERS = [1, 2, 3, 4, 5] as const;
+
+export function missingReviewPasses(output: string): number[] {
+  return REVIEW_PASS_NUMBERS.filter((pass) => !new RegExp(`\\bpass\\s*${pass}\\b`, 'i').test(output));
+}
+
+export function reviewPassCompletionPrompt(originalPrompt: string, draft: string, missing: number[]): string {
+  return `${originalPrompt}\n\nReview completion retry: the prior draft was rejected because it omitted mandatory pass coverage for Pass ${missing.join(', Pass ')}. Complete all five review passes now and return one complete replacement review, not a continuation. Include a five-line Pass coverage section with the exact labels Pass 1, Pass 2, Pass 3, Pass 4, and Pass 5. Each line must give the material finding count or say "No material issues." Preserve verified findings, deduplicate them below the coverage section, label every finding Blocking or Non-blocking, and do not claim evidence you did not inspect.\n\nRejected draft:\n${draft}`;
+}
 
 const FRONTEND_ENGINEER_PERSONA = `
 Authoritative persona: frontend-engineer
@@ -2064,9 +2074,6 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         if (checkpoint) repository.addActivity(item.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile, result.usage.cacheReadInputTokens ?? 0));
       }
     }
-    if (result.agent === 'palmyra' && run.conversationId && 'messages' in result && result.messages) {
-      repository.setConversationPalmyraContext(run.conversationId, JSON.stringify(result.messages));
-    }
     if (result.agent === 'claude' && hasUnsupportedClaudeScopeClaim(result.output)) {
       const reason = 'Claude reported a sandbox or read-only scope despite this fresh bypass-permission invocation; Workbench handed the run to Codex.';
       repository.addActivity(item.id, 'system', 'agent_fallback', reason);
@@ -2092,6 +2099,61 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.updateRun(run.id, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [result.agent]);
+    }
+    if (run.kind === 'review') {
+      const missingPasses = missingReviewPasses(result.output);
+      if (missingPasses.length) {
+        const rejectedDraft = result.output;
+        const retryAgent = result.agent;
+        const retryPrompt = reviewPassCompletionPrompt(prompt, rejectedDraft, missingPasses);
+        const priorUsage = result.usage;
+        const priorCost = result.costUsd;
+        repository.addActivity(item.id, 'system', 'progress', `Review omitted Pass ${missingPasses.join(', Pass ')}. Retrying once for complete five-pass coverage.`);
+        if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● Review omitted Pass ${missingPasses.join(', Pass ')}. Completing all five passes…` });
+        const recordRetryUsage = (usage: AgentUsage) => {
+          const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+          repository.updateRun(run.id, telemetry);
+          if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
+          repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, retryAgent, 'usage', telemetry);
+        };
+        const recordRetryAudit = (entries: AgentAuditCandidate[], producingAgent: AgentRun['agent']) => {
+          for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
+          for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
+          for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
+          if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
+            kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+          })));
+        };
+        if (retryAgent === 'palmyra') {
+          const previousMessages = 'messages' in result ? result.messages : undefined;
+          const repaired = await (await import('./palmyra-agent.js')).runPalmyraAgent({
+            cwd, prompt: retryPrompt, model: palmyraTier, signal: controller.signal, previousMessages, imageAttachments: item.attachments ?? [],
+            onProgress: (partialOutput) => {
+              repository.updateRun(run.id, { output: partialOutput });
+              if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
+            },
+            onUsage: (usage) => recordRetryUsage(addUsage(priorUsage, usage)),
+            onAudit: (entries) => recordRetryAudit(entries, 'palmyra'),
+          });
+          result = { ...repaired, usage: addUsage(priorUsage, repaired.usage), costUsd: 0 as const };
+        } else {
+          const repaired = await runAgentCommandWithFallback(retryAgent, cwd, retryAgent === 'claude' ? claudeScopeRecoveryPrompt(retryPrompt, cwd) : retryPrompt, (partialOutput) => {
+            repository.updateRun(run.id, { output: partialOutput });
+            if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
+          }, controller.signal, (fallback, reason) => {
+            repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: retryAgent, fallbackReason: reason.slice(0, 500) });
+            if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: retryAgent, fallbackReason: reason.slice(0, 500) });
+            if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
+          }, profile, recordRetryUsage, recordRetryAudit, 'review', run.accountProfile, undefined, undefined, undefined, false, true, priorUsage);
+          const combinedCost = priorCost == null && repaired.costUsd == null ? null : (priorCost ?? 0) + (repaired.costUsd ?? 0);
+          result = { ...repaired, costUsd: combinedCost };
+        }
+        const stillMissing = missingReviewPasses(result.output);
+        if (stillMissing.length) throw new Error(`Review omitted mandatory Pass ${stillMissing.join(', Pass ')} after one automatic completion retry.`);
+      }
+    }
+    if (result.agent === 'palmyra' && run.conversationId && 'messages' in result && result.messages) {
+      repository.setConversationPalmyraContext(run.conversationId, JSON.stringify(result.messages));
     }
     const investigated = observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_read');
     if (!investigated && hasPrematureEvidenceRequest(result.output)) {

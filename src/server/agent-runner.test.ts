@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, missingReviewPasses, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, reviewPassCompletionPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -736,6 +736,33 @@ fi`;
     database.close();
   });
 
+  it('retries an incomplete review once and stores the complete five-pass replacement', async () => {
+    const incomplete = '## Problem\nReview the diff.\n\n## Solution\nPass 1: one finding.\n\n## Context\nFour passes are missing.';
+    const complete = '## Problem\nReview the diff.\n\n## Solution\nPass 1: 1 finding.\nPass 2: No material issues.\nPass 3: No material issues.\nPass 4: No material issues.\nPass 5: No material issues.\n\n[Blocking] button.js:2 calls an undefined function.\n\n## Context\nStatic review only.';
+    const firstEvent = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: incomplete } });
+    const secondEvent = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: complete } });
+    const { directory, log } = fakeAgentDirectory(
+      `count=$(/usr/bin/wc -l < "\${0%/*}/spawns.log")
+if [ "$count" -eq 1 ]; then
+  printf '%s\\n' '${firstEvent}'
+else
+  printf '%s\\n' '${secondEvent}'
+fi`,
+      'exit 1',
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Review five passes', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'review', 'codex', 'codex', 'Review the diff.');
+
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+
+    expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'completed', output: complete }));
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex', 'codex']);
+    expect(repository.listActivity(task.id).some((entry) => entry.body.includes('Retrying once for complete five-pass coverage'))).toBe(true);
+    database.close();
+  });
+
   it('makes a second mutating run wait for a workspace another run is editing', async () => {
     const { directory, log } = fakeAgentDirectory(
       `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Edited it.' } })}'`,
@@ -1108,7 +1135,17 @@ fi`;
     expect(prompt).toContain('4. UX issues and bugs');
     expect(prompt).toContain('5. Security');
     expect(prompt).toContain('compact five-line Pass coverage section');
+    expect(prompt).toContain('exact labels: "Pass 1", "Pass 2", "Pass 3", "Pass 4", and "Pass 5"');
     expect(prompt).toContain('Label every finding or risk as Blocking or Non-blocking');
+  });
+
+  it('detects incomplete five-pass reviews and requests a complete replacement', () => {
+    const incomplete = 'Pass 1: one finding\nPass 2: No material issues.\nPass 5: No material issues.';
+    expect(missingReviewPasses(incomplete)).toEqual([3, 4]);
+    expect(missingReviewPasses('Pass 1\nPass 2\nPass 3\nPass 4\nPass 5')).toEqual([]);
+    const retry = reviewPassCompletionPrompt('original', incomplete, [3, 4]);
+    expect(retry).toContain('Pass 3, Pass 4');
+    expect(retry).toContain('one complete replacement review, not a continuation');
   });
 
   it('applies the principal frontend engineer protocol to implementation work', () => {
