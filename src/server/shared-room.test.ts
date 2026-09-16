@@ -501,6 +501,8 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Conversation ID: conversation-id');
     expect(prompt).toContain('recall_context');
     expect(prompt).toContain('Retrieved durable context: Jeffrey works at Writer.');
+    expect(prompt).toContain('start_managed_command');
+    expect(prompt).toContain('continue from its saved log instead of starting from zero');
   });
 
   it('keeps every repository accessible from an unlinked conversation', () => {

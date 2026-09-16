@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
@@ -96,11 +99,13 @@ describe('Workbench MCP', () => {
       'execute_work_item',
       'get_conversation',
       'get_work_item',
+      'inspect_managed_command',
       'list_artifacts',
       'list_audit_log',
       'list_conversations',
       'list_discoveries',
       'list_execution_plans',
+      'list_managed_commands',
       'list_projects',
       'list_results',
       'list_source_connections',
@@ -122,6 +127,8 @@ describe('Workbench MCP', () => {
       'search_external_sources',
       'set_figma_discovery_scope',
       'set_work_item_lifecycle',
+      'start_managed_command',
+      'stop_managed_command',
       'unblock_work_item',
       'update_linear_issue',
       'update_work_item',
@@ -138,6 +145,36 @@ describe('Workbench MCP', () => {
     }
     const updateProperties = tools.tools.find((tool) => tool.name === 'update_work_item')?.inputSchema.properties ?? {};
     expect(Object.keys(updateProperties)).not.toEqual(expect.arrayContaining(['source', 'sourceIdentifier', 'providerUpdatedAt', 'queuePosition', 'archivedAt']));
+  });
+
+  it('runs a long command through MCP while persisting output and reusing its stable job', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-mcp-managed-command-'));
+    process.env.WORKBENCH_MANAGED_COMMANDS_DIR = join(root, 'jobs');
+    try {
+      const started = await callData<{ jobId: string; logPath: string; status: string }>('start_managed_command', {
+        key: 'mcp-long-task',
+        cwd: root,
+        command: "printf 'saved output\\n'; sleep 0.05",
+      });
+      const completed = await callData<{ jobId: string; status: string; outputTail: string }>('inspect_managed_command', {
+        jobId: started.jobId,
+        waitMs: 2_000,
+      });
+      const listed = await callData<{ jobs: Array<{ jobId: string; logPath: string }> }>('list_managed_commands', {});
+      const reused = await callData<{ jobId: string; reused: boolean; attempt: number }>('start_managed_command', {
+        key: 'mcp-long-task',
+        cwd: root,
+        command: "printf 'saved output\\n'; sleep 0.05",
+      });
+
+      expect(completed).toEqual(expect.objectContaining({ jobId: started.jobId, status: 'completed' }));
+      expect(completed.outputTail).toContain('saved output');
+      expect(listed.jobs).toContainEqual(expect.objectContaining({ jobId: started.jobId, logPath: started.logPath }));
+      expect(reused).toEqual(expect.objectContaining({ jobId: started.jobId, reused: true, attempt: 1 }));
+    } finally {
+      delete process.env.WORKBENCH_MANAGED_COMMANDS_DIR;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('reads and atomically replaces stack order, then applies a recoverable lifecycle transition', async () => {

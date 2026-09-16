@@ -388,6 +388,8 @@ describe('classifyExecution', () => {
   it('tells Claude not to open extra cached subagent contexts', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('do not delegate to subagents');
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('Report a command as passing only if it ran in this run');
+    expect(CLAUDE_EXECUTION_CONTRACT).toContain('start_managed_command');
+    expect(CLAUDE_EXECUTION_CONTRACT).toContain('saved log before starting anything again');
   });
 
   it('gives Codex and Claude the same execution contract without a cached-input kill switch', () => {

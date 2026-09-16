@@ -1485,3 +1485,20 @@ routing, so hubs visibly have many lines. The canvas nests folders inside
 packages and emphasizes cross-folder and cross-package coupling. Node color is
 semantic: UI, types/contracts, tests, data/storage, server/service, or general
 logic. The map must support easy pan and zoom as a real vector canvas.
+
+### Long-running finite commands are disk-backed Workbench jobs (2026-09-16)
+
+*Decision from Jeffrey.* Benchmarks, builds, and tests that can exceed a provider
+shell timeout must not restart from zero when an agent turn is retried. Workbench
+owns these finite jobs outside the provider process, writes stdout, stderr,
+status, PID, exit code, and timestamps to disk beside the Workbench database,
+and exposes start, inspect/wait, list, and stop operations through its local MCP
+server.
+
+Agents use a stable task key. Starting the same key after a provider retry
+returns the existing running or completed job; a resumed agent reads the saved
+log before doing more work and reruns only the unfinished portion after an
+interruption. Workbench stops the entire tracked process group on request and
+retains the log afterward. This exception is for finite work only; dev servers,
+watchers, and other indefinite processes still require their repository's
+tracked lifecycle launcher.

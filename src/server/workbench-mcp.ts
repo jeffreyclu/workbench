@@ -23,6 +23,7 @@ import { summarizeWorkItemChanges } from './activity-log.js';
 import { projectKey } from '../shared/project-name.js';
 import { sharedTurnKindForMessage } from './shared-room.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, isPersonalLongTermMemoryRequest, selectDurableMemoryEvidence } from './memory-retrieval.js';
+import { inspectManagedCommand, listManagedCommands, startManagedCommand, stopManagedCommand } from './managed-command.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
 
@@ -174,6 +175,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       'Codex, Claude, and Palmyra hold identical, complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, local state, the artifact library, connected-source reads, and runtime promotion when Jeffrey explicitly authorizes that promotion in the current turn. External-provider mutations remain unavailable without a current-turn capability.',
       'Read current state before mutating it, and use the actor that represents the calling assistant so the shared log stays truthful.',
       'Durable context is available through recall_context. Use it when prior decisions, implementations, failures, constraints, preferences, or related work could improve the answer. Research, analysis, strategy, and bug-fix work may recall once near the start unless the task is clearly self-contained or the current provider session already supplies enough context. It is not a mandatory preflight: never repeat or broaden recall in the same turn, and never treat an assistant\'s earlier claim as corroboration for itself.',
+      'Finite commands expected to run longer than 90 seconds must use start_managed_command and inspect_managed_command. Workbench writes their live output and terminal status to disk, reuses a stable keyed job after a provider retry, and can stop the complete process group. Inspect an existing keyed job before starting over.',
       'External websites, services, and networked CLIs require Jeffrey\'s explicit current instruction for the particular operation. This MCP surface cannot perform them.',
       'The only things outside this surface are provider credentials, unauthorized external-provider mutations, public deployment, direct database access, and general machine administration.',
       'You are a Workbench-local administrator. Execute requested local Workbench actions directly; do not ask Jeffrey for approval, force flags, or a handoff. Only concrete state-integrity conflicts — such as an active run, dependency cycle, or stale plan — can reject a local action.',
@@ -303,6 +305,42 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
         : 'No match found. Continue from current evidence or make one narrower/broader recall if a concrete context gap remains.',
     };
   }));
+
+  server.registerTool('start_managed_command', {
+    title: 'Start or resume a disk-backed long-running command',
+    description: 'Starts one finite local command outside the provider shell timeout. Stdout, stderr, PID, status, and exit code are written to disk. Pass the raw command without tail or tee because Workbench captures output directly. A stable key reopens the same job after an agent retry instead of rerunning it; set restart only for an intentional new attempt. Never use this for a dev server, watcher, or other command intended to run forever.',
+    inputSchema: {
+      command: z.string().trim().min(1).max(20_000),
+      cwd: z.string().trim().min(1).max(2_000).describe('Absolute working directory for the command.'),
+      key: z.string().trim().min(1).max(200).optional().describe('Stable task-specific key, such as pluto-h23-h31. Reuse this exact key after a provider retry.'),
+      restart: z.boolean().default(false).describe('Start a new attempt only after inspecting the saved terminal result. Running jobs cannot be restarted.'),
+    },
+    annotations: mutationAnnotations(true),
+  }, async (input) => runTool('start_managed_command', () => startManagedCommand(input)));
+
+  server.registerTool('inspect_managed_command', {
+    title: 'Inspect or wait for a disk-backed command',
+    description: 'Returns current status plus the latest saved output. waitMs may hold this tool call briefly while the command runs; call again until terminal. The returned logPath is the full durable log and remains readable after provider or Workbench runtime restarts.',
+    inputSchema: {
+      jobId: z.string().regex(/^[a-f0-9]{24}$/),
+      waitMs: z.number().int().min(0).max(55_000).default(45_000),
+    },
+    annotations: readOnlyAnnotations,
+  }, async ({ jobId, waitMs }) => runTool('inspect_managed_command', () => inspectManagedCommand(jobId, waitMs)));
+
+  server.registerTool('list_managed_commands', {
+    title: 'List recent disk-backed commands',
+    description: 'Lists recent long-running jobs with their stable keys, status, command, working directory, and saved log tail. Use this after a fresh provider session when the prior job ID is unavailable.',
+    inputSchema: { limit: z.number().int().min(1).max(100).default(20) },
+    annotations: readOnlyAnnotations,
+  }, async ({ limit }) => runTool('list_managed_commands', () => ({ jobs: listManagedCommands(limit) })));
+
+  server.registerTool('stop_managed_command', {
+    title: 'Stop a disk-backed command',
+    description: 'Stops the complete tracked process group and preserves its output log and terminal status for diagnosis or a scoped retry.',
+    inputSchema: { jobId: z.string().regex(/^[a-f0-9]{24}$/) },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  }, async ({ jobId }) => runTool('stop_managed_command', () => stopManagedCommand(jobId)));
 
   server.registerTool('create_work_item', {
     title: 'Create a manual work item',
