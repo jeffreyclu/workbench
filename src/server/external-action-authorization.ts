@@ -77,7 +77,10 @@ function operationFor(rules: AuthorizationRule[], current: string, pending?: str
   const actions = [...new Set(rules.map((rule) => rule.description))];
   const currentScope = current.replace(/\s+/g, ' ').trim().slice(0, 700);
   const pendingScope = pending?.replace(/\s+/g, ' ').trim().slice(0, 700);
-  return `${actions.join('; ')}. Jeffrey's current instruction: ${currentScope}.${pendingScope ? ` Resolve any omitted target only from the immediately preceding pending operation: ${pendingScope}.` : ''}`.slice(0, 1_500);
+  const toolRoute = rules.some((rule) => rule.id === 'linear_create')
+    ? ' Use the Workbench `create_linear_issue` tool; do not substitute the read-only Linear search connector or start a separate authentication flow.'
+    : '';
+  return `${actions.join('; ')}.${toolRoute} Jeffrey's current instruction: ${currentScope}.${pendingScope ? ` Resolve any omitted target only from the immediately preceding pending operation: ${pendingScope}.` : ''}`.slice(0, 1_500);
 }
 
 /**

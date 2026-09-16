@@ -77,7 +77,7 @@ describe('external action authorization command catalog', () => {
       precedingAgentMessage: 'I cannot create the two Linear tickets without a mutation capability.',
     })).resolves.toEqual(expect.objectContaining({
       granted: true,
-      operation: expect.stringContaining('Create the requested Linear ticket'),
+      operation: expect.stringMatching(/Create the requested Linear ticket.*create_linear_issue/),
     }));
   });
 

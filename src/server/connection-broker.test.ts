@@ -9,7 +9,20 @@ vi.mock('./providers/linear.js', () => ({
   },
 }));
 
-import { searchBrokerSources, sourceQuery } from './connection-broker.js';
+import { contextForPrompt, listBrokerConnections, searchBrokerSources, sourceQuery } from './connection-broker.js';
+
+describe('Linear connection contract', () => {
+  it('advertises the create and update operations Workbench actually exposes', () => {
+    const repository = { listSourceConnections: vi.fn().mockReturnValue([]), getSourceSettings: vi.fn().mockReturnValue(null) };
+    const linear = listBrokerConnections(repository as never).find((connection) => connection.id === 'linear');
+    expect(linear?.capabilities).toEqual(['resolve_links', 'search', 'sync', 'create', 'update']);
+  });
+
+  it('routes authorized creation to the mutation tool instead of the read-only search connector', async () => {
+    const repository = { searchLinear: vi.fn().mockReturnValue([]), getSourceSettings: vi.fn().mockReturnValue(null) };
+    await expect(contextForPrompt(repository as never, 'Create two Linear tickets.')).resolves.toMatch(/call the Workbench `create_linear_issue` tool directly/);
+  });
+});
 
 describe('sourceQuery', () => {
   it('carries a recent Atlassian URL into a follow-up request', () => {

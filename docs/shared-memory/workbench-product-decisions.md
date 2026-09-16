@@ -1406,6 +1406,11 @@ constraint such as “do not create duplicates” does not cancel the explicit
 creation command at the start of the same message. A local Workbench item is
 not a substitute for the requested Linear issue.
 
+The connection catalog and prompt must advertise the same mutation surface as
+the MCP server. Authorized Linear creation routes directly to
+`create_linear_issue`; read-only source search is context retrieval, never a
+capability probe or substitute authentication path.
+
 ### The code relationship map is a zoomable domain map (2026-09-11)
 
 *Decision from Jeffrey.* Node area reflects the amount of changed code in the

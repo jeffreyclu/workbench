@@ -819,7 +819,7 @@ export interface BrokerConnection {
   name: string;
   state: BrokerConnectionState;
   host: 'workbench' | 'managed_connector';
-  capabilities: Array<'resolve_links' | 'search' | 'sync'>;
+  capabilities: Array<'resolve_links' | 'search' | 'sync' | 'create' | 'update'>;
   detail: string;
   configurable: boolean;
   lastError: string | null;
