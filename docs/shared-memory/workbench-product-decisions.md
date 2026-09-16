@@ -1390,6 +1390,20 @@ graph is not considered observable until these checks are visible to Jeffrey.
 must never be fabricated into the response's `Context` section. The
 deterministic formatter keeps the agent's saved result and uses
 `No additional context.` when the draft supplies none.
+
+### Explicit Linear creation must execute through Workbench
+
+*Decision from Jeffrey, 2026-09-16.* When Jeffrey explicitly asks an agent to
+create Linear tickets, Workbench must issue the external-action capability and
+provide a real create operation through its server-owned Linear credential. The
+operation supports team selection, assignment to Jeffrey, the team's current
+cycle, and an estimate. Exact-title retries within one team are idempotent.
+
+Authorization carries across an immediately following referential command such
+as “you do it Codex,” but only from the immediately preceding concrete external
+operation; older conversation text never grants authority. A local Workbench
+item is not a substitute for the requested Linear issue.
+
 ### The code relationship map is a zoomable domain map (2026-09-11)
 
 *Decision from Jeffrey.* Node area reflects the amount of changed code in the

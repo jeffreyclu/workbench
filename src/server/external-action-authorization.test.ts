@@ -15,6 +15,8 @@ const authorizedCommands = [
   'rerun the GitHub workflow',
   'publish the GitHub release',
   'write a Linear ticket',
+  'create two Linear tickets',
+  'create the tickets in Linear',
   'update the Linear issue',
   'create a Jira ticket',
   'post the message to Slack',
@@ -66,5 +68,16 @@ describe('external action authorization command catalog', () => {
       precedingAgentMessage: 'The backend branch is ready; I need authorization to push it to origin.',
     })).resolves.toEqual(expect.objectContaining({ granted: true }));
     await expect(classifyExternalActionAuthorization({ currentMessage })).resolves.toEqual({ granted: false, operation: null });
+  });
+
+  it('carries the immediately preceding Linear operation through an emphatic addressed follow-up', async () => {
+    await expect(classifyExternalActionAuthorization({
+      currentMessage: 'YOU FCKING DO IT CODEX',
+      precedingHumanMessage: 'I AM AUTHORIZING YOU TO CREATE THE TICKETS IN LINEAR',
+      precedingAgentMessage: 'I cannot create the two Linear tickets without a mutation capability.',
+    })).resolves.toEqual(expect.objectContaining({
+      granted: true,
+      operation: expect.stringContaining('Create the requested Linear ticket'),
+    }));
   });
 });

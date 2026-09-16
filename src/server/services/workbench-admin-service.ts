@@ -16,7 +16,7 @@ import { CANCEL_FORCE_KILL_DELAY_MS, cancelAgentRun, classifyExecutionRobust, ex
 import { describeExecutionRouting } from '../activity-log.js';
 import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { scanSource } from '../source-scanner.js';
-import { LinearProvider } from '../providers/linear.js';
+import { LinearProvider, type CreateLinearIssueInput } from '../providers/linear.js';
 import { importSupportedMcpCredentials, startRemoteMcpOAuth, verifyRemoteMcpCredentials } from '../remote-mcp.js';
 import type { WorkItemRepository } from '../repository.js';
 import type { RuntimeCapabilities } from '../runtime-capabilities.js';
@@ -319,6 +319,13 @@ export class WorkbenchAdminService {
     return { issue };
   }
 
+  async createLinearIssue(input: CreateLinearIssueInput) {
+    const issue = await this.linearProvider().createIssue(input);
+    this.repository.upsertLinearItem(issue);
+    this.repository.addAuditEntry('api_mutation', 'linear', `Created Linear issue ${issue.sourceIdentifier}`);
+    return { issue };
+  }
+
   sendAction(response: Response, result: unknown, status = 202) {
     return isActionFailure(result) ? response.status(result.status).json(result.body) : response.status(status).json(result);
   }
@@ -395,6 +402,7 @@ export class WorkbenchAdminService {
       syncLinearProvider: () => this.syncLinearProvider(),
       configureLinearProvider: (teamIds, projectIds) => this.configureLinearProvider(teamIds, projectIds),
       queueLinearWorkItem: (workItemId) => this.queueLinearWorkItem(workItemId),
+      createLinearIssue: (input) => this.createLinearIssue(input),
       updateLinearIssue: (identifier, input) => this.updateLinearIssue(identifier, input),
     };
   }

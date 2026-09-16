@@ -143,6 +143,14 @@ export interface WorkbenchAdminActions {
   syncLinearProvider(): Promise<unknown>;
   configureLinearProvider(teamIds: string[], projectIds: string[]): unknown;
   queueLinearWorkItem(workItemId: string): unknown;
+  createLinearIssue(input: {
+    teamKey: string;
+    title: string;
+    description?: string;
+    estimate?: number;
+    assignToViewer?: boolean;
+    addToCurrentCycle?: boolean;
+  }): Promise<unknown>;
   updateLinearIssue(identifier: string, input: { title?: string; description?: string }): Promise<unknown>;
 }
 
@@ -836,6 +844,20 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     inputSchema: { workItemId: z.string().uuid() },
     annotations: mutationAnnotations(true),
   }, async ({ workItemId }) => runTool('queue_linear_work_item', () => unwrap(admin.queueLinearWorkItem(workItemId))));
+
+  server.registerTool('create_linear_issue', {
+    title: 'Create a Linear issue',
+    description: 'Creates one real Linear issue through Workbench-owned credentials. It can assign the issue to the authenticated user, add it to the selected team\'s current cycle, and set its estimate. Exact-title retries in the same team return the existing issue instead of creating a duplicate. Use only when the supervisor-issued capability at the top of this turn explicitly authorizes creating that Linear issue.',
+    inputSchema: {
+      teamKey: z.string().trim().min(1).max(100).describe('Linear team key or UUID, for example CON.'),
+      title: z.string().trim().min(1).max(500),
+      description: z.string().max(100_000).optional(),
+      estimate: z.number().int().min(0).max(100).optional(),
+      assignToViewer: z.boolean().default(true).describe('Assign to the authenticated Linear user.'),
+      addToCurrentCycle: z.boolean().default(true).describe('Add to the team\'s active cycle.'),
+    },
+    annotations: mutationAnnotations(true),
+  }, async (input) => runTool('create_linear_issue', () => admin.createLinearIssue(input)));
 
   server.registerTool('update_linear_issue', {
     title: 'Update an existing Linear issue',

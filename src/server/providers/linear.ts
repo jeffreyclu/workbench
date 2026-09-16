@@ -15,6 +15,25 @@ interface LinearIssue {
   project: { id: string; name: string } | null;
   labels: { nodes: Array<{ name: string }> };
   team: { id: string; name: string };
+  assignee?: { id: string; name: string; email: string } | null;
+  cycle?: { id: string; name: string; number: number } | null;
+  estimate?: number | null;
+}
+
+interface LinearCreationTeam {
+  id: string;
+  key: string;
+  name: string;
+  activeCycle: { id: string; name: string; number: number } | null;
+}
+
+export interface CreateLinearIssueInput {
+  teamKey: string;
+  title: string;
+  description?: string;
+  estimate?: number;
+  assignToViewer?: boolean;
+  addToCurrentCycle?: boolean;
 }
 
 interface LinearResponse {
@@ -29,14 +48,18 @@ interface LinearResponse {
 
 type LinearIssuesData = NonNullable<LinearResponse['data']>;
 
+const issueSelection = `
+  id identifier title description priority url dueDate updatedAt estimate
+  state { type name }
+  project { id name }
+  labels { nodes { name } }
+  team { id name }
+  assignee { id name email }
+  cycle { id name number }
+`;
+
 const issueFields = `
-  nodes {
-    id identifier title description priority url dueDate updatedAt
-    state { type name }
-    project { id name }
-    labels { nodes { name } }
-    team { id name }
-  }
+  nodes { ${issueSelection} }
   pageInfo { hasNextPage endCursor }
 `;
 
@@ -113,6 +136,32 @@ const issueUpdateMutation = `
         labels { nodes { name } }
         team { id name }
       }
+    }
+  }
+`;
+
+const issueCreationContextQuery = `
+  query WorkbenchIssueCreationContext {
+    viewer { id name email }
+    teams(first: 100) {
+      nodes { id key name activeCycle { id name number } }
+    }
+  }
+`;
+
+const exactTitleIssuesQuery = `
+  query WorkbenchExactTitleIssues($teamId: ID!, $title: String!) {
+    issues(first: 10, filter: { team: { id: { eq: $teamId } }, title: { eq: $title } }) {
+      nodes { ${issueSelection} }
+    }
+  }
+`;
+
+const issueCreateMutation = `
+  mutation WorkbenchCreateIssue($input: IssueCreateInput!) {
+    issueCreate(input: $input) {
+      success
+      issue { ${issueSelection} }
     }
   }
 `;
@@ -234,6 +283,41 @@ export class LinearProvider {
     const data = await this.request<{ issueUpdate: { success: boolean; issue: LinearIssue | null } }>(issueUpdateMutation, { id: identifier, input });
     if (!data.issueUpdate.success || !data.issueUpdate.issue) throw new Error(`Linear did not update ${identifier}.`);
     return mapIssue(data.issueUpdate.issue);
+  }
+
+  async createIssue(input: CreateLinearIssueInput): Promise<ProviderWorkItem> {
+    const context = await this.request<{
+      viewer: { id: string; name: string; email: string };
+      teams: { nodes: LinearCreationTeam[] };
+    }>(issueCreationContextQuery);
+    const requestedTeam = input.teamKey.trim().toLowerCase();
+    const matches = context.teams.nodes.filter((team) => team.id.toLowerCase() === requestedTeam || team.key.toLowerCase() === requestedTeam);
+    if (matches.length !== 1) throw new Error(matches.length ? `Linear team ${input.teamKey} is ambiguous.` : `Linear team ${input.teamKey} was not found.`);
+    const team = matches[0]!;
+    const assignToViewer = input.assignToViewer ?? true;
+    const addToCurrentCycle = input.addToCurrentCycle ?? true;
+    if (addToCurrentCycle && !team.activeCycle) throw new Error(`Linear team ${team.key} has no current cycle.`);
+
+    // Retries must not create a second ticket. An exact title in the same team
+    // is the durable identity for this agent-facing operation.
+    const existing = await this.request<{ issues: { nodes: LinearIssue[] } }>(exactTitleIssuesQuery, {
+      teamId: team.id,
+      title: input.title,
+    });
+    const duplicate = existing.issues.nodes.find((issue) => issue.title === input.title);
+    if (duplicate) return mapIssue(duplicate);
+
+    const createInput = {
+      teamId: team.id,
+      title: input.title,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.estimate !== undefined ? { estimate: input.estimate } : {}),
+      ...(assignToViewer ? { assigneeId: context.viewer.id } : {}),
+      ...(addToCurrentCycle ? { cycleId: team.activeCycle!.id } : {}),
+    };
+    const data = await this.request<{ issueCreate: { success: boolean; issue: LinearIssue | null } }>(issueCreateMutation, { input: createInput });
+    if (!data.issueCreate.success || !data.issueCreate.issue) throw new Error(`Linear did not create ${input.title}.`);
+    return mapIssue(data.issueCreate.issue);
   }
 
   /**

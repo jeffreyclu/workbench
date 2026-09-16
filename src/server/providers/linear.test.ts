@@ -64,4 +64,47 @@ describe('LinearProvider outbound transport', () => {
       variables: { id: 'CON-226', input: { description: 'One contract.' } },
     }));
   });
+
+  it('creates an issue for the viewer in the team current cycle with the requested estimate', async () => {
+    const issue = {
+      id: 'issue-id', identifier: 'CON-227', title: 'Match the backend schema', description: 'Contract test.', priority: 0,
+      url: 'https://linear.app/writer/issue/CON-227/match-the-backend-schema', dueDate: null, updatedAt: '2026-09-16T00:00:00.000Z', estimate: 2,
+      state: { type: 'backlog', name: 'Backlog' }, project: null, labels: { nodes: [] }, team: { id: 'team-id', name: 'Connectors' },
+      assignee: { id: 'viewer-id', name: 'Jeffrey Lu', email: 'jeffrey.lu@writer.com' }, cycle: { id: 'cycle-id', name: 'Cycle 4', number: 4 },
+    };
+    const responses = [
+      { data: { viewer: { id: 'viewer-id', name: 'Jeffrey Lu', email: 'jeffrey.lu@writer.com' }, teams: { nodes: [{ id: 'team-id', key: 'CON', name: 'Connectors', activeCycle: { id: 'cycle-id', name: 'Cycle 4', number: 4 } }] } } },
+      { data: { issues: { nodes: [] } } },
+      { data: { issueCreate: { success: true, issue } } },
+    ];
+    const policyFetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify(responses.shift()), { headers: { 'content-type': 'application/json' } }));
+
+    await expect(new LinearProvider('linear-token', [], [], policyFetch).createIssue({
+      teamKey: 'CON', title: issue.title, description: issue.description, estimate: 2,
+    })).resolves.toEqual(expect.objectContaining({ sourceIdentifier: 'CON-227', title: issue.title }));
+
+    const createRequest = JSON.parse(String(policyFetch.mock.calls[2]?.[1]?.body));
+    expect(createRequest.variables.input).toEqual({
+      teamId: 'team-id', title: issue.title, description: issue.description, estimate: 2,
+      assigneeId: 'viewer-id', cycleId: 'cycle-id',
+    });
+  });
+
+  it('returns an exact-title issue instead of creating a duplicate on retry', async () => {
+    const issue = {
+      id: 'issue-id', identifier: 'CON-227', title: 'Match the backend schema', description: 'Contract test.', priority: 0,
+      url: 'https://linear.app/writer/issue/CON-227/match-the-backend-schema', dueDate: null, updatedAt: '2026-09-16T00:00:00.000Z', estimate: 2,
+      state: { type: 'backlog', name: 'Backlog' }, project: null, labels: { nodes: [] }, team: { id: 'team-id', name: 'Connectors' },
+      assignee: { id: 'viewer-id', name: 'Jeffrey Lu', email: 'jeffrey.lu@writer.com' }, cycle: { id: 'cycle-id', name: 'Cycle 4', number: 4 },
+    };
+    const responses = [
+      { data: { viewer: issue.assignee, teams: { nodes: [{ id: 'team-id', key: 'CON', name: 'Connectors', activeCycle: issue.cycle }] } } },
+      { data: { issues: { nodes: [issue] } } },
+    ];
+    const policyFetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify(responses.shift()), { headers: { 'content-type': 'application/json' } }));
+
+    await expect(new LinearProvider('linear-token', [], [], policyFetch).createIssue({ teamKey: 'CON', title: issue.title, estimate: 2 }))
+      .resolves.toEqual(expect.objectContaining({ sourceIdentifier: 'CON-227' }));
+    expect(policyFetch).toHaveBeenCalledTimes(2);
+  });
 });

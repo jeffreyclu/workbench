@@ -48,6 +48,7 @@ describe('Workbench MCP', () => {
       syncLinearProvider: record('syncLinearProvider'),
       configureLinearProvider: record('configureLinearProvider'),
       queueLinearWorkItem: record('queueLinearWorkItem'),
+      createLinearIssue: record('createLinearIssue'),
       updateLinearIssue: record('updateLinearIssue'),
       ...overrides,
     } as WorkbenchAdminActions;
@@ -88,6 +89,7 @@ describe('Workbench MCP', () => {
       'connector_observability_query',
       'create_agent_run',
       'create_conversation',
+      'create_linear_issue',
       'create_work_item',
       'delete_work_item',
       'dispatch_conversation_turn',
@@ -394,6 +396,25 @@ describe('Workbench MCP', () => {
     expect(calls.at(-1)).toEqual({ method: 'updateLinearIssue', args: [
       'CON-226', { title: 'Connector types', description: 'Use one published contract.' },
     ] });
+  });
+
+  it('routes an explicitly authorized Linear issue creation with assignment, cycle, and estimate', async () => {
+    await callData('create_linear_issue', {
+      teamKey: 'CON',
+      title: 'Match the backend schema',
+      description: 'Use the generated contract.',
+      estimate: 2,
+      assignToViewer: true,
+      addToCurrentCycle: true,
+    });
+    expect(calls.at(-1)).toEqual({ method: 'createLinearIssue', args: [{
+      teamKey: 'CON',
+      title: 'Match the backend schema',
+      description: 'Use the generated contract.',
+      estimate: 2,
+      assignToViewer: true,
+      addToCurrentCycle: true,
+    }] });
   });
 
   it('routes an explicitly authorized runtime promotion through the Workbench service', async () => {
