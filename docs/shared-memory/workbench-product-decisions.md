@@ -1320,6 +1320,21 @@ Never replace the count with a vague state label such as `Active`. Older replies
 whose historical count cannot be reconstructed retain an explicit unknown mark
 rather than fabricating a number, but their badge remains clickable.
 
+### Dual-agent synthesis is a conversation-supervisor invariant
+
+Correction from Jeffrey, 2026-09-16: synthesis must not have separate chat and
+task-execution paths. Every Codex-and-Claude pair belongs to one durable
+conversation dispatch group. Whenever either reply becomes terminal, the
+conversation supervisor checks the pair and creates exactly one system
+synthesis after both are terminal, including failed or canceled pairs. A
+durable recovery sweep must create any synthesis missed by a restart. No caller
+may decide independently whether synthesis runs.
+
+Code-review output must expose the work from every required pass. Each of the
+five pass sections contains its actual Blocking or Non-blocking findings with
+evidence and a recommended change, or the exact statement `No material issues.`
+A count or “pass completed” summary is not a review finding and must be rejected.
+
 ### The knowledge graph is a derived SQLite index, never a second source of truth
 
 *Decision from Jeffrey, 2026-09-09.* Workbench's canonical task, project,

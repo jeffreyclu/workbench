@@ -45,6 +45,7 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
   // the current stall, so repeated ticks don't spam the log every 5s. Resets to false
   // once capacity frees up, so the next stall can log again.
   let stallLogged = false;
+  let synthesisSweepRunning = false;
   const logSafely = (...args: Parameters<WorkItemRepository['logDiagnostic']>) => {
     try { repository.logDiagnostic(...args); }
     catch (error) { console.error('[scheduler] Could not persist diagnostic:', error); }
@@ -103,6 +104,15 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
         void executeAgentRun(repository, run, OWNER_ID, LEASE_MS).catch((error) => {
           logSafely('scheduler_error', 'scheduler', 'failure', `Dispatch failed for run ${runId}: ${String(error)}`, undefined, 'dispatch_error');
         });
+      }
+      if (!synthesisSweepRunning) {
+        synthesisSweepRunning = true;
+        void import('./shared-room.js')
+          .then(({ supervisePendingConversationSyntheses }) => supervisePendingConversationSyntheses(repository))
+          .catch((error) => {
+            logSafely('scheduler_error', 'scheduler', 'failure', `Synthesis recovery failed: ${String(error)}`, undefined, 'synthesis_recovery_error');
+          })
+          .finally(() => { synthesisSweepRunning = false; });
       }
     } catch (error) {
       logSafely('scheduler_error', 'scheduler', 'failure', `Tick failed: ${String(error)}`, Date.now() - start, 'tick_error');

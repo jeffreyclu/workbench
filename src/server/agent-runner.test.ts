@@ -738,7 +738,7 @@ fi`;
 
   it('retries an incomplete review once and stores the complete five-pass replacement', async () => {
     const incomplete = '## Problem\nReview the diff.\n\n## Solution\nPass 1: one finding.\n\n## Context\nFour passes are missing.';
-    const complete = '## Problem\nReview the diff.\n\n## Solution\nPass 1: 1 finding.\nPass 2: No material issues.\nPass 3: No material issues.\nPass 4: No material issues.\nPass 5: No material issues.\n\n[Blocking] button.js:2 calls an undefined function.\n\n## Context\nStatic review only.';
+    const complete = '## Problem\nReview the diff.\n\n## Solution\n### Pass 1\nBlocking: button.js:2 calls an undefined function. Replace it with the defined helper.\n\n### Pass 2\nNo material issues.\n\n### Pass 3\nNo material issues.\n\n### Pass 4\nNo material issues.\n\n### Pass 5\nNo material issues.\n\n## Context\nStatic review only.';
     const firstEvent = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: incomplete } });
     const secondEvent = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: complete } });
     const { directory, log } = fakeAgentDirectory(
@@ -1134,18 +1134,20 @@ fi`,
     expect(prompt).toContain('3. Conventions and existing patterns');
     expect(prompt).toContain('4. UX issues and bugs');
     expect(prompt).toContain('5. Security');
-    expect(prompt).toContain('compact five-line Pass coverage section');
-    expect(prompt).toContain('exact labels: "Pass 1", "Pass 2", "Pass 3", "Pass 4", and "Pass 5"');
+    expect(prompt).toContain('five sections headed exactly "### Pass 1" through "### Pass 5"');
+    expect(prompt).toContain('Never replace findings with counts');
     expect(prompt).toContain('Label every finding or risk as Blocking or Non-blocking');
   });
 
   it('detects incomplete five-pass reviews and requests a complete replacement', () => {
     const incomplete = 'Pass 1: one finding\nPass 2: No material issues.\nPass 5: No material issues.';
-    expect(missingReviewPasses(incomplete)).toEqual([3, 4]);
-    expect(missingReviewPasses('Pass 1\nPass 2\nPass 3\nPass 4\nPass 5')).toEqual([]);
-    const retry = reviewPassCompletionPrompt('original', incomplete, [3, 4]);
-    expect(retry).toContain('Pass 3, Pass 4');
+    expect(missingReviewPasses(incomplete)).toEqual([1, 2, 3, 4, 5]);
+    const complete = '### Pass 1\nBlocking: src/a.ts:1 drops the value. Preserve it.\n\n### Pass 2\nNo material issues.\n\n### Pass 3\nNo material issues.\n\n### Pass 4\nNon-blocking: src/a.ts:2 lacks feedback. Add an error state.\n\n### Pass 5\nNo material issues.';
+    expect(missingReviewPasses(complete)).toEqual([]);
+    const retry = reviewPassCompletionPrompt('original', incomplete, [1, 2, 3, 4, 5]);
+    expect(retry).toContain('Pass 1, Pass 2, Pass 3, Pass 4, Pass 5');
     expect(retry).toContain('one complete replacement review, not a continuation');
+    expect(retry).toContain('Never substitute finding counts');
   });
 
   it('applies the principal frontend engineer protocol to implementation work', () => {

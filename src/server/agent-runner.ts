@@ -293,7 +293,7 @@ This is a read-only review. All five passes are static:
   3. Conventions and existing patterns: repository rules, nearby implementations, shared abstractions, API contracts, naming, and consistency with established architecture. Prefer local conventions; recommend a different pattern only when the diff adds avoidable complexity or breaks correctness.
   4. UX issues and bugs: user flows, loading/empty/error/permission states, accessibility, responsive behavior, feedback, recovery, stale UI, races, and confusing or broken interactions.
   5. Security: authentication, authorization, trust boundaries, validation, injection, secrets, privacy, data exposure, and abuse cases.
-- Finish each pass before starting the next. In the final review, include a compact five-line Pass coverage section using these exact labels: "Pass 1", "Pass 2", "Pass 3", "Pass 4", and "Pass 5". Each line must state either the material finding count or "No material issues." Then consolidate and deduplicate the actual findings by severity.
+- Finish each pass before starting the next. The final review must contain five sections headed exactly "### Pass 1" through "### Pass 5", in order. Inside each section, write every actual finding from that pass with its Blocking or Non-blocking severity, file/line evidence, impact, and recommended change. If a pass found nothing, write exactly "No material issues." Never replace findings with counts or a statement that the pass ran. Deduplicate a cross-cutting finding by placing it in its primary pass and cross-referencing it from another pass only when that adds useful context.
 - Label every finding or risk as Blocking or Non-blocking. Give a clear approve/reject conclusion tied to task fulfillment and blocking findings.
 - Keep investigation narration minimal. Return the review, not a transcript of file reads.
 `.trim();
@@ -301,11 +301,22 @@ This is a read-only review. All five passes are static:
 const REVIEW_PASS_NUMBERS = [1, 2, 3, 4, 5] as const;
 
 export function missingReviewPasses(output: string): number[] {
-  return REVIEW_PASS_NUMBERS.filter((pass) => !new RegExp(`\\bpass\\s*${pass}\\b`, 'i').test(output));
+  return REVIEW_PASS_NUMBERS.filter((pass) => {
+    const heading = new RegExp(`^###\\s+Pass\\s+${pass}(?:\\s*[—:.-].*)?$`, 'im');
+    const match = heading.exec(output);
+    if (!match) return true;
+    const sectionStart = match.index + match[0].length;
+    const nextHeading = /^###\s+Pass\s+[1-5](?:\s*[—:.-].*)?$/gim;
+    nextHeading.lastIndex = sectionStart;
+    const next = nextHeading.exec(output);
+    const section = output.slice(sectionStart, next?.index ?? output.length).trim();
+    if (/^No material issues\.(?:\s|$)/i.test(section)) return false;
+    return !/(?:\*\*)?(?:Blocking|Non-blocking)(?:\*\*)?\s*:/i.test(section);
+  });
 }
 
 export function reviewPassCompletionPrompt(originalPrompt: string, draft: string, missing: number[]): string {
-  return `${originalPrompt}\n\nReview completion retry: the prior draft was rejected because it omitted mandatory pass coverage for Pass ${missing.join(', Pass ')}. Complete all five review passes now and return one complete replacement review, not a continuation. Include a five-line Pass coverage section with the exact labels Pass 1, Pass 2, Pass 3, Pass 4, and Pass 5. Each line must give the material finding count or say "No material issues." Preserve verified findings, deduplicate them below the coverage section, label every finding Blocking or Non-blocking, and do not claim evidence you did not inspect.\n\nRejected draft:\n${draft}`;
+  return `${originalPrompt}\n\nReview completion retry: the prior draft was rejected because Pass ${missing.join(', Pass ')} did not contain the required actual findings. Return one complete replacement review, not a continuation. Use exact headings \`### Pass 1\` through \`### Pass 5\` in order. Under every heading, include each actual finding with a \`Blocking:\` or \`Non-blocking:\` label, concrete file/line evidence, impact, and recommended change; if that pass found nothing, write exactly \`No material issues.\` Never substitute finding counts or "pass completed" summaries. Preserve verified findings, deduplicate cross-cutting findings into their primary pass, and do not claim evidence you did not inspect.\n\nRejected draft:\n${draft}`;
 }
 
 const FRONTEND_ENGINEER_PERSONA = `
@@ -2216,6 +2227,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.updateSharedMessage(run.messageId, { body: output, status: 'completed', ...telemetry });
       if (run.conversationId) repository.recordAgentHandoff(run.conversationId, run.messageId, result.agent, output);
     }
+    await superviseTerminalConversationReply(repository, run);
     // A decomposition can archive the parent while this process is winding
     // down. Never resurrect or reorder that historical parent from a late
     // completion callback.
@@ -2254,6 +2266,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }
     if (!repository.finishRun(run.id, ownerId, { status: 'failed', error: message, completedAt: new Date().toISOString(), ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}) })) return;
     if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'failed', error: message, ...(terminalCheckpoint ? { body: terminalCheckpoint } : {}) });
+    await superviseTerminalConversationReply(repository, run);
     const latestItem = repository.get(item.id);
     if (!latestItem?.archivedAt && latestItem?.status !== 'done') {
       repository.update(item.id, { status: 'blocked' }, false, { actor: 'system', source: 'agent_runner' });
@@ -2279,6 +2292,7 @@ export function cancelAgentRun(repository: WorkItemRepository, id: string): Agen
   const completedAt = new Date().toISOString();
   repository.updateRun(id, { status: 'canceled', completedAt });
   if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'canceled' });
+  void superviseTerminalConversationReply(repository, run);
   const item = repository.get(run.workItemId);
   if (!item?.archivedAt && item?.status !== 'done') {
     repository.update(run.workItemId, { status: 'ready' }, false, { actor: 'system', source: 'agent_runner' });
@@ -2288,6 +2302,21 @@ export function cancelAgentRun(repository: WorkItemRepository, id: string): Agen
   const controller = activeRunControllers.get(id);
   if (controller) controller.abort();
   return { ...run, status: 'canceled', completedAt };
+}
+
+/** Agent runs and chat replies share one terminal conversation supervisor.
+ * The dynamic import avoids making the provider runner and room supervisor a
+ * static module cycle while preserving one synthesis policy. */
+async function superviseTerminalConversationReply(repository: WorkItemRepository, run: Pick<AgentRun, 'conversationId' | 'messageId'>): Promise<void> {
+  if (!run.conversationId || !run.messageId) return;
+  try {
+    const { superviseConversationAfterReply } = await import('./shared-room.js');
+    await superviseConversationAfterReply(repository, run.conversationId, run.messageId);
+  } catch (error) {
+    try {
+      repository.logDiagnostic('scheduler_error', 'system', 'failure', `Conversation synthesis supervision failed: ${error instanceof Error ? error.message : String(error)}`, undefined, 'conversation_supervisor_error');
+    } catch { /* Repository teardown must not turn a settled run into an unhandled rejection. */ }
+  }
 }
 
 export function resolveAgents(kind: AgentRun['kind'], target: AgentRun['requestedTarget']): AgentRun['agent'][] {

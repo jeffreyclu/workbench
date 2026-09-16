@@ -851,6 +851,44 @@ export class WorkItemRepository {
     return message;
   }
 
+  /** The conversation supervisor owns synthesis creation for every dual turn.
+   * Claiming inside BEGIN IMMEDIATE makes the exactly-once check durable across
+   * concurrent replies and overlapping runtimes during promotion. */
+  claimSharedSynthesis(conversationId: string, requestId: string, ignoredMessageId?: string): SharedMessage | null {
+    return this.transaction(() => {
+      const existing = this.database.prepare(`SELECT id FROM shared_messages
+        WHERE conversation_id = ? AND author = 'system' AND dispatch_group_id = ?
+          AND body LIKE 'Synthesis:%' AND (? IS NULL OR id <> ?)
+        LIMIT 1`).get(conversationId, requestId, ignoredMessageId ?? null, ignoredMessageId ?? null) as { id: string } | undefined;
+      if (existing) return null;
+      return this.createSharedMessage('system', 'Synthesis: combining Codex and Claude…', 'running', conversationId, [], 'none', null, null, requestId);
+    });
+  }
+
+  /** Durable recovery input for the conversation supervisor. Completion hooks
+   * handle the normal path; this finds any terminal dual pair missed by a crash. */
+  listPendingSynthesisReplies(limit = 10): Array<{ conversationId: string; replyId: string }> {
+    return (this.database.prepare(`SELECT request.conversation_id, MIN(reply.id) AS reply_id
+      FROM shared_messages request
+      JOIN shared_messages reply ON reply.dispatch_group_id = request.id
+      LEFT JOIN agent_runs run ON run.message_id = reply.id
+      WHERE request.dispatch_target = 'both'
+        AND request.author IN ('jeffrey', 'system')
+        AND reply.author IN ('codex', 'claude')
+        AND NOT EXISTS (
+          SELECT 1 FROM shared_messages synthesis
+          WHERE synthesis.conversation_id = request.conversation_id
+            AND synthesis.author = 'system'
+            AND synthesis.dispatch_group_id = request.id
+            AND synthesis.body LIKE 'Synthesis:%'
+        )
+      GROUP BY request.id, request.conversation_id
+      HAVING SUM(CASE WHEN COALESCE(run.requested_agent, reply.author) = 'codex' AND reply.status IN ('completed', 'failed', 'canceled') THEN 1 ELSE 0 END) > 0
+         AND SUM(CASE WHEN COALESCE(run.requested_agent, reply.author) = 'claude' AND reply.status IN ('completed', 'failed', 'canceled') THEN 1 ELSE 0 END) > 0
+      ORDER BY MIN(reply.created_at) ASC
+      LIMIT ?`).all(limit) as Array<{ conversation_id: string; reply_id: string }>).map((row) => ({ conversationId: row.conversation_id, replyId: row.reply_id }));
+  }
+
   /** Mirrors linked conversation files into the task's durable agent context. */
   private syncConversationAttachmentsToWorkItem(conversation: SharedConversation): void {
     if (!conversation.workItemId) return;

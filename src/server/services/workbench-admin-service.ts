@@ -83,12 +83,13 @@ export class WorkbenchAdminService {
     if (refused) return refused;
     if (this.repository.activeRunsForItem(item.id).length) return { status: 409, body: { error: 'This task already has an active agent run.' } };
     const conversation = this.repository.getOrCreateWorkConversation(item.id, item.title);
-    this.repository.createSharedMessage('system', `Requested ${input.kind}: ${input.instructions || item.description}`, 'completed', conversation.id);
     const resolvedAgents = resolveAgents(input.kind, input.target);
     const agents = input.target === 'auto' ? [this.repository.selectBalancedAgent(resolvedAgents[0], ['codex', 'claude'])] : resolvedAgents;
+    const dualDispatch = agents.length === 2 && agents.includes('codex') && agents.includes('claude');
+    const request = this.repository.createSharedMessage('system', `Requested ${input.kind}: ${input.instructions || item.description}`, 'completed', conversation.id, [], dualDispatch ? 'both' : 'none');
     const accountProfile = input.accountProfile ?? defaultAccountProfileForTask(item);
     const runs = agents.map((agent) => {
-      const reply = this.repository.createSharedMessage(agent, '', 'running', conversation.id);
+      const reply = this.repository.createSharedMessage(agent, '', 'running', conversation.id, [], 'none', null, accountProfile, dualDispatch ? request.id : null, input.kind);
       const run = this.repository.createRun(item.id, input.kind, input.target, agent, input.instructions, conversation.id, reply.id, 'manual', accountProfile);
       if (!input.executionProfile) return run;
       this.repository.updateRun(run.id, { executionProfile: input.executionProfile });
@@ -194,10 +195,11 @@ export class WorkbenchAdminService {
     conversation = this.repository.setConversationComposerPreferences(conversation.id, {
       preferredDispatchTarget: dispatchTarget,
     }) ?? conversation;
-    this.repository.createSharedMessage('system', `Execute: ${item.title}`, 'completed', conversation.id);
+    const dualDispatch = dispatchTarget === 'both';
+    const request = this.repository.createSharedMessage('system', `Execute: ${item.title}`, 'completed', conversation.id, [], dualDispatch ? 'both' : 'none');
     const accountProfile = options.accountProfile ?? defaultAccountProfileForTask(item);
     const runs = agents.map((agent) => {
-      const reply = this.repository.createSharedMessage(agent, '', 'running', conversation.id);
+      const reply = this.repository.createSharedMessage(agent, '', 'running', conversation.id, [], 'none', null, accountProfile, dualDispatch ? request.id : null, classification.kind);
       const run = this.repository.createRun(item.id, classification.kind, explicitlyAssigned.length ? agent : 'auto', agent, classification.instructions, conversation.id, reply.id, 'manual', accountProfile);
       if (!executionProfile) return run;
       this.repository.updateRun(run.id, { executionProfile });

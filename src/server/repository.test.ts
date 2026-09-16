@@ -1488,6 +1488,24 @@ describe('WorkItemRepository', () => {
     expect(source?.verbose).toBe(true);
   });
 
+  it('supervises dual task replies, including two canceled replies, and claims synthesis exactly once', () => {
+    const conversation = repository.createConversation('Dual task synthesis');
+    const request = repository.createSharedMessage('system', 'Execute: review the connector PR', 'completed', conversation.id, [], 'both');
+    const codex = repository.createSharedMessage('codex', '', 'canceled', conversation.id, [], 'none', null, null, request.id, 'review');
+    const claude = repository.createSharedMessage('claude', '', 'canceled', conversation.id, [], 'none', null, null, request.id, 'review');
+
+    expect(synthesisSource(repository, conversation.id, codex.id)).toEqual(expect.objectContaining({ requestId: request.id }));
+    const pending = repository.listPendingSynthesisReplies();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.conversationId).toBe(conversation.id);
+    expect([codex.id, claude.id]).toContain(pending[0]?.replyId);
+
+    const claimed = repository.claimSharedSynthesis(conversation.id, request.id);
+    expect(claimed).toEqual(expect.objectContaining({ author: 'system', dispatchGroupId: request.id, status: 'running' }));
+    expect(repository.claimSharedSynthesis(conversation.id, request.id)).toBeNull();
+    expect(repository.listPendingSynthesisReplies()).toEqual([]);
+  });
+
   it('retrieves one shared memory snapshot for a dated repeat request before concurrent replies', async () => {
     const task = repository.create({ title: 'Connectors retrieval', description: '', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
     const conversation = repository.createConversation('Concurrent retrieval', task.id);

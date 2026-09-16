@@ -160,7 +160,7 @@ nav { display: grid; gap: 3px; }
 .queue-rows { display: grid; gap: 6px; }
 .page-state { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; color: var(--muted); font-size: 10px; }
 .stack-header { display: flex; align-items: center; justify-content: space-between; height: 38px; padding: 0 12px; border-radius: 7px; font: 600 9px 'DM Mono'; letter-spacing: .1em; text-transform: uppercase; }
-.stack-header strong { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0 6px; border-radius: 99px; font-size: 8px; }
+.stack-header strong { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0 6px; border-radius: 99px; font-size: 8px; line-height: 1; }
 .stack-header-progress { color: #e6c75f; background: #2b2618; border: 1px solid #504522; }
 .stack-header-progress strong { color: #17140b; background: #e6c75f; }
 .stack-header-attention { color: #aeb8dc; background: #1a1d28; border: 1px solid #30384f; }

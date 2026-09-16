@@ -1345,7 +1345,7 @@ export async function replyInSharedRoom(
       let synthesized = false;
       let dispatched: SharedMessage[] = [];
       try {
-        synthesized = await synthesizeSharedTurn(repository, target.conversationId, target.id);
+        synthesized = await superviseConversationAfterReply(repository, target.conversationId, target.id);
         dispatched = dispatchNextSharedTurn(repository, target.conversationId);
       } catch (error) {
         if ((error as { code?: string } | undefined)?.code !== 'ERR_INVALID_STATE') throw error;
@@ -1870,7 +1870,7 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   // A timestamp is not an identity. Multiple messages can share a timestamp,
   // while every dual reply is durably tied to its human request by this ID.
   const request = reply?.dispatchGroupId
-    ? messages.find((message) => message.id === reply.dispatchGroupId && message.author === 'jeffrey' && message.dispatchTarget === 'both')
+    ? messages.find((message) => message.id === reply.dispatchGroupId && (message.author === 'jeffrey' || message.author === 'system') && message.dispatchTarget === 'both')
     : null;
   if (!request) return null;
   const replies = messages.filter((message) => message.dispatchGroupId === request.id && (message.author === 'codex' || message.author === 'claude'));
@@ -1880,7 +1880,7 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   const terminal = (message: SharedMessage) => message.status === 'completed' || message.status === 'failed' || message.status === 'canceled';
   // A partial result still needs a durable conclusion. Only an explicitly
   // canceled pair avoids spending another provider turn on a summary.
-  if (!codex || !claude || !terminal(codex) || !terminal(claude) || (codex.status === 'canceled' && claude.status === 'canceled')) return null;
+  if (!codex || !claude || !terminal(codex) || !terminal(claude)) return null;
   const alreadySynthesized = messages.some((message) => message.id !== ignoredSynthesisMessageId && message.author === 'system' && message.dispatchGroupId === request.id && message.body.startsWith('Synthesis:'));
   if (alreadySynthesized) return null;
   // Synthesis is a bounded reading task. Agent reports can contain huge live
@@ -1889,14 +1889,15 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   const response = (label: string, message: SharedMessage) => `${label} (${message.status}):\n${(message.body || message.error || 'No response was produced.').slice(0, 12_000)}`;
   return {
     requestId: request.id, codex, claude, verbose: verboseResponseRequested(request.body),
-    prompt: `${EXTERNAL_ACTION_CONTRACT}\n\nWrite a concise synthesis of the two supplied agent responses below. You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nJeffrey: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
+    prompt: `${EXTERNAL_ACTION_CONTRACT}\n\nWrite a concise synthesis of the two supplied agent responses below. You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nRequest: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
   };
 }
 
 async function synthesizeSharedTurn(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): Promise<boolean> {
   const source = synthesisSource(repository, conversationId, replyId, ignoredSynthesisMessageId);
   if (!source) return false;
-  const message = repository.createSharedMessage('system', 'Synthesis: combining Codex and Claude…', 'running', conversationId, [], 'none', null, null, source.requestId);
+  const message = repository.claimSharedSynthesis(conversationId, source.requestId, ignoredSynthesisMessageId);
+  if (!message) return false;
   // A synthesis is never implementation or research. Keep its cost and
   // latency independent of words (for example "migration") in the reports.
   const agent: AgentRun['agent'] = 'claude';
@@ -1919,6 +1920,25 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
   const completed = repository.getSharedMessageById(message.id);
   if (completed?.status === 'completed') repository.recordAgentHandoff(conversationId, message.id, 'system', completed.body);
   return true;
+}
+
+/** One terminal-reply hook for every conversation surface. Chat dispatch,
+ * task execution, failure, cancellation, and restart recovery all enter here;
+ * no caller owns a separate synthesis policy. */
+export async function superviseConversationAfterReply(repository: WorkItemRepository, conversationId: string, replyId: string): Promise<boolean> {
+  const reply = repository.getSharedMessageById(replyId);
+  if (!reply || reply.conversationId !== conversationId) return false;
+  if (!['codex', 'claude'].includes(reply.author) || !['completed', 'failed', 'canceled'].includes(reply.status)) return false;
+  return synthesizeSharedTurn(repository, conversationId, replyId);
+}
+
+/** Recover terminal dual turns whose completion hook was interrupted. */
+export async function supervisePendingConversationSyntheses(repository: WorkItemRepository): Promise<number> {
+  let synthesized = 0;
+  for (const candidate of repository.listPendingSynthesisReplies()) {
+    if (await superviseConversationAfterReply(repository, candidate.conversationId, candidate.replyId)) synthesized += 1;
+  }
+  return synthesized;
 }
 
 /** Retry a failed system handoff without re-running either underlying agent. */

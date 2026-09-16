@@ -689,3 +689,62 @@ time for the payload.
 Before producing such an artifact, search for one already on disk — in that same task, a spec file had
 been written hours earlier at `~/dev/companies-house-basic-auth.openapi.json` and a second copy was
 created in `~/Downloads` before the duplicate was caught and deleted.
+
+## Verify the server's contract before shipping a client-side validation change
+
+On 2026-09-14, during CON-270, the "blank HTTP Basic password" fix was implemented in two frontend
+repos — relaxing the forms so the username was mandatory and the password optional — and reported as
+done. Jeffrey's reply: "did you fucking verify that username mandatory, password optional is what
+be.mcp-gateway expects??" It was not. Reading `be.mcp-gateway` showed the connect route declared
+`password: t.String({ minLength: 1 })`, so every relaxed form would have traded a client-side
+"Password is required" message for a server-side 422.
+
+Whenever a change loosens, tightens, or reshapes what a client sends, read the receiving service's
+schema, handler, and storage format first, and quote the exact file and line. A validation rule is
+one end of a contract; changing one end without reading the other is not a fix, it just relocates the
+error. The same sweep must continue past the request boundary — in this case the credential was also
+persisted in a format whose reader silently dropped a blank password, a second failure that a
+route-only check would have missed.
+
+## Reading the server's contract does not authorize editing the server (2026-09-14)
+
+Later the same day on CON-270, acting on the entry above, the `be.mcp-gateway` schema was read — and
+then changed, in a new backend worktree, to allow the blank password. Jeffrey: "what the fuck. did i
+ask you to make backend changes???" The ticket was scoped frontend-only and he had said so.
+
+The two rules compose in one direction only. Always read the receiving service to learn whether the
+client change can work. When that reading shows the server is what blocks the fix, that is a finding
+to report with the exact file and line, plus the client-side options that remain — never a license to
+open the backend repo and edit it. Crossing a repository boundary Jeffrey scoped out needs his
+explicit go-ahead first, even when the backend edit is small, obviously correct, and the only thing
+that would make the feature work end to end.
+
+## A screenshot may be of our own branch, not of shipped behavior (2026-09-14)
+
+On CON-270 a screenshot of the Connect modal was cited back to Jeffrey as evidence of what the
+product does today. It was not: the modal in it was the uncommitted frontend work on
+`jeffrey/CON-270/basic-auth-blank-password`, and only the error inside it came from the deployed
+`main` gateway. Jeffrey: "the screenshot is what WE IMPLEMENTED, NOT WHAT EXISTS."
+
+Before treating any image Jeffrey shares as evidence, establish which build produced each part of it.
+A screenshot taken against a local worktree mixes our unreleased UI with real server responses, so
+the UI in it proves nothing about main while the error in it still does. Say explicitly which half is
+which when describing it, and never use a picture of our own change as proof of the bug it fixes.
+
+## Regenerate generated API clients; never hand-write their types
+
+When frontend work needs new backend fields, regenerate the typed client with the repo's own
+OpenAPI codegen command instead of hand-authoring the request/response types. Jeffrey stated this
+directly on 2026-09-15 for the AIS password-grant work: "there should be an openai ts command to
+auto generate the client. use it."
+
+In `~/dev/fe.web-app`, that command is `pnpm generate:connect-gateway`, run from
+`apps/service.writer-app`. It wipes `src/generated/connector-gateway` and runs `@hey-api/openapi-ts`
+via `src/generated/generate-connector-gateway.ts`, using `openapi-ts.config.ts`, which reads a local
+`connector-gateway.yaml` if present and otherwise fetches
+`https://app.qordobadev.com/api/mcp-gateway/swagger/json` with a `Q_TOKEN` env var.
+
+The one legitimate reason to write types by hand is hey-api's literal collapse: it emits discriminator
+fields as `kind: string` / `mode: string`, so generated unions cannot be narrowed. The codebase's
+established response is a small hand-patched literal union layered over the generated type (see
+`DetectedAuth` in `create-custom-connector/api/byo.queries.ts`), not a hand-written client.

@@ -118,4 +118,20 @@ describe('WorkbenchAdminService.startWorkItemExecution', () => {
 
     expect('runs' in result && result.runs.map((run) => run.agent)).toEqual(['codex']);
   });
+
+  it('puts dual task execution through the same durable conversation group as dual chat', async () => {
+    const task = repository.create({ title: 'Review the connector PR', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.update(task.id, { assignees: ['codex', 'claude'] });
+    repository.setClassification(task.id, { kind: 'review', agent: 'codex', complex: false, instructions: 'Review it.' });
+
+    const result = await admin.startWorkItemExecution(task.id, { executionProfile: 'deep', force: false });
+
+    expect('runs' in result && result.runs).toHaveLength(2);
+    const messages = repository.listAllSharedMessages(repository.listConversationsForWorkItem(task.id)[0]!.id);
+    const request = messages.find((message) => message.author === 'system' && message.body.startsWith('Execute:'));
+    const replies = messages.filter((message) => message.author === 'codex' || message.author === 'claude');
+    expect(request).toEqual(expect.objectContaining({ dispatchTarget: 'both' }));
+    expect(replies).toHaveLength(2);
+    expect(replies.every((reply) => reply.dispatchGroupId === request?.id)).toBe(true);
+  });
 });
