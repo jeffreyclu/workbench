@@ -296,6 +296,11 @@ viewport-filling review workspace. Full screen preserves the same focused/all
 scope, zoom, pan, edge explanations, and inline code inspection; it exits by
 its visible control, Escape, or the backdrop and returns focus to its opener.
 
+Review verdicts are optimistic: the queue, counts, and selected decision update
+in the click frame while the database write completes behind them. Saving a
+verdict must not rescan repositories or refetch rows the write already returned;
+on persistence failure, roll back and reopen the failed decision with its error.
+
 ### Code review is an automation-first attention stack
 
 *Decision from Jeffrey, 2026-08-29.* Treat each logical code block as a discrete

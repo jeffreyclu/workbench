@@ -394,9 +394,7 @@ describe('conversation router', () => {
 
   describe('hunk and block reviews', () => {
     it('lists and upserts hunk reviews, individually and in batch', async () => {
-      seams.listCandidateWorkspaces.mockReturnValue([workspace]);
       const conversation = await createConversation();
-      await request(`/api/shared/conversations/${conversation.id}/workspaces/selection`, 'PUT', { workspacePath: workspace });
 
       expect((await request(`/api/shared/conversations/${conversation.id}/workspace-diff/hunk-reviews?revision=rev-1`)).status).toBe(200);
       expect((await request('/api/shared/conversations/missing/workspace-diff/hunk-reviews?revision=rev-1')).status).toBe(404);
@@ -410,12 +408,11 @@ describe('conversation router', () => {
         revision: 'rev-1', hunks: [{ filePath: 'a.ts', hunkRange: '1-2', contentHash: 'hash' }], state: 'reviewed',
       });
       expect(batch.status).toBe(200);
+      expect(seams.listCandidateWorkspaces).not.toHaveBeenCalled();
     });
 
     it('lists and upserts block reviews', async () => {
-      seams.listCandidateWorkspaces.mockReturnValue([workspace]);
       const conversation = await createConversation();
-      await request(`/api/shared/conversations/${conversation.id}/workspaces/selection`, 'PUT', { workspacePath: workspace });
 
       expect((await request(`/api/shared/conversations/${conversation.id}/workspace-diff/block-reviews?revision=rev-1`)).status).toBe(200);
       expect((await request('/api/shared/conversations/missing/workspace-diff/block-reviews?revision=rev-1')).status).toBe(404);
@@ -424,6 +421,7 @@ describe('conversation router', () => {
         revision: 'rev-1', filePath: 'a.ts', blockRange: '1-2', contentHash: 'hash', state: 'reviewed',
       });
       expect(upserted.status).toBe(200);
+      expect(seams.listCandidateWorkspaces).not.toHaveBeenCalled();
     });
   });
 

@@ -465,17 +465,20 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     },
   });
 
-  const saveDecision = useCallback(async (decision: ReviewDecision, state: DiffHunkReviewState) => {
+  const saveDecision = useCallback((decision: ReviewDecision, state: DiffHunkReviewState) => {
     const nextId = nextPendingDecisionId(orderedDecisions, decision.id, changeMap);
-    try {
-      await recordDecisionState(decision, state);
-      if (nextId !== decision.id) setCameFromDecisionId(decision.id);
-      setSelectedDecisionId(nextId);
-      setDetailAnchor(null);
-    } catch {
-      // The mutation exposes its stable request error beside the actions.
-    }
-  }, [changeMap, orderedDecisions, recordDecisionState]);
+    const failedAnchor = detailAnchor;
+    upsertHunkReview.reset();
+    if (nextId !== decision.id) setCameFromDecisionId(decision.id);
+    setSelectedDecisionId(nextId);
+    setDetailAnchor(null);
+    // Persistence is off the interaction path. A failure rolls the optimistic
+    // cache back and returns the reviewer to the decision with its error open.
+    void recordDecisionState(decision, state).catch(() => {
+      setSelectedDecisionId(decision.id);
+      setDetailAnchor(failedAnchor);
+    });
+  }, [changeMap, detailAnchor, orderedDecisions, recordDecisionState, upsertHunkReview]);
 
   // Moving on without answering. The decision keeps its pending state, so the
   // queue, the counts and the map all still owe it — the only thing that
@@ -528,7 +531,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     filePaths: changedFilePaths,
     activeId: selectedDecision?.id ?? null,
     activeFilePath: selectedFile?.path ?? null,
-    canMarkReviewed: Boolean(selectedDecision && reviewRevision && !upsertHunkReview.isPending),
+    canMarkReviewed: Boolean(selectedDecision && reviewRevision),
     onSelect: selectDecision,
     onMarkReviewed: markSelectedReviewed,
     onToggleReadingMode: toggleReadingMode,
@@ -806,7 +809,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                       <DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />
                     </>} onClose={() => setDetailAnchor(null)}>
                       <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null} hideJudging={detailAnchor.simple}>
-                        <DiffReviewActions key={popoverDecision.id} saving={upsertHunkReview.isPending} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => void saveDecision(popoverDecision, state)} onFix={onFixRequest ? () => requestFix(popoverDecision) : undefined} onSkip={() => skipDecision(popoverDecision)} />
+                        <DiffReviewActions key={popoverDecision.id} saving={false} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => saveDecision(popoverDecision, state)} onFix={onFixRequest ? () => requestFix(popoverDecision) : undefined} onSkip={() => skipDecision(popoverDecision)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}
                   </div>

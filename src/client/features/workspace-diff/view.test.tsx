@@ -527,6 +527,41 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(await screen.findByLabelText('3 decisions across 1 file, 3 completed')).toHaveTextContent('3 completed');
   });
 
+  it('advances and paints the verdict before a slow save finishes', async () => {
+    const file: WorkspaceDiffFile = {
+      path: 'src/instant-review.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,
+      patch: '@@ -1 +1 @@ firstBehavior\n-a\n+b\n@@ -10 +10 @@ secondBehavior\n-c\n+d',
+    };
+    let finishSave!: (response: Response) => void;
+    const slowSave = new Promise<Response>((resolve) => { finishSave = resolve; });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return Promise.resolve(json({ selectedPath: null, workspaces: [] }));
+      if (url.endsWith('/workspace-diff/snapshots')) return Promise.resolve(json({ snapshots: [] }));
+      if (url.endsWith('/workspace-diff')) return Promise.resolve(json({ diff: workspaceDiff([file], 'instant-review') }));
+      if (url.includes('/workspace-diff/hunk-reviews?')) return Promise.resolve(json({ reviews: [] }));
+      if (url.endsWith('/workspace-diff/hunk-reviews/batch') && init?.method === 'PUT') return slowSave;
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    renderView(fetchMock);
+
+    await findSelectedDecision('Changes behavior in src/instant-review.ts.');
+    await openDecisionDetail(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
+
+    expect(selectedDecisionChip()).toHaveAccessibleName(/^Decision 2/);
+    expect(screen.queryByText('Saving decision…')).not.toBeInTheDocument();
+    await waitFor(() => expect(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 1.*Approved/ })).toBeInTheDocument());
+
+    finishSave(json({ reviews: [{
+      id: 'saved-review', revision: 'instant-review', filePath: file.path,
+      hunkRange: '@@ -1 +1 @@ firstBehavior', contentHash: contentHashOfLines(['-a', '+b']),
+      state: 'reviewed', note: null, updatedAt: '2026-09-16T00:00:00.000Z',
+    }] }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/hunk-reviews/batch'), expect.objectContaining({ method: 'PUT' })));
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/workspace-diff/hunk-reviews?'))).toHaveLength(1);
+  });
+
   it('moves to the next change on skip without recording a verdict, and hands a change to the composer on fix', async () => {
     const file: WorkspaceDiffFile = {
       path: 'src/skipped.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false,

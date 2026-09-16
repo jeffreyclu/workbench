@@ -256,14 +256,14 @@ export function createConversationRouter({ repository, database, capabilities, a
 
   router.get('/api/shared/conversations/:id/workspace-diff/hunk-reviews', (request, response, next) => {
     try {
-      if (!conversationWorkingDirectory(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+      if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
       const revision = z.string().trim().min(1).parse(request.query.revision);
       response.json({ reviews: repository.listDiffHunkReviews({ conversationId: request.params.id }, revision) });
     } catch (error) { next(error); }
   });
   router.put('/api/shared/conversations/:id/workspace-diff/hunk-reviews', (request, response, next) => {
     try {
-      if (!conversationWorkingDirectory(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+      if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
       const input = z.object({
         revision: z.string().trim().min(1),
         filePath: z.string().trim().min(1),
@@ -277,7 +277,7 @@ export function createConversationRouter({ repository, database, capabilities, a
   });
   router.put('/api/shared/conversations/:id/workspace-diff/hunk-reviews/batch', (request, response, next) => {
     try {
-      if (!conversationWorkingDirectory(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+      if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
       const input = upsertDiffHunkReviewsSchema.parse(request.body);
       response.json({ reviews: repository.upsertDiffHunkReviews({ conversationId: request.params.id }, input) });
     } catch (error) { next(error); }
@@ -287,14 +287,14 @@ export function createConversationRouter({ repository, database, capabilities, a
   // hunk-reviews on purpose: the two granularities never share a row.
   router.get('/api/shared/conversations/:id/workspace-diff/block-reviews', (request, response, next) => {
     try {
-      if (!conversationWorkingDirectory(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+      if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
       const revision = z.string().trim().min(1).parse(request.query.revision);
       response.json({ reviews: repository.listDiffBlockReviews({ conversationId: request.params.id }, revision) });
     } catch (error) { next(error); }
   });
   router.put('/api/shared/conversations/:id/workspace-diff/block-reviews', (request, response, next) => {
     try {
-      if (!conversationWorkingDirectory(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+      if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
       const input = upsertDiffBlockReviewSchema.parse(request.body);
       response.json({ review: repository.upsertDiffBlockReview({ conversationId: request.params.id }, input) });
     } catch (error) { next(error); }

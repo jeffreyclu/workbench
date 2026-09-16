@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
-import type { DiffHunkReviewState } from '../../../shared/contracts.js';
+import type { DiffHunkReview, DiffHunkReviewState } from '../../../shared/contracts.js';
 import { workspaceDiffData, workspaceDiffQueryKeys } from './data.js';
 
 export const workspaceExplorerQueryKey = (scope: WorkspaceDiffScope | null) =>
@@ -148,10 +148,42 @@ export function useDiffHunkReviews(scope: WorkspaceDiffScope, revision: string |
 export function useUpsertDiffHunkReview(scope: WorkspaceDiffScope, revision: string | undefined) {
   const queryClient = useQueryClient();
   const { workspacePath } = useSelectedWorkspacePath(scope);
+  const queryKey = workspaceDiffQueryKeys.hunkReviews(scope, workspacePath, revision);
+  type ReviewCache = { reviews: DiffHunkReview[] };
+  const matchesInput = (review: DiffHunkReview, hunks: Array<{ filePath: string; hunkRange: string; contentHash: string }>) =>
+    hunks.some((hunk) => review.filePath === hunk.filePath && review.hunkRange === hunk.hunkRange && review.contentHash === hunk.contentHash);
   return useMutation({
     mutationFn: (input: { hunks: Array<{ filePath: string; hunkRange: string; contentHash: string }>; state: DiffHunkReviewState; note?: string }) => workspaceDiffData.upsertHunkReviews(scope, { ...input, revision: revision! }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: workspaceDiffQueryKeys.hunkReviews(scope, workspacePath, revision) });
+    // A verdict is a tiny local state change. Paint it immediately and let the
+    // database write finish behind the reviewer instead of blocking navigation
+    // on a PUT followed by a redundant GET of the same rows.
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey, exact: true });
+      const previous = queryClient.getQueryData<ReviewCache>(queryKey);
+      const updatedAt = new Date().toISOString();
+      const optimistic = input.hunks.map((hunk, index): DiffHunkReview => ({
+        id: `optimistic:${revision}:${hunk.contentHash}:${index}`,
+        revision: revision!,
+        ...hunk,
+        state: input.state,
+        note: input.note ?? null,
+        updatedAt,
+      }));
+      queryClient.setQueryData<ReviewCache>(queryKey, (current) => ({
+        reviews: [...(current?.reviews ?? []).filter((review) => !matchesInput(review, input.hunks)), ...optimistic],
+      }));
+      return { previous };
+    },
+    onError: (_error, _input, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
+      else queryClient.removeQueries({ queryKey, exact: true });
+    },
+    onSuccess: ({ reviews }, input) => {
+      // Replace temporary rows with the server's ids and timestamps without a
+      // second request. The returned rows are the exact transaction just saved.
+      queryClient.setQueryData<ReviewCache>(queryKey, (current) => ({
+        reviews: [...(current?.reviews ?? []).filter((review) => !matchesInput(review, input.hunks)), ...reviews],
+      }));
     },
   });
 }
