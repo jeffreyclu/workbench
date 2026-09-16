@@ -1176,6 +1176,14 @@ fi`,
     expect(retry).toContain('Never substitute finding counts');
   });
 
+  it('does not consume the first finding as part of a pass heading', () => {
+    const complete = [1, 2, 3, 4, 5].map((pass) => (
+      `### Pass ${pass}\n\n- **Non-blocking:** src/a.ts:${pass} has a concrete issue. Correct it.`
+    )).join('\n\n');
+
+    expect(missingReviewPasses(complete)).toEqual([]);
+  });
+
   it('applies the principal frontend engineer protocol to implementation work', () => {
     const run = { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun;
     const prompt = buildPrompt(item('Implement the connector UI'), run);

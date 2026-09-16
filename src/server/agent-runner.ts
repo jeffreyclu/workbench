@@ -302,11 +302,14 @@ const REVIEW_PASS_NUMBERS = [1, 2, 3, 4, 5] as const;
 
 export function missingReviewPasses(output: string): number[] {
   return REVIEW_PASS_NUMBERS.filter((pass) => {
-    const heading = new RegExp(`^###\\s+Pass\\s+${pass}(?:\\s*[—:.-].*)?$`, 'im');
+    // Keep the optional suffix on the heading's own line. `\\s*` also
+    // consumes newlines, which made a heading absorb the first bullet below it;
+    // a pass with exactly one finding was then misclassified as empty.
+    const heading = new RegExp(`^###[ \\t]+Pass[ \\t]+${pass}(?:[ \\t]*[—:.-].*)?[ \\t]*$`, 'im');
     const match = heading.exec(output);
     if (!match) return true;
     const sectionStart = match.index + match[0].length;
-    const nextHeading = /^###\s+Pass\s+[1-5](?:\s*[—:.-].*)?$/gim;
+    const nextHeading = /^###[ \t]+Pass[ \t]+[1-5](?:[ \t]*[—:.-].*)?[ \t]*$/gim;
     nextHeading.lastIndex = sectionStart;
     const next = nextHeading.exec(output);
     const section = output.slice(sectionStart, next?.index ?? output.length).trim();
