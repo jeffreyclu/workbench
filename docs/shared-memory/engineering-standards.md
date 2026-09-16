@@ -96,13 +96,13 @@ repo, installed the full monorepo's dependencies, checked CI status, and started
 tests locally. He called this "way too many steps." The review he wants is a reading exercise, not
 an execution exercise.
 
-#### Scope of the first pass
+#### Scope of the five-pass review
 
 Review the code as a **principal frontend engineer** would. Do not run the tests, do not start the
 app, do not install dependencies, do not chase CI. Read the diff and the surrounding files that the
 diff actually interacts with — that is enough to review.
 
-Executing tests is deliberately **out of scope for the first pass**. Static test review is in scope:
+Executing tests is deliberately **out of scope for all five passes**. Static test review is in scope:
 the reviewer must map changed production logic to the exact test cases and assertions that exercise
 it, and identify uncovered branches or behavior. Running those tests or doing runtime validation
 remains a separate Workbench executable.
@@ -113,16 +113,24 @@ Start from the Linear issue and the PR description. The first question to answer
 change actually does what it was tasked to do. That verification is the *minimum requirement* for
 approving or rejecting — everything else is commentary layered on top of it.
 
-#### The review lenses
+#### The five review passes
 
-Then review the diff and relevant files through each of these, explicitly:
+*Expanded by Jeffrey, 2026-09-16.* Review the diff and relevant surrounding code in five separate,
+sequential passes. Do not merge or skip a pass:
 
-- readability
-- maintainability
-- performance
-- scalability
-- security
-- reliability
+1. **Correctness and readability:** task fulfillment, control and data flow, naming,
+   maintainability, failure handling, and concrete bugs.
+2. **Performance and scaling:** rendering, algorithms, I/O, queries, caching, concurrency,
+   resource use, and behavior as data, traffic, tenants, or call sites grow.
+3. **Conventions and existing patterns:** repository rules, nearby implementations, shared
+   abstractions, contracts, naming, and established architecture.
+4. **UX issues and bugs:** complete user flows, loading/empty/error/permission states,
+   accessibility, responsive behavior, feedback, recovery, stale UI, and races.
+5. **Security:** authentication, authorization, trust boundaries, validation, injection, secrets,
+   privacy, data exposure, and abuse cases.
+
+The delivered review includes a compact result for every pass, even when that result is “No
+material issues,” followed by one deduplicated findings list ordered by severity.
 
 #### Correctness standard
 
@@ -153,8 +161,8 @@ Every unit starts with the same evidence header:
 - **Verification map:** each behavior or branch mapped to the exact test case and assertion that
   covers it. Cite both sides, for example `parser.ts:42-49 -> parser.test.ts:88-101`. Mark logic with
   no mapped test explicitly. Test presence or aggregate coverage percentage is not proof.
-- **Quality:** correctness first, then readability, maintainability, performance, scalability,
-  security, and reliability. Discuss only material issues; do not manufacture one comment per lens.
+- **Quality:** complete all five review passes above. Discuss only material issues; a pass with no
+  finding says “No material issues” instead of manufacturing feedback.
 
 Apply the following type-specific questions:
 

@@ -1099,7 +1099,15 @@ fi`;
     const prompt = buildPrompt(item('Review PR 5246'), run);
     expect(prompt).toContain('Authoritative persona: frontend-reviewer');
     expect(prompt).toContain('Read the Linear issue context and PR description first');
+    expect(prompt).toContain('All five passes are static');
     expect(prompt).toContain('Do not install dependencies, run tests, run the app, inspect CI');
+    expect(prompt).toContain('Complete these five review passes separately and in this order');
+    expect(prompt).toContain('1. Correctness and readability');
+    expect(prompt).toContain('2. Performance and scaling');
+    expect(prompt).toContain('3. Conventions and existing patterns');
+    expect(prompt).toContain('4. UX issues and bugs');
+    expect(prompt).toContain('5. Security');
+    expect(prompt).toContain('compact five-line Pass coverage section');
     expect(prompt).toContain('Label every finding or risk as Blocking or Non-blocking');
   });
 
