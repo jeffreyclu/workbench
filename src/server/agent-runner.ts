@@ -423,6 +423,37 @@ function isDocumentWork(item: WorkItem): boolean {
   return /(?:\.md\b|\b(document|documentation|knowledge|memory|copy|prose|readme|claude\.md|agents\.md)\b)/.test(text);
 }
 
+const GITHUB_PULL_REQUEST_URL = /https?:\/\/github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/pull\/\d+/i;
+
+function authoritativeGitHubPullRequestUrl(item: WorkItem, run: AgentRun): string | null {
+  // The newest explicit instruction wins over older task metadata. This lets
+  // Jeffrey correct a stale or ambiguous task without the local checkout
+  // silently remaining the review target.
+  for (const value of [run.instructions, item.sourceUrl, item.description, item.title]) {
+    const match = value?.match(GITHUB_PULL_REQUEST_URL)?.[0];
+    if (match) return match;
+  }
+  return null;
+}
+
+function githubSourceAuthority(item: WorkItem, run: AgentRun): string {
+  const pullRequestUrl = authoritativeGitHubPullRequestUrl(item, run);
+  if (!pullRequestUrl) return '';
+  const reviewRules = run.kind === 'review' ? `
+- Resolve the PR through GitHub first and establish its exact base and head commit SHAs before reading implementation code.
+- Review only the GitHub PR's base-to-head diff. The current local branch, working tree, and similarly named branches are never substitutes for that diff.
+- A local repository may supply surrounding context only after the reviewed files are pinned to the PR head SHA.
+- Do not check out, reset, edit, or otherwise mutate a repository during this review.
+- If GitHub cannot be read, report the exact access failure and stop. Never fall back to reviewing the current checkout.
+- In the final Context section, name this PR URL and the base and head SHAs actually reviewed.` : `
+- Resolve the PR through GitHub before using a local checkout, and verify that any local code used for the task matches the PR head.
+- Never substitute the current local branch merely because it is already checked out.
+- If GitHub cannot be read, report the exact access failure instead of silently using different code.`;
+  return `Authoritative GitHub source:
+- PR URL: ${pullRequestUrl}
+- This URL is the source of truth for the requested code state; task text, memory, and local repository state cannot replace it.${reviewRules}`;
+}
+
 export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = ''): string {
   const readOnly = run.kind === 'analysis' || run.kind === 'research' || run.kind === 'review' || run.kind === 'strategy';
   const persona = run.kind === 'review'
@@ -440,11 +471,14 @@ export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', e
 
 ${persona}
 
+${githubSourceAuthority(item, run)}
+
 Task: ${compactPromptSection(item.title, 300)}
 Work item ID: ${item.id}
 Conversation ID: ${run.conversationId ?? 'none'}
 Current reply message ID: ${run.messageId ?? 'none'}
 Source: ${item.sourceIdentifier ?? item.source}
+Source URL: ${item.sourceUrl ?? 'none'}
 Project: ${item.projectName ?? 'none'}
 Status: ${item.status}
 Prerequisites:
@@ -483,10 +517,13 @@ export function buildResumedPrompt(item: WorkItem, run: AgentRun, externalAction
 
 Continue the existing task session. The prior task, source context, shared context, and earlier decisions are already available in this session.
 
+${githubSourceAuthority(item, run)}
+
 Task: ${compactPromptSection(item.title, 300)}
 Work item ID: ${item.id}
 Conversation ID: ${run.conversationId ?? 'none'}
 Current reply message ID: ${run.messageId ?? 'none'}
+Source URL: ${item.sourceUrl ?? 'none'}
 Status: ${item.status}
 Current strategy:
 ${compactPromptSection(item.strategy || 'No strategy yet.', 1_500)}

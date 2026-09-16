@@ -1337,6 +1337,14 @@ five pass sections contains its actual Blocking or Non-blocking findings with
 evidence and a recommended change, or the exact statement `No material issues.`
 A count or “pass completed” summary is not a review finding and must be rejected.
 
+A supplied GitHub pull-request URL is the authoritative code source. Review agents
+must resolve the remote PR first, record its exact base and head SHAs, and review
+only that base-to-head diff. The current checkout, working tree, and similarly named
+local branches may not replace the PR. Local files are context only after they are
+pinned to the PR head. If GitHub access fails, the review fails explicitly instead
+of silently falling back to local code. A newer URL in Jeffrey's current instruction
+overrides older task metadata.
+
 ### The knowledge graph is a derived SQLite index, never a second source of truth
 
 *Decision from Jeffrey, 2026-09-09.* Workbench's canonical task, project,

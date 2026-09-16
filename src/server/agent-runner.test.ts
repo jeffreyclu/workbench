@@ -1165,6 +1165,28 @@ fi`,
     expect(prompt).toContain('Label every finding or risk as Blocking or Non-blocking');
   });
 
+  it('makes a supplied GitHub PR the authoritative review target instead of the local checkout', () => {
+    const task = { ...item('Review connector scopes'), sourceUrl: 'https://github.com/WriterInternal/fe.web-app/pull/5371' };
+    const prompt = buildPrompt(task, { agent: 'codex', kind: 'review', instructions: '' } as AgentRun);
+
+    expect(prompt).toContain('Authoritative GitHub source:');
+    expect(prompt).toContain('PR URL: https://github.com/WriterInternal/fe.web-app/pull/5371');
+    expect(prompt).toContain("Review only the GitHub PR's base-to-head diff");
+    expect(prompt).toContain('current local branch, working tree, and similarly named branches are never substitutes');
+    expect(prompt).toContain('If GitHub cannot be read, report the exact access failure and stop');
+    expect(prompt).toContain('base and head SHAs actually reviewed');
+    expect(prompt).toContain('Source URL: https://github.com/WriterInternal/fe.web-app/pull/5371');
+  });
+
+  it('lets a newer GitHub PR instruction override stale task source metadata on resumed runs', () => {
+    const task = { ...item('Review the PR'), sourceUrl: 'https://github.com/acme/old/pull/1' };
+    const run = { agent: 'claude', kind: 'review', instructions: 'Review https://github.com/acme/new/pull/2' } as AgentRun;
+    const prompt = buildResumedPrompt(task, run);
+
+    expect(prompt).toContain('PR URL: https://github.com/acme/new/pull/2');
+    expect(prompt).not.toContain('PR URL: https://github.com/acme/old/pull/1');
+  });
+
   it('detects incomplete five-pass reviews and requests a complete replacement', () => {
     const incomplete = 'Pass 1: one finding\nPass 2: No material issues.\nPass 5: No material issues.';
     expect(missingReviewPasses(incomplete)).toEqual([1, 2, 3, 4, 5]);
