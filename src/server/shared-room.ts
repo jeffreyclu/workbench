@@ -1092,6 +1092,13 @@ export function precedingHumanMessageForSharedReply(thread: SharedMessage[]): st
   return thread.filter((message) => message.author === 'jeffrey').at(-2)?.body ?? '';
 }
 
+/** External mutations always start a fresh provider session. Besides keeping a
+ * one-turn capability out of unrelated session history, this forces the agent
+ * to load Workbench's current MCP tool catalog before it acts. */
+export function providerSessionForAuthorization(sessionId: string | null | undefined, authorization: ExternalActionAuthorization): string | null {
+  return authorization.granted ? null : sessionId ?? null;
+}
+
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
   if (!/\blinear\b|linear\.app/i.test(message)) return '';
   const query = connectionSearchQuery(message);
@@ -1473,9 +1480,9 @@ export async function replyInSharedRoom(
       memoryContext,
     );
     const palmyraContext = agent === 'palmyra' ? parsePalmyraContext(repository.getConversationPalmyraContext(target.conversationId)) : undefined;
-    const resumeProviderId = agent === 'codex'
-      ? linkedConversation?.codexThreadId ?? null
-      : agent === 'claude' ? linkedConversation?.claudeSessionId ?? null : palmyraContext?.length ? 'palmyra-context' : null;
+    const resumeProviderId = providerSessionForAuthorization(agent === 'codex'
+      ? linkedConversation?.codexThreadId
+      : agent === 'claude' ? linkedConversation?.claudeSessionId : palmyraContext?.length ? 'palmyra-context' : null, externalAuthorization);
     const prompt = resumeProviderId
       ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext)
       : freshPrompt;
@@ -1493,6 +1500,7 @@ export async function replyInSharedRoom(
       groundingContinuation: turnGrounding.continuation,
       externalAuthorizationGranted: externalAuthorization.granted,
       externalAuthorizationOperation: externalAuthorization.operation,
+      providerSessionResetForExternalMutation: externalAuthorization.granted,
     });
     const guardedPrompt = prompt;
     const runCodexReply = async (codexPrompt: string, resumeThreadId?: string | null, expiredThreadPrompt?: string) =>
@@ -1541,7 +1549,7 @@ export async function replyInSharedRoom(
     let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; costUsd?: number | null; sessionId?: string | null; codexThreadId?: string; peakContextTokens?: number; messages?: import('./providers/palmyra.js').PalmyraMessage[] };
     try {
       result = agent === 'codex'
-      ? await runCodexReply(guardedPrompt, linkedConversation?.codexThreadId, freshPrompt)
+      ? await runCodexReply(guardedPrompt, resumeProviderId, freshPrompt)
       : agent === 'palmyra' ? await runPalmyraReply(guardedPrompt)
       : await runAgentCommandWithFallback(agent, cwd, claudeScopeRecoveryPrompt(guardedPrompt, cwd), (partial) => {
       if (controller.signal.aborted) return;
@@ -1564,7 +1572,7 @@ export async function replyInSharedRoom(
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
     } : undefined,
-    linkedConversation?.claudeSessionId ?? undefined, true, false, undefined, claudeScopeRecoveryPrompt(freshPrompt, cwd));
+    resumeProviderId ?? undefined, true, false, undefined, claudeScopeRecoveryPrompt(freshPrompt, cwd));
     } catch (error) {
       if (agent === 'claude' && !isPairedReply && isAgentCapacityError(error)) {
         const reason = error instanceof Error ? error.message : String(error);

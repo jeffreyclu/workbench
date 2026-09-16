@@ -1411,6 +1411,11 @@ the MCP server. Authorized Linear creation routes directly to
 `create_linear_issue`; read-only source search is context retrieval, never a
 capability probe or substitute authentication path.
 
+An authorized external mutation starts a fresh provider session. This keeps
+the one-turn capability out of later session history and forces Codex/Claude
+to load the current Workbench MCP tool catalog before acting; a persisted
+thread created before a new mutation tool existed must never hide that tool.
+
 ### The code relationship map is a zoomable domain map (2026-09-11)
 
 *Decision from Jeffrey.* Node area reflects the amount of changed code in the

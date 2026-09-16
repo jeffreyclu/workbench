@@ -16,6 +16,7 @@ const authorizedCommands = [
   'publish the GitHub release',
   'write a Linear ticket',
   'create two Linear tickets',
+  'create the two authorized Linear tickets',
   'create the tickets in Linear',
   'update the Linear issue',
   'create a Jira ticket',
