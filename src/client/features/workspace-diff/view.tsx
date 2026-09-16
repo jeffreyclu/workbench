@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ClipboardCheck, ExternalLink, FileDiff, GitBranch, GitCommitHorizontal, GitPullRequest, History, RefreshCw, X } from 'lucide-react';
+import { ClipboardCheck, ExternalLink, FileDiff, FolderSearch, GitBranch, GitCommitHorizontal, GitPullRequest, History, RefreshCw, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
@@ -134,6 +134,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // popover positions itself off that element's rect.
   const [detailAnchor, setDetailAnchor] = useState<{ decisionId: string; anchor: DecisionPopoverAnchor; anchorAttribute: string; simple?: boolean; lines?: { hunkRange: string; startIndex: number; endIndex: number } } | null>(null);
   const [isHandoffOpen, setIsHandoffOpen] = useState(false);
+  const [isSourceBrowserOpen, setIsSourceBrowserOpen] = useState(false);
   // null means "automatically show the latest record when Git is clean";
   // an empty string is the user's explicit choice to view current changes.
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
@@ -195,30 +196,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // Drop a selection whose pull request is no longer referenced here.
     setSelectedPullRequestUrl((current) => current && availablePullRequests.includes(current) ? current : null);
   }, [availablePullRequests]);
-  useEffect(() => {
-    if (rememberedSelection?.source === 'repository') setReviewSource('repository');
-    if (rememberedSelection?.source === 'branch') setReviewSource('branch');
-  }, [rememberedSelection?.source]);
-  useEffect(() => {
-    if (rememberedSelection && availablePullRequests.includes(rememberedSelection.source)) {
-      setSelectedPullRequestUrl(rememberedSelection.source);
-      setReviewSource('pull-request');
-    }
-  }, [availablePullRequests, rememberedSelection]);
-  // Local preferences may restore presentation-only sources such as a PR or
-  // recorded revision. A repository selection is shared server state and is
-  // restored by the explorer response itself. Never replay a local repository
-  // preference through the mutation here: an active run can authoritatively
-  // select its worktree, making the server return a different path; mutation
-  // invalidation would then rerun this render effect forever.
-  useEffect(() => {
-    if (!rememberedSelection?.source.startsWith('history:')) return;
-    const snapshotId = rememberedSelection.source.slice('history:'.length);
-    if (snapshots.some((snapshot) => snapshot.id === snapshotId)) {
-      setSelectedSnapshotId(snapshotId);
-      setReviewSource('history');
-    }
-  }, [rememberedSelection?.source, snapshots]);
+  // Source choices are deliberately not restored. Changes must open on the
+  // best evidence owned by this conversation, not on whichever branch, commit,
+  // PR, or old record happened to be browsed last time. Decision selection is
+  // still restored within the revision once that relevant source is chosen.
   useEffect(() => {
     // Records belong to the repository they were captured in, so the picker
     // changes which ones exist. A record from the previous repository is not
@@ -413,8 +394,13 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     if (rememberedDecisionId && orderedDecisions.some((decision) => decision.id === rememberedDecisionId)) setSelectedDecisionId(rememberedDecisionId);
   }, [displayedDiff?.revision, orderedDecisions, rememberedSelection, selectedDecisionId]);
   useEffect(() => {
-    if (displayedDiff?.revision && selectedDecisionId) writeWorkspaceDiffDecision(preferenceScope, displayedDiff.revision, selectedDecisionId);
-  }, [displayedDiff?.revision, preferenceScope, selectedDecisionId]);
+    if (!displayedDiff?.revision || !selectedDecisionId) return;
+    // The relevant source can be selected automatically, so there may be no
+    // preference record yet. Seed one only as a container for per-revision
+    // decision position; its source is intentionally ignored on the next open.
+    if (!rememberedSelection) writeWorkspaceDiffSource(preferenceScope, 'conversation');
+    writeWorkspaceDiffDecision(preferenceScope, displayedDiff.revision, selectedDecisionId);
+  }, [displayedDiff?.revision, preferenceScope, rememberedSelection, selectedDecisionId]);
 
   // Three readings of the same change, widening each time: the unified diff,
   // the finished code, then the whole file the change sits in. One key cycles
@@ -572,7 +558,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     if (!value) return;
     writeWorkspaceDiffSource(preferenceScope, value);
     setSelectedDecisionId(null);
-    hasChosenSource.current = true;
+    // A conversation-owned repository should make its own newest relevant
+    // diff choice after it loads. A repository reached through Browse keeps
+    // the reviewer's explicit source choice instead.
+    hasChosenSource.current = !relevantWorkspaces.some((workspace) => workspace.path === value);
     setSelectedPullRequestUrl(null);
     setReviewSource('workspace');
     setSelectedSnapshotId('');
@@ -633,6 +622,62 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   };
 
   const workspaces = explorer.data?.workspaces ?? [];
+  const explicitlyRelevantWorkspaces = workspaces.filter((workspace) => workspace.relevant);
+  // Older work-item responses and test fixtures predate relevance metadata.
+  // In that case the server-selected repository is the only primary choice;
+  // all remaining local repositories stay in the secondary browser.
+  const relevantWorkspaces = explicitlyRelevantWorkspaces.length > 0
+    ? explicitlyRelevantWorkspaces
+    : workspaces.filter((workspace) => workspace.path === explorer.data?.selectedPath);
+  // A conversation can work several branches in the same repository. Do not
+  // turn every autosaved revision into a primary choice; expose the newest
+  // non-empty diff for each branch, while the complete immutable timeline
+  // remains in Browse other changes.
+  const latestSnapshotsByBranch = [...snapshots.reduce((byBranch, snapshot) => {
+    if (snapshot.diff.changedFiles === 0 || byBranch.has(snapshot.diff.branch)) return byBranch;
+    byBranch.set(snapshot.diff.branch, snapshot);
+    return byBranch;
+  }, new Map<string, (typeof snapshots)[number]>()).values()];
+  const currentBranch = branches.find((branch) => branch.current) ?? null;
+  const conversationSources = [
+    ...((diff?.changedFiles ?? 0) > 0 ? [{ value: 'workspace', label: `${diff!.branch} · current · ${diff!.changedFiles} file${diff!.changedFiles === 1 ? '' : 's'}` }] : []),
+    ...latestSnapshotsByBranch
+      .filter((snapshot) => !((diff?.changedFiles ?? 0) > 0 && snapshot.diff.branch === diff?.branch))
+      .map((snapshot) => ({ value: `history:${snapshot.id}`, label: `${snapshot.diff.branch} · saved · ${snapshot.diff.changedFiles} file${snapshot.diff.changedFiles === 1 ? '' : 's'}` })),
+    ...(currentBranch?.ahead && !latestSnapshotsByBranch.some((snapshot) => snapshot.diff.branch === currentBranch.name) && !((diff?.changedFiles ?? 0) > 0 && diff?.branch === currentBranch.name)
+      ? [{ value: `branch:${currentBranch.name}`, label: `${currentBranch.name} · ${currentBranch.ahead} commit${currentBranch.ahead === 1 ? '' : 's'}` }]
+      : []),
+    ...availablePullRequests.map((url) => ({ value: url, label: pullRequestLabel(url) })),
+  ];
+  if (conversationSources.length === 0) conversationSources.push({ value: 'workspace', label: 'Current workspace' });
+  const primarySourceValue = reviewSource === 'workspace' ? 'workspace'
+    : reviewSource === 'history' && selectedSnapshot ? `history:${selectedSnapshot.id}`
+      : isBranchSource && selectedBranchName ? `branch:${selectedBranchName}`
+        : isPullRequestSource && selectedPullRequestUrl ? selectedPullRequestUrl
+          : 'other';
+  const selectConversationSource = (value: string) => {
+    if (value === 'workspace') return selectWorkspaceSource();
+    if (value.startsWith('history:')) {
+      const snapshotId = value.slice('history:'.length);
+      setReviewSource('history');
+      setSelectedPullRequestUrl(null);
+      setSelectedSnapshotId(snapshotId);
+      setSelectedDecisionId(null);
+      writeWorkspaceDiffSource(preferenceScope, value);
+      return;
+    }
+    if (value.startsWith('branch:')) {
+      setSelectedBranchName(value.slice('branch:'.length));
+      selectBranchSource();
+      return;
+    }
+    if (availablePullRequests.includes(value)) {
+      setSelectedPullRequestUrl(value);
+      setReviewSource('pull-request');
+      setSelectedDecisionId(null);
+      writeWorkspaceDiffSource(preferenceScope, value);
+    }
+  };
   // The repo browser reads committed history, so it stays usable while the
   // working tree is still being read and on a checkout with nothing to review.
   if (!isPullRequestSource && !isRepositorySource && !isBranchSource) {
@@ -660,6 +705,20 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
         : isRepositorySource ? <div><span className="workspace-diff-eyebrow"><GitCommitHorizontal size={14} /> Repository</span><h2>Commit</h2><div className="workspace-diff-record-metadata"><small>{selectedCommit ? `${selectedCommit.shortSha} · ${selectedCommit.title}` : displayedDiff?.branch ?? 'No commit selected'}</small><span>This commit, compared against the one before it.</span></div></div>
         : <div><span className="workspace-diff-eyebrow"><FileDiff size={14} /> {selectedSnapshot ? 'Recorded version' : 'Workspace review'}</span>{selectedSnapshot && <><h2>Workspace review record</h2><div className="workspace-diff-record-metadata"><small>{displayedDiff?.branch}</small><span>Captured {new Date(selectedSnapshot.capturedAt).toLocaleString()}. This record is preserved in the history.</span><small>{selectedSnapshot.originatingAgentRunId ? `Agent run ${selectedSnapshot.originatingAgentRunId}` : 'No originating agent run recorded'}{selectedSnapshot.commitHash ? ` · Commit ${selectedSnapshot.commitHash.slice(0, 12)}` : ' · No commit recorded'}</small></div></>}</div>}
       <div className="workspace-diff-actions">
+        <button className="workspace-diff-browse" type="button" aria-expanded={isSourceBrowserOpen} onClick={() => setIsSourceBrowserOpen((open) => !open)}><FolderSearch size={13} />Browse other changes</button>
+        <AiProviderSelect value={aiProvider} onChange={setAiProvider} ariaLabel="AI provider for diff scoring and delegated review" />
+        {!isPullRequestSource && <button className="workspace-diff-handoff" type="button" onClick={() => setIsHandoffOpen(true)}><ClipboardCheck size={14} />Agentic handoff</button>}
+        <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
+      </div>
+      {relevantWorkspaces.length > 1 && <nav className="workspace-conversation-repositories" aria-label="Conversation repositories">
+        <span>Repositories</span>
+        {relevantWorkspaces.map((workspace) => <button key={workspace.path} type="button" aria-current={workspace.path === explorer.data?.selectedPath ? 'true' : undefined} onClick={() => void selectWorkspaceContext(workspace.path)}>{workspace.label}</button>)}
+      </nav>}
+      <nav className="workspace-conversation-sources" aria-label="Conversation change sets">
+        <span>Conversation changes</span>
+        {conversationSources.map((source) => <button key={source.value} type="button" aria-current={source.value === primarySourceValue ? 'true' : undefined} onClick={() => selectConversationSource(source.value)}>{source.label}</button>)}
+      </nav>
+      {isSourceBrowserOpen && <div className="workspace-diff-source-browser" aria-label="Other changes">
         <div className="workspace-review-source" role="group" aria-label="Review source">
           <button type="button" aria-pressed={reviewSource === 'workspace'} onClick={selectWorkspaceSource}><FileDiff size={13} />Workspace</button>
           <button type="button" aria-pressed={reviewSource === 'history'} onClick={selectHistorySource} disabled={snapshots.length === 0}><History size={13} />History</button>
@@ -667,19 +726,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
           <button type="button" aria-pressed={isRepositorySource} onClick={selectRepositorySource}><GitCommitHorizontal size={13} />Repository</button>
           <button type="button" aria-pressed={reviewSource === 'pull-request'} onClick={() => { setReviewSource('pull-request'); setSelectedPullRequestUrl((current) => current ?? availablePullRequests[0] ?? null); }}><GitPullRequest size={13} />GitHub PR</button>
         </div>
-        {/* The repository picker is never gated on the active review source. A
-            clean checkout opens on History and a linked PR opens on GitHub PR, so
-            gating it there removed the only control that reaches another
-            repository. */}
-        {(conversationId || workItemId) && workspaces.length > 0 && <WorkspaceContextSwitcher selectedPath={explorer.data?.selectedPath ?? null} options={workspaces} onSelect={selectWorkspaceContext} />}
+        {(conversationId || workItemId) && workspaces.length > 0 && <WorkspaceContextSwitcher selectedPath={explorer.data?.selectedPath ?? null} options={workspaces} onSelect={selectWorkspaceContext} label="All repositories" ariaLabel="All repositories" />}
         {isBranchSource && <label className="workspace-repository-commit"><GitBranch size={13} /><span className="visually-hidden">Branch</span><select value={selectedBranchName} onChange={(event) => { setSelectedBranchName(event.target.value); setSelectedDecisionId(null); }} disabled={refsQuery.isPending || branches.length === 0}><option value="" disabled>{refsQuery.isPending ? 'Reading branches' : 'Select a branch'}</option>{branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}{branch.ahead ? ` · ${branch.ahead} commit${branch.ahead === 1 ? '' : 's'}` : ''}</option>)}</select></label>}
         {isRepositorySource && <label className="workspace-repository-commit"><GitCommitHorizontal size={13} /><span className="visually-hidden">Commit</span><select value={selectedCommitSha} onChange={(event) => { setSelectedCommitSha(event.target.value); setSelectedDecisionId(null); }} disabled={commitsQuery.isPending || commits.length === 0}><option value="" disabled>{commitsQuery.isPending ? 'Reading repository' : 'Select a commit'}</option>{commits.map((commit) => <option key={commit.sha} value={commit.sha}>{commit.shortSha} · {commit.title}</option>)}</select></label>}
         {reviewSource === 'history' && snapshots.length > 0 && <label className="workspace-diff-timeline"><History size={13} /><span className="visually-hidden">Workspace diff history</span><select value={selectedSnapshotId ?? selectedSnapshot?.id ?? ''} onChange={(event) => { setSelectedSnapshotId(event.target.value); setSelectedDecisionId(null); writeWorkspaceDiffSource(preferenceScope, `history:${event.target.value}`); }}><option value="">Latest recorded version</option>{snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{new Date(snapshot.capturedAt).toLocaleString()} · {snapshot.diff.changedFiles} files</option>)}</select></label>}
         {reviewSource === 'pull-request' && <div className="workspace-pr-source"><form onSubmit={submitPullRequestUrl}><label><span className="visually-hidden">Pull request URL</span><input aria-label="Pull request URL" value={pullRequestUrlDraft} onChange={(event) => setPullRequestUrlDraft(event.target.value)} placeholder="Paste GitHub PR URL" /></label><button type="submit">Review PR</button></form>{availablePullRequests.length > 0 && <label className="workspace-repository-picker"><span>PR</span><select aria-label="Pull request" value={selectedPullRequestUrl ?? ''} onChange={(event) => selectSource(event.target.value)}><option value="" disabled>Select pull request</option>{availablePullRequests.map((url) => <option key={url} value={url}>{pullRequestLabel(url)}</option>)}</select></label>}{pullRequestUrlError && <small role="alert">{pullRequestUrlError}</small>}</div>}
-        <AiProviderSelect value={aiProvider} onChange={setAiProvider} ariaLabel="AI provider for diff scoring and delegated review" />
-        {!isPullRequestSource && <button className="workspace-diff-handoff" type="button" onClick={() => setIsHandoffOpen(true)}><ClipboardCheck size={14} />Agentic handoff</button>}
-        <button className={`workspace-diff-refresh${hasChanges ? ' workspace-diff-refresh-pending' : ''}`} type="button" onClick={refreshSource} disabled={isRefreshing}><RefreshCw size={13} className={isRefreshing ? 'spin' : ''} /> {hasChanges ? 'Refresh changes' : 'Refresh'}</button>
-      </div>
+      </div>}
     </header>
     <aside className="review-diff-stat" role="note" aria-label="Diff size">
       <strong>{diffStat.files} {diffStat.files === 1 ? 'file' : 'files'} changed</strong>

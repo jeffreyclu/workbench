@@ -222,6 +222,32 @@ describe('conversation router', () => {
   });
 
   describe('workspace selection', () => {
+    it('marks every repository used by the conversation as relevant and leaves unrelated repositories secondary', async () => {
+      const backendWorkspace = mkdtempSync(join(tmpdir(), 'conversation-router-backend-'));
+      const unrelatedWorkspace = mkdtempSync(join(tmpdir(), 'conversation-router-unrelated-'));
+      try {
+        seams.listCandidateWorkspaces.mockReturnValue([unrelatedWorkspace, backendWorkspace, workspace]);
+        const item = await createWorkItem({ workspacePath: workspace, projectName: 'Writer' });
+        const conversation = await createConversation();
+        await request(`/api/shared/conversations/${conversation.id}/task`, 'PATCH', { workItemId: item.id });
+        database.prepare(`INSERT INTO agent_runs (id, work_item_id, kind, requested_target, agent, status, created_at, completed_at, conversation_id, resolved_workspace)
+          VALUES ('backend-run', ?, 'implement', 'codex', 'codex', 'completed', '2026-09-16T12:00:00.000Z', '2026-09-16T12:10:00.000Z', ?, ?)`).run(item.id, conversation.id, backendWorkspace);
+        database.prepare(`INSERT INTO workspace_diff_snapshots (id, conversation_id, revision, diff_json, captured_at, originating_agent_run_id)
+          VALUES ('backend-snapshot', ?, 'backend-revision', ?, '2026-09-16T12:10:00.000Z', 'backend-run')`).run(conversation.id, JSON.stringify({
+          workspacePath: backendWorkspace, branch: 'backend-feature', revision: 'backend-revision', files: [{ path: 'src/api.ts' }], changedFiles: 1, additions: 1, deletions: 0,
+        }));
+
+        const response = await request(`/api/shared/conversations/${conversation.id}/workspaces`);
+        expect(response.status).toBe(200);
+        const explorer = await response.json() as { workspaces: Array<{ path: string; relevant: boolean }> };
+        expect(explorer.workspaces.filter((entry) => entry.relevant).map((entry) => entry.path)).toEqual([backendWorkspace, workspace]);
+        expect(explorer.workspaces.find((entry) => entry.path === unrelatedWorkspace)?.relevant).toBe(false);
+      } finally {
+        rmSync(backendWorkspace, { recursive: true, force: true });
+        rmSync(unrelatedWorkspace, { recursive: true, force: true });
+      }
+    });
+
     it('lists workspaces and selects the linked repository', async () => {
       seams.listCandidateWorkspaces.mockReturnValue([workspace]);
       const conversation = await createConversation();

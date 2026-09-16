@@ -11,6 +11,15 @@ import { request } from './request';
 // A standalone review is the third scope: it was created from a pull request
 // link or a repository and never needed a thread behind it.
 export type WorkspaceDiffScope = { workItemId: string } | { conversationId: string } | { reviewId: string };
+export type WorkspaceExplorerOption = {
+  path: string;
+  label: string;
+  selected: boolean;
+  /** Conversation-owned repositories are shown in the primary Changes UI.
+   * Everything else remains available only in the repository browser. */
+  relevant?: boolean;
+};
+export type WorkspaceExplorerResponse = { selectedPath: string | null; workspaces: WorkspaceExplorerOption[] };
 const workspaceDiffBasePath = (scope: WorkspaceDiffScope) => {
   if ('workItemId' in scope) return `/api/work-items/${scope.workItemId}`;
   if ('reviewId' in scope) return `/api/reviews/${scope.reviewId}`;
@@ -44,8 +53,8 @@ export const sourceClient = {
   getDiffBlockReviews: (scope: WorkspaceDiffScope, revision: string) => request<{ reviews: DiffBlockReview[] }>(`${workspaceDiffBasePath(scope)}/workspace-diff/block-reviews?revision=${encodeURIComponent(revision)}`),
   upsertDiffBlockReview: (scope: WorkspaceDiffScope, input: UpsertDiffBlockReviewInput) => request<{ review: DiffBlockReview }>(`${workspaceDiffBasePath(scope)}/workspace-diff/block-reviews`, { method: 'PUT', body: JSON.stringify(input) }),
   getStaleReferences: (id: string) => request<{ report: StaleReferenceReport }>(`/api/work-items/${id}/workspace-diff/stale-references`),
-  getWorkItemWorkspaces: (id: string) => request<{ selectedPath: string | null; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/work-items/${id}/workspaces`),
-  selectWorkItemWorkspace: (id: string, workspacePath: string) => request<{ selectedPath: string; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/work-items/${id}/workspaces/selection`, { method: 'PUT', body: JSON.stringify({ workspacePath }) }),
+  getWorkItemWorkspaces: (id: string) => request<WorkspaceExplorerResponse>(`/api/work-items/${id}/workspaces`),
+  selectWorkItemWorkspace: (id: string, workspacePath: string) => request<WorkspaceExplorerResponse>(`/api/work-items/${id}/workspaces/selection`, { method: 'PUT', body: JSON.stringify({ workspacePath }) }),
   listStandaloneReviews: () => request<{ reviews: StandaloneReview[] }>('/api/reviews'),
   createStandaloneReview: (input: CreateStandaloneReviewInput) => request<{ review: StandaloneReview }>('/api/reviews', { method: 'POST', body: JSON.stringify(input) }),
   deleteStandaloneReview: (id: string) => request<{ deleted: boolean }>(`/api/reviews/${id}`, { method: 'DELETE' }),

@@ -376,6 +376,13 @@ nav { display: grid; gap: 3px; }
 .workspace-diff-handoff { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; color: #cbd8a0; border: 1px solid #4b5832; border-radius: 6px; background: #1b2114; cursor: pointer; font: 700 10px 'DM Mono'; }
 .workspace-diff-handoff:hover { color: #e6f8ae; border-color: #738b45; background: #252e19; }.workspace-diff-handoff:focus-visible { outline: 2px solid var(--acid); outline-offset: 2px; }
 .workspace-diff-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-start; gap: 7px; margin-top: 11px; }
+.workspace-diff-browse { display: inline-flex; align-items: center; gap: 5px; }
+.workspace-conversation-repositories, .workspace-conversation-sources { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 8px; overflow-x: auto; scrollbar-width: thin; }
+.workspace-conversation-repositories > span, .workspace-conversation-sources > span { position: sticky; left: 0; z-index: 1; flex: 0 0 auto; padding: 0 5px 0 0; color: #77766f; background: #121310; font: 700 9px 'DM Mono'; letter-spacing: .06em; text-transform: uppercase; }
+.workspace-conversation-repositories button, .workspace-conversation-sources button { flex: 0 0 auto; min-height: 28px; padding: 0 9px; color: #aaa9a2; border: 1px solid #353530; border-radius: 6px; background: #10110f; font: 700 10px 'DM Mono'; }
+.workspace-conversation-repositories button:hover, .workspace-conversation-sources button:hover { color: #d7d6ce; border-color: #54554e; }
+.workspace-conversation-repositories button[aria-current="true"], .workspace-conversation-sources button[aria-current="true"] { color: #15170e; border-color: #b7f52a; background: #b7f52a; }
+.workspace-diff-source-browser { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; width: 100%; margin-top: 8px; padding: 9px; border: 1px solid #353530; border-radius: 8px; background: #0d0e0c; }
 .workspace-review-source { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid #353530; border-radius: 7px; background: #10110f; }
 .workspace-review-source button { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 0 8px; color: #8d8c85; border: 0; border-radius: 4px; background: transparent; font: 700 10px 'DM Mono'; letter-spacing: .02em; }
 .workspace-review-source button:hover:not(:disabled) { color: #d7d6ce; background: #1c1d19; }
@@ -914,6 +921,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .workspace-diff > header > .workspace-diff-actions button, .github-diff > header > a { min-height: 44px; }
   .workspace-diff-timeline { flex: 0 1 160px; max-width: 100%; }
   .workspace-diff-timeline select { width: 100%; }
+  .workspace-diff-source-browser { align-items: stretch; }
   .workspace-repository-ref, .workspace-repository-commit { flex: 0 1 160px; max-width: 100%; }
   .workspace-repository-ref select, .workspace-repository-commit select { width: 100%; }
   .diff-file-list > span { padding-block: 8px; }

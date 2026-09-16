@@ -1122,6 +1122,19 @@ so the diff remains the dominant surface. Fetch the local diff only when
 Changes is opened; retain the GitHub diff's existing on-demand authenticated
 path. Do not hide this workflow in task detail.
 
+### Changes is conversation-first and may span repositories and branches
+
+*Decision from Jeffrey, 2026-09-16.* Opening **Changes** must prioritize and
+display every change set that belongs to that conversation. A full-stack task
+may legitimately touch several repositories, and parallel work may legitimately
+use several branches; never collapse that work into one "primary repository"
+with the rest hidden as unrelated alternatives. Show the conversation-owned
+repository/branch change sets together up front and choose the newest relevant
+one as the active diff. Keep the general catalog of unrelated local repositories,
+branches, commits, and old versions behind a secondary **Browse other changes**
+control. A browser-local source choice from an earlier visit must not override
+the conversation-owned defaults on reopen.
+
 *Clarification from Jeffrey, 2026-08-28.* In a recorded **Workspace review
 record**, the metadata immediately beneath the title—branch, capture status,
 and run/commit provenance—is exactly one compact row. Do not confuse this

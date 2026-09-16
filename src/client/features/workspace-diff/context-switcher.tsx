@@ -3,12 +3,15 @@ import { useEffect, useState } from 'react';
 export interface WorkspaceContextOption {
   path: string;
   label: string;
+  relevant?: boolean;
 }
 
 interface WorkspaceContextSwitcherProps {
   selectedPath: string | null;
   options: WorkspaceContextOption[];
   onSelect: (workspacePath: string) => Promise<void>;
+  label?: string;
+  ariaLabel?: string;
 }
 
 /**
@@ -16,7 +19,7 @@ interface WorkspaceContextSwitcherProps {
  * until the explorer confirms it, so an older explorer response cannot snap
  * the control back to the repository the reviewer just left.
  */
-export function WorkspaceContextSwitcher({ selectedPath, options, onSelect }: WorkspaceContextSwitcherProps) {
+export function WorkspaceContextSwitcher({ selectedPath, options, onSelect, label = 'Repository', ariaLabel = 'Workspace' }: WorkspaceContextSwitcherProps) {
   const [requestedPath, setRequestedPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const displayedPath = requestedPath ?? selectedPath ?? '';
@@ -38,8 +41,8 @@ export function WorkspaceContextSwitcher({ selectedPath, options, onSelect }: Wo
   };
 
   return <label className="workspace-repository-picker">
-    <span>Repository</span>
-    <select aria-label="Workspace" value={displayedPath} onChange={(event) => void select(event.target.value)} disabled={requestedPath !== null} title={displayedPath || undefined}>
+    <span>{label}</span>
+    <select aria-label={ariaLabel} value={displayedPath} onChange={(event) => void select(event.target.value)} disabled={requestedPath !== null} title={displayedPath || undefined}>
       <option value="" disabled>Select repository</option>
       {options.map((option) => <option key={option.path} value={option.path}>{option.label}</option>)}
     </select>

@@ -1,5 +1,6 @@
 import type { AiProviderChoice } from '../../shared/ai-providers';
 import type { AgentRun, AgentStreamEvent, ConversationPage, ExecutionPlan, RetrievedMemoryDetail, SessionFeedback, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, SharedSearchResponse } from '../../shared/contracts';
+import type { WorkspaceExplorerResponse } from './source-client';
 import { request } from './request';
 
 export const conversationClient = {
@@ -16,8 +17,8 @@ export const conversationClient = {
     return { count: page.totalCount };
   },
   getSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}`),
-  getConversationWorkspaces: (id: string) => request<{ selectedPath: string | null; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/shared/conversations/${id}/workspaces`),
-  selectConversationWorkspace: (id: string, workspacePath: string) => request<{ selectedPath: string; workspaces: Array<{ path: string; label: string; selected: boolean }> }>(`/api/shared/conversations/${id}/workspaces/selection`, { method: 'PUT', body: JSON.stringify({ workspacePath }) }),
+  getConversationWorkspaces: (id: string) => request<WorkspaceExplorerResponse>(`/api/shared/conversations/${id}/workspaces`),
+  selectConversationWorkspace: (id: string, workspacePath: string) => request<WorkspaceExplorerResponse>(`/api/shared/conversations/${id}/workspaces/selection`, { method: 'PUT', body: JSON.stringify({ workspacePath }) }),
   listAgentStreamEvents: (id: string) => request<{ events: AgentStreamEvent[] }>(`/api/shared/conversations/${id}/agent-events`),
   getConversationFeedback: (id: string) => request<{ feedback: SessionFeedback | null }>(`/api/shared/conversations/${id}/feedback`),
   createSessionFeedback: (input: { conversationId?: string | null; workItemId?: string | null; rating: SessionFeedbackRating }) => request<{ feedback: SessionFeedback }>('/api/shared/session-feedback', { method: 'POST', body: JSON.stringify(input) }),

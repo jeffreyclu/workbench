@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRunReviewHandoff, DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { contentHashOfLines } from '../../../shared/review-decisions.js';
+import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { WorkspaceDiffView } from './view.js';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -24,10 +25,10 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
 /** This surface never scores decisions ambiently; assistance is on demand from
  * the detail card instead. Tests only stub the requests this view actually
  * makes, so a stray `/api/diff-confidence` call would fail as unexpected. */
-function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[], onFixRequest?: (prompt: string) => void) {
+function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[], onFixRequest?: (prompt: string) => void, scope: WorkspaceDiffScope = { workItemId: 'work-item-1' }) {
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={{ workItemId: 'work-item-1' }} isRunning={isRunning} reviewHandoff={reviewHandoff} pullRequestUrlCandidates={pullRequestUrlCandidates} onFixRequest={onFixRequest} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={scope} isRunning={isRunning} reviewHandoff={reviewHandoff} pullRequestUrlCandidates={pullRequestUrlCandidates} onFixRequest={onFixRequest} /></QueryClientProvider>);
 }
 
 /**
@@ -50,6 +51,50 @@ afterEach(() => {
 });
 
 describe('WorkspaceDiffView decision queue', () => {
+  it('shows every conversation repository and branch diff before the unrelated repository catalog', async () => {
+    const frontend = '/tmp/frontend';
+    const backend = '/tmp/backend';
+    const unrelated = Array.from({ length: 6 }, (_, index) => ({ path: `/tmp/unrelated-${index}`, label: `unrelated-${index}`, selected: false, relevant: false }));
+    window.localStorage.setItem('workbench:workspace-diff-selections', JSON.stringify({
+      'conversation:conversation-1': { source: 'repository', decisions: {} },
+    }));
+    const currentFile: WorkspaceDiffFile = { path: 'src/current.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ currentChange\n-before\n+after' };
+    const savedFile: WorkspaceDiffFile = { path: 'src/backend.ts', previousPath: null, status: 'modified', additions: 2, deletions: 0, isBinary: false, patch: '@@ -1 +1,2 @@ backendChange\n+one\n+two' };
+    const current = { ...workspaceDiff([currentFile], 'frontend-current'), workspacePath: frontend, branch: 'frontend-feature' };
+    const saved = { ...workspaceDiff([savedFile], 'backend-saved'), workspacePath: frontend, branch: 'backend-feature' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: frontend, workspaces: [
+        { path: frontend, label: 'frontend', selected: true, relevant: true },
+        { path: backend, label: 'backend', selected: false, relevant: true },
+        ...unrelated,
+      ] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [{ id: 'backend-branch-record', capturedAt: '2026-09-16T12:00:00.000Z', originatingAgentRunId: 'run-backend', commitHash: null, diff: saved }] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: current });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, null, undefined, undefined, { conversationId: 'conversation-1' });
+
+    await findSelectedDecision('Changes behavior in src/current.ts.');
+    const repositories = screen.getByRole('navigation', { name: 'Conversation repositories' });
+    expect(within(repositories).getByRole('button', { name: 'frontend' })).toHaveAttribute('aria-current', 'true');
+    expect(within(repositories).getByRole('button', { name: 'backend' })).toBeInTheDocument();
+    expect(within(repositories).queryByRole('button', { name: 'unrelated-0' })).not.toBeInTheDocument();
+
+    const changeSets = screen.getByRole('navigation', { name: 'Conversation change sets' });
+    expect(within(changeSets).getByRole('button', { name: 'frontend-feature · current · 1 file' })).toHaveAttribute('aria-current', 'true');
+    expect(within(changeSets).getByRole('button', { name: 'backend-feature · saved · 1 file' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Review source' })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/workspace-diff/ref/commits'))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse other changes' }));
+    expect(screen.getByRole('group', { name: 'Review source' })).toBeInTheDocument();
+    const allRepositories = screen.getByLabelText('All repositories');
+    expect(within(allRepositories).getAllByRole('option')).toHaveLength(9);
+    expect(within(allRepositories).getByRole('option', { name: 'unrelated-5' })).toBeInTheDocument();
+  });
+
   it('reports the full diff size as files, additions and deletions', async () => {
     const file: WorkspaceDiffFile = {
       path: 'src/large-change.ts', previousPath: null, status: 'modified', additions: 401, deletions: 27, isBinary: false,
@@ -255,13 +300,13 @@ describe('WorkspaceDiffView decision queue', () => {
 
     // A clean checkout still opens on its recorded version...
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
-    // ...and the repository picker stays on screen there. Gating it on the
-    // workspace source removed it from the tab entirely for exactly this case.
-    const picker = await screen.findByLabelText('Workspace');
+    // ...and the complete repository browser remains reachable on demand.
+    fireEvent.click(screen.getByRole('button', { name: 'Browse other changes' }));
+    const picker = await screen.findByLabelText('All repositories');
     expect(picker).toHaveValue(repositoryA);
 
     fireEvent.change(picker, { target: { value: repositoryB } });
-    await waitFor(() => expect(screen.getByLabelText('Workspace')).toHaveValue(repositoryB));
+    await waitFor(() => expect(screen.getByLabelText('All repositories')).toHaveValue(repositoryB));
     expect(screen.queryByRole('heading', { name: 'Workspace review record' })).not.toBeInTheDocument();
   });
 
@@ -285,7 +330,8 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock);
 
-    const picker = await screen.findByLabelText('Workspace');
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse other changes' }));
+    const picker = await screen.findByLabelText('All repositories');
     fireEvent.change(picker, { target: { value: repositoryB } });
     await findSelectedDecision('Changes behavior in src/b.ts.');
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ }));
@@ -294,7 +340,8 @@ describe('WorkspaceDiffView decision queue', () => {
     selectedPath = repositoryA;
     renderView(fetchMock);
 
-    await waitFor(() => expect(screen.getByLabelText('Workspace')).toHaveValue(repositoryA));
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse other changes' }));
+    await waitFor(() => expect(screen.getByLabelText('All repositories')).toHaveValue(repositoryA));
     await findSelectedDecision('Changes behavior in src/a.ts.');
     expect(fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith('/workspaces/selection') && (init as RequestInit | undefined)?.method === 'PUT')).toHaveLength(1);
   });
@@ -546,7 +593,7 @@ describe('WorkspaceDiffView decision queue', () => {
     renderView(fetchMock);
 
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Workspace diff history')).toHaveValue('recorded-version');
+    expect(screen.getByRole('button', { name: 'review · saved · 1 file' })).toHaveAttribute('aria-current', 'true');
     expect(screen.getByText(/Agent run run-123/)).toBeInTheDocument();
     expect(selectedDecisionChip()).toHaveAccessibleName(/Adds behavior in src\/preserved\.ts\./);
   });
@@ -579,6 +626,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     renderView(fetchMock, false, null, [pullRequestUrl]);
 
     await findSelectedDecision('Changes behavior in src/local.ts.');
+    fireEvent.click(screen.getByRole('button', { name: 'Browse other changes' }));
     fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
     const picker = await screen.findByLabelText('Pull request');
     expect(within(picker).getByRole('option', { name: 'acme/web #42' })).toBeInTheDocument();
@@ -595,7 +643,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     await waitFor(() => expect(requests.some((request) => request.startsWith('PUT') && request.includes('/hunk-reviews/batch') && request.includes('"revision":"sha-42"'))).toBe(true));
   });
 
-  it('restores the selected repository and decision after the Changes view remounts', async () => {
+  it('restores the selected decision while reopening on the relevant pull request', async () => {
     const persistedPullRequestDiff = {
       ...pullRequestDiff(1, null),
       files: [
@@ -615,17 +663,19 @@ describe('WorkspaceDiffView pull-request source', () => {
     });
     renderView(fetchMock, false, null, [pullRequestUrl]);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'GitHub PR' }));
-    const picker = await screen.findByLabelText('Pull request');
-    fireEvent.change(picker, { target: { value: pullRequestUrl } });
     await findSelectedDecision('Changes behavior in src/page-one.ts.');
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ }));
+    const secondDecision = within(screen.getByRole('navigation', { name: 'Review decision queue' })).getByRole('button', { name: /Decision 2/ });
+    fireEvent.click(secondDecision);
+    await waitFor(() => expect(secondDecision).toHaveAttribute('aria-current', 'step'));
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('workbench:workspace-diff-selections') ?? '{}')).toMatchObject({
+      'work-item:work-item-1': { decisions: { 'sha-42': expect.any(String) } },
+    }));
 
     cleanup();
     renderView(fetchMock, false, null, [pullRequestUrl]);
 
     expect(await screen.findByRole('heading', { name: 'Selectable scopes' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Pull request')).toHaveValue(pullRequestUrl);
+    expect(screen.getByRole('button', { name: 'acme/web #42' })).toHaveAttribute('aria-current', 'true');
     const restoredQueue = await screen.findByRole('navigation', { name: 'Review decision queue' });
     expect(within(restoredQueue).getByRole('button', { name: /Decision 2/ })).toHaveAttribute('aria-current', 'step');
   });
@@ -683,6 +733,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     });
     renderView(fetchMock);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse other changes' }));
     fireEvent.click(await screen.findByRole('button', { name: 'GitHub PR' }));
     fireEvent.change(screen.getByLabelText('Pull request URL'), { target: { value: pullRequestUrl } });
     fireEvent.click(screen.getByRole('button', { name: 'Review PR' }));
@@ -863,6 +914,7 @@ describe('WorkspaceDiffView repository browser', () => {
     });
     renderView(fetchMock);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse other changes' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Repository' }));
 
     // Opens on the newest commit, read against the one before it.
@@ -906,7 +958,7 @@ describe('WorkspaceDiffView repository browser', () => {
 
     expect(await screen.findByText('src/gateway/search.ts')).toBeInTheDocument();
     expect(screen.queryByText('No uncommitted changes to review.')).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Branch' })).toHaveValue('jeffrey/connector-name-search'));
+    expect(screen.getByRole('button', { name: 'jeffrey/connector-name-search · 3 commits' })).toHaveAttribute('aria-current', 'true');
     expect(fetchMock.mock.calls.some(([request]) => String(request).includes(`ref=${encodeURIComponent('branch:jeffrey/connector-name-search')}`))).toBe(true);
   });
 });

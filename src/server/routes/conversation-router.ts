@@ -38,13 +38,15 @@ export function createConversationRouter({ repository, database, capabilities, a
       catch { return null; } // The collector may remove a run worktree mid-request.
     };
     const isRunWorktree = (workspacePath: string | null) => Boolean(workspacePath?.includes('/.workbench/run-worktrees/'));
-    const conversationRuns = linkedItem
-      ? repository.listRuns(linkedItem.id).filter((run) => run.conversationId === conversationId && (run.status === 'queued' || run.status === 'running') && usableWorkspace(run.resolvedWorkspace))
+    const allConversationRuns = linkedItem
+      ? repository.listRuns(linkedItem.id).filter((run) => run.conversationId === conversationId)
       : [];
+    const conversationRuns = allConversationRuns.filter((run) => (run.status === 'queued' || run.status === 'running') && usableWorkspace(run.resolvedWorkspace));
     const activeRun = [...conversationRuns].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
     const activeRunWorkspace = activeRun?.resolvedWorkspace ?? null;
     const selected = database.prepare('SELECT workspace_path, updated_at FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversationId) as { workspace_path: string; updated_at: string } | undefined;
     const candidates = listCandidateWorkspaces();
+    const conversationSnapshots = repository.listWorkspaceDiffSnapshots({ conversationId });
     // A linked task can predate its explicit workspace assignment. Reuse the
     // same repository resolver as agent dispatch so Changes is immediately
     // usable instead of making the user rediscover the repository manually.
@@ -52,11 +54,23 @@ export function createConversationRouter({ repository, database, capabilities, a
       try { return linkedItem ? usableWorkspace(resolveWorkingDirectory(linkedItem)) : null; }
       catch { return null; }
     })();
-    const sourcePath = usableWorkspace(linkedItem?.workspacePath) ?? inferredTaskPath;
+    const explicitTaskPath = usableWorkspace(linkedItem?.workspacePath);
+    const recordedPaths = conversationSnapshots.map((snapshot) => usableWorkspace(snapshot.diff.workspacePath)).filter((path): path is string => Boolean(path));
+    const sourcePath = explicitTaskPath ?? recordedPaths[0] ?? inferredTaskPath;
     const activePath = usableWorkspace(activeRunWorkspace);
     const linkedPath = activePath ?? sourcePath;
     if (linkedPath && !candidates.includes(linkedPath)) candidates.unshift(linkedPath);
     const defaultPath = linkedPath ?? (!linkedItem || linkedItem.projectName === 'Workbench' ? resolve(process.cwd()) : null);
+    // Primary choices require change evidence: the linked task, the active
+    // editing workspace, or an immutable diff. A repository an agent merely
+    // opened is not a conversation change set.
+    const relevantPaths = new Set<string>();
+    for (const path of [activePath, explicitTaskPath, !linkedItem ? defaultPath : null]) if (path) relevantPaths.add(path);
+    for (const snapshot of conversationSnapshots) {
+      const path = usableWorkspace(snapshot.diff.workspacePath);
+      if (path) relevantPaths.add(path);
+    }
+    candidates.sort((left, right) => Number(relevantPaths.has(right)) - Number(relevantPaths.has(left)));
     // An active run is authoritative: its uncommitted files live in a detached
     // worktree, so a prior source-checkout selection must not hide them.
     // Completed runs are integrated or recorded as snapshots. They must not
@@ -83,7 +97,12 @@ export function createConversationRouter({ repository, database, capabilities, a
         .run(conversationId, selectedPath, new Date().toISOString());
       else database.prepare('DELETE FROM shared_conversation_workspace_selection WHERE conversation_id = ?').run(conversationId);
     }
-    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === activePath ? `${basename(sourcePath ?? path)} · agent worktree` : basename(path), selected: path === selectedPath })) };
+    return { selectedPath, workspaces: candidates.map((path) => ({
+      path,
+      label: path === activePath ? `${basename(sourcePath ?? path)} · agent worktree` : basename(path),
+      selected: path === selectedPath,
+      relevant: relevantPaths.has(path),
+    })) };
   };
   router.get('/api/shared/conversations', (request, response) => {
     repository.ensureDefaultConversation();
