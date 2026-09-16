@@ -52,7 +52,7 @@ const RHETORICAL_COMMAND = /^why\s+(?:the\s+fuck\s+)?(?:don'?t|won'?t|can'?t)\s+
 const TERSE_APPROVAL = /^(?:ok(?:ay)?\s+)?(?:yes|yeah|yep|approved?(?:\s+(?:it|this|that))?|do it|go|go ahead(?:\s+and\s+do\s+it)?|proceed|continue|ship it|send it|post it|publish it|push it|(?:now\s+)?you have (?:my\s+)?permission|permission granted|authorized)(?:\s+(?:now|please))?[.!]*$/i;
 const TERSE_APPROVAL_FILLER = /\b(?:you|codex|claude|palmyra|fuck|fucking|fcking|motherfucker|motherfucking)\b/gi;
 const META_EXAMPLE = /\b(?:is another (?:one|command)|add (?:this|that|it) to (?:the\s+)?(?:list|commands?)|command list|authorization (?:list|regex|parser)|regex (?:list|against|for))\b/i;
-const NEGATED_ACTION = /\b(?:do\s+not|don'?t|never|no)\s+(?:ever\s+)?(?:commit|amend|push|force[- ]?push|promote|deploy|publish|open|create|update|edit|approve|merge|comment|post|send|delete|remove|release)\b/i;
+const NEGATED_COMMAND_START = /^(?:do\s+not|don'?t|not|never|no)\s+(?:ever\s+)?(?:commit|amend|push|force[- ]?push|promote|deploy|publish|open|create|update|edit|approve|merge|comment|post|send|delete|remove|release)\b/i;
 const STATUS_REPORT = /^(?:(?:ok(?:ay)?|so|well)\s+)?(?:commit|amend|push|promote|deploy|publish|merge|approval?)\s+(?:is|was|seems|looks|keeps|failed|fails|broke|doesn'?t|does not)\b/i;
 
 function matchingRules(message: string): AuthorizationRule[] {
@@ -61,8 +61,9 @@ function matchingRules(message: string): AuthorizationRule[] {
 
 function directCommand(message: string): boolean {
   const trimmed = message.trim();
-  if (!trimmed || META_EXAMPLE.test(trimmed) || NEGATED_ACTION.test(trimmed) || STATUS_REPORT.test(trimmed)) return false;
+  if (!trimmed || META_EXAMPLE.test(trimmed) || STATUS_REPORT.test(trimmed)) return false;
   const stripped = trimmed.replace(LEADING_REQUEST, '').trim();
+  if (NEGATED_COMMAND_START.test(stripped)) return false;
   return COMMAND_START.test(stripped) || PASSIVE_REQUEST.test(trimmed) || COMMAND_START.test(trimmed.replace(RHETORICAL_COMMAND, '').trim());
 }
 
@@ -87,7 +88,7 @@ function operationFor(rules: AuthorizationRule[], current: string, pending?: str
  */
 export async function classifyExternalActionAuthorization(context: ExternalActionAuthorizationContext): Promise<ExternalActionAuthorization> {
   const current = context.currentMessage?.trim() ?? '';
-  if (!current || META_EXAMPLE.test(current) || NEGATED_ACTION.test(current)) return { granted: false, operation: null };
+  if (!current || META_EXAMPLE.test(current)) return { granted: false, operation: null };
 
   const directRules = matchingRules(current);
   if (directRules.length && directCommand(current)) return { granted: true, operation: operationFor(directRules, current) };

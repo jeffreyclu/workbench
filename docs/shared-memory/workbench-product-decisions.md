@@ -1401,8 +1401,10 @@ cycle, and an estimate. Exact-title retries within one team are idempotent.
 
 Authorization carries across an immediately following referential command such
 as “you do it Codex,” but only from the immediately preceding concrete external
-operation; older conversation text never grants authority. A local Workbench
-item is not a substitute for the requested Linear issue.
+operation; older conversation text never grants authority. A later safety
+constraint such as “do not create duplicates” does not cancel the explicit
+creation command at the start of the same message. A local Workbench item is
+not a substitute for the requested Linear issue.
 
 ### The code relationship map is a zoomable domain map (2026-09-11)
 

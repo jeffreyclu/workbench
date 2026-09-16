@@ -80,4 +80,17 @@ describe('external action authorization command catalog', () => {
       operation: expect.stringContaining('Create the requested Linear ticket'),
     }));
   });
+
+  it('keeps an explicit creation grant when a later clause forbids duplicates', async () => {
+    await expect(classifyExternalActionAuthorization({
+      currentMessage: 'Create the two Linear tickets in the current cycle. Do not create duplicates.',
+    })).resolves.toEqual(expect.objectContaining({ granted: true }));
+  });
+
+  it.each(['please do not create a Linear ticket', 'I want you to not push', 'never send the email'])(
+    'does not grant a leading negated command: %s',
+    async (currentMessage) => {
+      await expect(classifyExternalActionAuthorization({ currentMessage })).resolves.toEqual({ granted: false, operation: null });
+    },
+  );
 });
