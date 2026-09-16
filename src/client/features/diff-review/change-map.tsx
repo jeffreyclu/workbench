@@ -85,7 +85,7 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, deci
       {/* The three readings, said out loud. A diagram whose shape has to be
           guessed at is a puzzle, and a reviewer already has one of those open. */}
       <p className="change-map-key">
-        Each disc is a change, sized by how much code it moves. The rings around it are its folder and its package. Light flows from called, imported, or used code into the caller or consumer. Click a disc to read its code beside the diagram.
+        Each disc is a change, sized by how much code it moves. Nested rings group its file, folder, and package. Light flows from called, imported, or used code into the caller or consumer. Click a disc to read its code beside the diagram.
         {layout.edges.length > 0 && ` ${reaching} of ${layout.edges.length} ${layout.edges.length === 1 ? 'relationship reaches' : 'relationships reach'} outside their own folder.`}
         {' '}Scroll to zoom, drag to pan.
       </p>

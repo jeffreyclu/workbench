@@ -337,6 +337,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
 
   const selectedFolder = layout.nodes.find((node) => node.id === selectedId)?.folderId ?? null;
   const selectedPackage = layout.nodes.find((node) => node.id === selectedId)?.packageId ?? null;
+  const selectedFile = layout.nodes.find((node) => node.id === selectedId)?.fileId ?? null;
   const showEveryCaption = camera.zoom >= LABEL_ZOOM;
   const showsCode = inspectedId !== undefined;
 
@@ -385,6 +386,13 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
           <tspan className="change-map-group-count" dx="7">{group.externalEdges === 0
             ? 'self-contained'
             : `${Math.round(group.containment * 100)}% internal`}</tspan>
+        </text>
+      </g>)}
+      {layout.files.map((group) => <g key={group.id} className={`change-map-file${selectedFile === group.id ? ' selected' : ''}`} aria-hidden="true">
+        <circle className="change-map-file-ring" cx={group.x} cy={group.y} r={group.radius} />
+        <text className="change-map-file-label" x={group.x} y={group.y - group.radius + 13} textAnchor="middle">
+          {pathTail(group.label, 28)}
+          <tspan className="change-map-group-count" dx="6">{group.nodeCount} {group.nodeCount === 1 ? 'change' : 'changes'}</tspan>
         </text>
       </g>)}
       {orderedEdges.map((edge, edgeIndex) => {

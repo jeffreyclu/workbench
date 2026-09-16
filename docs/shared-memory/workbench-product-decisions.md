@@ -302,6 +302,9 @@ optional code reader float over the canvas; none may reserve canvas space.
 Relationships use visual flow, not arrowheads or per-line text. A light pulse
 moves from called/imported/used code into the caller or consumer: dependencies
 flow into the code that consumes them. The direction must never be inverted.
+Decision discs are nested by source ownership: decisions from one file share a
+file ring, file rings sit inside their folder ring, and folder rings sit inside
+their package ring. Single-decision files retain a ring for a stable hierarchy.
 
 Review verdicts are optimistic: the queue, counts, and selected decision update
 in the click frame while the database write completes behind them. Saving a

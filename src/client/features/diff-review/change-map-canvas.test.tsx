@@ -106,9 +106,12 @@ describe('change map canvas', () => {
 
   it('draws the folder a change sits in, inside the package that holds it', () => {
     const { container } = draw();
+    const files = [...container.querySelectorAll('.change-map-file-label')].map((item) => item.textContent);
     const folders = [...container.querySelectorAll('.change-map-folder-label')].map((item) => item.textContent);
     const packages = [...container.querySelectorAll('.change-map-package-label')].map((item) => item.textContent);
 
+    expect(files.some((text) => text?.includes('view.tsx'))).toBe(true);
+    expect(files.some((text) => text?.includes('repository.ts'))).toBe(true);
     expect(folders.some((text) => text?.includes('features/queue'))).toBe(true);
     expect(packages.some((text) => text?.startsWith('src/client'))).toBe(true);
     expect(packages.some((text) => text?.startsWith('src/server'))).toBe(true);

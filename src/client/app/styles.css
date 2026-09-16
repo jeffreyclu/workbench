@@ -161,13 +161,15 @@ nav { display: grid; gap: 3px; }
 .page-state { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; color: var(--muted); font-size: 10px; }
 .stack-header { display: flex; align-items: center; justify-content: space-between; height: 38px; padding: 0 12px; border-radius: 7px; font: 600 9px 'DM Mono'; letter-spacing: .1em; text-transform: uppercase; }
 .stack-header strong { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0 6px; border-radius: 99px; font-size: 8px; line-height: 1; }
-.queue-rows .stack-header strong > span { display: block; transform: translateY(-.5px); }
+.queue-rows .stack-header strong.optically-centered-count { position: relative; }
+.optically-centered-number-sizer { color: transparent; user-select: none; }
+.optically-centered-number-canvas { position: absolute; inset: 0; pointer-events: none; }
 .stack-header-progress { color: #e6c75f; background: #2b2618; border: 1px solid #504522; }
-.stack-header-progress strong { color: #17140b; background: #e6c75f; }
+.stack-header-progress strong { --stack-count-ink: #17140b; color: #17140b; background: #e6c75f; }
 .stack-header-attention { color: #aeb8dc; background: #1a1d28; border: 1px solid #30384f; }
-.stack-header-attention strong { color: #11131a; background: #9cace2; }
+.stack-header-attention strong { --stack-count-ink: #11131a; color: #11131a; background: #9cace2; }
 .stack-header-pinned { color: #e9c55c; background: #332a13; border: 1px solid #635020; }
-.stack-header-pinned strong { color: #1d1707; background: #e9c55c; }
+.stack-header-pinned strong { --stack-count-ink: #1d1707; color: #1d1707; background: #e9c55c; }
 .task-group-progress .queue-item { background: #191712; border-color: #2f2a1b; }
 .task-group-progress .queue-item { overflow: hidden; }
 .task-group-progress .queue-item::after { content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none; background: linear-gradient(105deg, transparent 20%, #f0cf5a0a 36%, #ffe98a2b 48%, #f0cf5a0a 60%, transparent 76%); transform: translateX(-120%); animation: task-shimmer 1.8s ease-in-out infinite; }
@@ -544,6 +546,10 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-folder.reaching .change-map-folder-ring { stroke: #6b5738; stroke-dasharray: 5 4; }
 .change-map-folder-label { fill: #77766f; font: 9px 'DM Mono'; paint-order: stroke; stroke: #191915; stroke-width: 4px; }
 .change-map-folder.selected .change-map-folder-label { fill: #c4c3bc; }
+.change-map-file-ring { fill: #1d1d19; stroke: #45453a; stroke-dasharray: 3 3; }
+.change-map-file.selected .change-map-file-ring { fill: #24251d; stroke: #747b4b; }
+.change-map-file-label { fill: #a09f96; font: 8px 'DM Mono'; paint-order: stroke; stroke: #1d1d19; stroke-width: 4px; }
+.change-map-file.selected .change-map-file-label { fill: #d4d5ca; }
 .change-map-group-count { fill: #56554e; }
 .change-map-node { --state-tone: #56554e; cursor: pointer; }
 .change-map-node.state-reviewed { --state-tone: #8bbd75; }
@@ -616,7 +622,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 /* Reach, as weight. A line inside one folder is quiet; a line into another
    package is the heaviest thing on the diagram, because it is the one that
    makes the change stop being self-contained. */
-.change-map-edge.scope-folder .change-map-edge-line { opacity: 0.45; }
+.change-map-edge.scope-file .change-map-edge-line { opacity: 0.35; }
+.change-map-edge.scope-folder .change-map-edge-line { opacity: 0.55; }
 .change-map-edge.scope-package .change-map-edge-line { stroke-width: 1.7; }
 .change-map-edge.scope-cross-package .change-map-edge-line { stroke-width: 2.2; opacity: 0.92; }
 /* How the pair reads across the patch, drawn so the four cases are not one

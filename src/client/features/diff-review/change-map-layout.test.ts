@@ -107,11 +107,40 @@ describe('change map layout', () => {
     expect(layout.folders.map((group) => group.folderPath)).toEqual(['src/client/features/queue', 'src/server']);
 
     for (const placed of layout.nodes) {
+      const file = layout.files.find((group) => group.id === placed.fileId)!;
       const folder = layout.folders.find((group) => group.id === placed.folderId)!;
       const owner = layout.packages.find((group) => group.id === placed.packageId)!;
+      expect(Math.hypot(placed.x - file.x, placed.y - file.y) + placed.radius).toBeLessThanOrEqual(file.radius + 0.5);
+      expect(Math.hypot(file.x - folder.x, file.y - folder.y) + file.radius).toBeLessThanOrEqual(folder.radius + 0.5);
       expect(Math.hypot(placed.x - folder.x, placed.y - folder.y) + placed.radius).toBeLessThanOrEqual(folder.radius + 0.5);
       expect(Math.hypot(folder.x - owner.x, folder.y - owner.y) + folder.radius).toBeLessThanOrEqual(owner.radius + 0.5);
     }
+  });
+
+  it('groups every decision from the same file inside one file ring', () => {
+    const sharedPath = 'src/client/features/queue/view.tsx';
+    const map: ChangeMap = {
+      nodes: [
+        node('render', 1, { filePath: sharedPath, degree: 1 }),
+        node('events', 2, { filePath: sharedPath, degree: 2 }),
+        node('logic', 3, { filePath: 'src/client/features/queue/logic.ts', degree: 1 }),
+      ],
+      edges: [edge('render', 'events'), edge('events', 'logic')],
+      omittedEdges: 0,
+    };
+    const layout = layoutChangeMap(map);
+    const shared = layout.files.find((group) => group.filePath === sharedPath)!;
+    const sharedNodes = layout.nodes.filter((placed) => placed.fileId === shared.id);
+
+    expect(layout.files).toHaveLength(2);
+    expect(shared.label).toBe('view.tsx');
+    expect(shared.nodeCount).toBe(2);
+    expect(sharedNodes.map((placed) => placed.id)).toEqual(['render', 'events']);
+    for (const placed of sharedNodes) {
+      expect(Math.hypot(placed.x - shared.x, placed.y - shared.y) + placed.radius).toBeLessThanOrEqual(shared.radius + 0.5);
+    }
+    expect(layout.edges.find((item) => item.id === 'render->events')!.scope).toBe('file');
+    expect(layout.edges.find((item) => item.id === 'events->logic')!.scope).toBe('folder');
   });
 
   it('makes reaching out of a folder the long line and staying in it the short one', () => {
@@ -211,6 +240,12 @@ describe('change map layout', () => {
     }
     for (const [index, left] of layout.folders.entries()) {
       for (const right of layout.folders.slice(index + 1)) {
+        expect(Math.hypot(left.x - right.x, left.y - right.y)).toBeGreaterThan(left.radius + right.radius);
+      }
+    }
+    for (const [index, left] of layout.files.entries()) {
+      for (const right of layout.files.slice(index + 1)) {
+        if (left.folderId !== right.folderId) continue;
         expect(Math.hypot(left.x - right.x, left.y - right.y)).toBeGreaterThan(left.radius + right.radius);
       }
     }

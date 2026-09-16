@@ -21,8 +21,8 @@ import { categoryOf, folderLabel, folderOf, packageOf, type CodeCategory } from 
  * - **Discs sit on a ring, so lines leave them in every direction.** A symbol
  *   twenty changes depend on is a hub with twenty spokes; a leaf has one. The
  *   count is the picture rather than a number in a label.
- * - **Rings nest: nodes in a folder, folders in a package.** An edge that
- *   stays inside a folder is a short line inside one ring; an edge to another
+ * - **Rings nest: nodes in a file, files in a folder, folders in a package.**
+ *   An edge that stays inside a file is the shortest line; an edge to another
  *   package is a long chord across the whole diagram. Containment and reach
  *   read as line length, which needs no legend. */
 
@@ -32,6 +32,8 @@ export const CHANGE_MAP_MIN_NODE_RADIUS = 12;
 export const CHANGE_MAP_MAX_NODE_RADIUS = 40;
 
 const NODE_GAP = 30;
+const FILE_PAD = 18;
+const FILE_GAP = 26;
 const FOLDER_PAD = 22;
 const FOLDER_GAP = 34;
 const PACKAGE_PAD = 34;
@@ -46,7 +48,7 @@ const LABEL_GAP = 13;
 const LABEL_LINE = 12;
 
 /** Where an edge goes, which is the whole containment reading. */
-export type ChangeEdgeScope = 'folder' | 'package' | 'cross-package';
+export type ChangeEdgeScope = 'file' | 'folder' | 'package' | 'cross-package';
 
 export interface ChangeMapPlacedNode extends ChangeMapNode {
   /** Centre of the disc, not a corner: everything in this layout is radial. */
@@ -57,6 +59,7 @@ export interface ChangeMapPlacedNode extends ChangeMapNode {
   category: CodeCategory;
   packageId: string;
   folderId: string;
+  fileId: string;
   /** Edges touching this node that leave its folder, and that leave its
    * package. A node whose degree is entirely external is code nothing around
    * it uses, which is worth seeing without counting lines. */
@@ -70,6 +73,21 @@ export interface ChangeMapPlacedNode extends ChangeMapNode {
   titleY: number;
   countsY: number;
   labelAnchor: 'start' | 'middle' | 'end';
+}
+
+/** One source file's ring. Decisions are review units, not files, so one file
+ * can contribute several discs; this ring makes their shared ownership visible
+ * before the reviewer reads a path. */
+export interface ChangeMapFileGroup {
+  id: string;
+  packageId: string;
+  folderId: string;
+  filePath: string;
+  label: string;
+  x: number;
+  y: number;
+  radius: number;
+  nodeCount: number;
 }
 
 /** One folder's ring. The path is written once on the ring rather than
@@ -114,6 +132,7 @@ export interface ChangeMapPlacedEdge extends ChangeMapEdge {
 
 export interface ChangeMapLayout {
   nodes: ChangeMapPlacedNode[];
+  files: ChangeMapFileGroup[];
   folders: ChangeMapFolderGroup[];
   packages: ChangeMapPackageGroup[];
   edges: ChangeMapPlacedEdge[];
@@ -214,6 +233,7 @@ interface Shaped {
   category: CodeCategory;
   packageId: string;
   folderId: string;
+  fileId: string;
 }
 
 function shapeNodes(map: ChangeMap): Shaped[] {
@@ -227,6 +247,7 @@ function shapeNodes(map: ChangeMap): Shaped[] {
     category: categoryOf(node),
     packageId: packageOf(node.filePath),
     folderId: folderOf(node.filePath),
+    fileId: node.filePath,
   }));
 }
 
@@ -260,19 +281,29 @@ function edgeGeometry(from: ChangeMapPlacedNode, to: ChangeMapPlacedNode, bow: n
 
 function scopeOf(from: ChangeMapPlacedNode, to: ChangeMapPlacedNode): ChangeEdgeScope {
   if (from.packageId !== to.packageId) return 'cross-package';
-  return from.folderId === to.folderId ? 'folder' : 'package';
+  if (from.folderId !== to.folderId) return 'package';
+  return from.fileId === to.fileId ? 'file' : 'folder';
 }
 
 export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
   const shaped = shapeNodes(map);
-  const byFolder = groupInOrder(shaped, (item) => item.folderId);
+  const byFile = groupInOrder(shaped, (item) => item.fileId);
+
+  // A folder contains file rings, not a flat bag of decisions. This extra
+  // level is what makes two changes in one source file visibly belong together.
+  const fileRings = [...byFile].map(([fileId, members]) => {
+    const radii = members.map((member) => member.radius);
+    const ring = ringRadius(radii, NODE_GAP);
+    return { fileId, folderId: members[0].folderId, packageId: members[0].packageId, members, radii, ring, radius: ring + Math.max(...radii) + FILE_PAD };
+  });
+  const byFolder = groupInOrder(fileRings, (item) => item.folderId);
 
   // Folder rings first, because a package ring is sized by the folder rings it
   // has to hold, and the outermost ring by the packages.
-  const folderRings = [...byFolder].map(([folderId, members]) => {
-    const radii = members.map((member) => member.radius);
-    const ring = ringRadius(radii, NODE_GAP);
-    return { folderId, packageId: members[0].packageId, members, radii, ring, radius: ring + Math.max(...radii) + FOLDER_PAD };
+  const folderRings = [...byFolder].map(([folderId, rings]) => {
+    const radii = rings.map((item) => item.radius);
+    const ring = ringRadius(radii, FILE_GAP);
+    return { folderId, packageId: rings[0].packageId, rings, radii, ring, radius: ring + Math.max(...radii) + FOLDER_PAD };
   });
 
   const byPackage = groupInOrder(folderRings, (ring) => ring.packageId);
@@ -286,9 +317,10 @@ export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
   const outerRing = ringRadius(packageRadii, PACKAGE_GAP);
   const outerSeats = seatOnRing(packageRadii, outerRing, PACKAGE_GAP, -Math.PI / 2);
 
-  // One walk down the three levels, adding each seat to the one above it.
+  // One walk down the four levels, adding each seat to the one above it.
   const packages: ChangeMapPackageGroup[] = [];
   const folders: ChangeMapFolderGroup[] = [];
+  const files: ChangeMapFileGroup[] = [];
   const nodes: ChangeMapPlacedNode[] = [];
   packageRings.forEach((packageRing, packageIndex) => {
     const seat = outerSeats[packageIndex];
@@ -299,12 +331,13 @@ export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
       y: seat.y,
       radius: packageRing.radius,
       folderCount: packageRing.rings.length,
-      nodeCount: packageRing.rings.reduce((sum, ring) => sum + ring.members.length, 0),
+      nodeCount: packageRing.rings.reduce((sum, folderRing) => sum + folderRing.rings.reduce((fileSum, fileRing) => fileSum + fileRing.members.length, 0), 0),
     });
     const folderSeats = seatOnRing(packageRing.radii, packageRing.ring, FOLDER_GAP, seat.angle + RING_TURN);
     packageRing.rings.forEach((folderRing, folderIndex) => {
       const folderSeat = folderSeats[folderIndex];
       const centre = { x: seat.x + folderSeat.x, y: seat.y + folderSeat.y };
+      const folderNodeCount = folderRing.rings.reduce((sum, fileRing) => sum + fileRing.members.length, 0);
       folders.push({
         id: folderRing.folderId,
         packageId: folderRing.packageId,
@@ -313,28 +346,45 @@ export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
         x: centre.x,
         y: centre.y,
         radius: folderRing.radius,
-        nodeCount: folderRing.members.length,
+        nodeCount: folderNodeCount,
         internalEdges: 0,
         externalEdges: 0,
         containment: 1,
       });
-      const nodeSeats = seatOnRing(folderRing.radii, folderRing.ring, NODE_GAP, folderSeat.angle + RING_TURN);
-      folderRing.members.forEach((member, memberIndex) => {
-        const nodeSeat = nodeSeats[memberIndex];
-        nodes.push({
-          ...member.node,
-          x: centre.x + nodeSeat.x,
-          y: centre.y + nodeSeat.y,
-          radius: member.radius,
-          category: member.category,
-          packageId: member.packageId,
-          folderId: member.folderId,
-          externalDegree: 0,
-          crossPackageDegree: 0,
-          labelX: 0,
-          titleY: 0,
-          countsY: 0,
-          labelAnchor: 'middle',
+      const fileSeats = seatOnRing(folderRing.radii, folderRing.ring, FILE_GAP, folderSeat.angle + RING_TURN);
+      folderRing.rings.forEach((fileRing, fileIndex) => {
+        const fileSeat = fileSeats[fileIndex];
+        const fileCentre = { x: centre.x + fileSeat.x, y: centre.y + fileSeat.y };
+        files.push({
+          id: fileRing.fileId,
+          packageId: fileRing.packageId,
+          folderId: fileRing.folderId,
+          filePath: fileRing.fileId,
+          label: fileRing.fileId.split('/').pop() ?? fileRing.fileId,
+          x: fileCentre.x,
+          y: fileCentre.y,
+          radius: fileRing.radius,
+          nodeCount: fileRing.members.length,
+        });
+        const nodeSeats = seatOnRing(fileRing.radii, fileRing.ring, NODE_GAP, fileSeat.angle + RING_TURN);
+        fileRing.members.forEach((member, memberIndex) => {
+          const nodeSeat = nodeSeats[memberIndex];
+          nodes.push({
+            ...member.node,
+            x: fileCentre.x + nodeSeat.x,
+            y: fileCentre.y + nodeSeat.y,
+            radius: member.radius,
+            category: member.category,
+            packageId: member.packageId,
+            folderId: member.folderId,
+            fileId: member.fileId,
+            externalDegree: 0,
+            crossPackageDegree: 0,
+            labelX: 0,
+            titleY: 0,
+            countsY: 0,
+            labelAnchor: 'middle',
+          });
         });
       });
     });
@@ -346,15 +396,16 @@ export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
   const shiftY = PADDING - Math.min(...packages.map((group) => group.y - group.radius));
   for (const group of packages) { group.x = round(group.x + shiftX); group.y = round(group.y + shiftY); group.radius = round(group.radius); }
   for (const group of folders) { group.x = round(group.x + shiftX); group.y = round(group.y + shiftY); group.radius = round(group.radius); }
+  for (const group of files) { group.x = round(group.x + shiftX); group.y = round(group.y + shiftY); group.radius = round(group.radius); }
   for (const node of nodes) { node.x = round(node.x + shiftX); node.y = round(node.y + shiftY); node.radius = round(node.radius); }
 
-  // Captions, once every disc is where it finally sits. A folder holding one
-  // change has nothing to point away from, so that caption goes underneath.
+  // Captions point away from their file ring. A file holding one change has
+  // nothing to point away from, so that caption goes underneath.
   for (const node of nodes) {
-    const folder = folders.find((group) => group.id === node.folderId)!;
-    const away = Math.hypot(node.x - folder.x, node.y - folder.y);
-    const dx = away === 0 ? 0 : (node.x - folder.x) / away;
-    const dy = away === 0 ? 1 : (node.y - folder.y) / away;
+    const file = files.find((group) => group.id === node.fileId)!;
+    const away = Math.hypot(node.x - file.x, node.y - file.y);
+    const dx = away === 0 ? 0 : (node.x - file.x) / away;
+    const dy = away === 0 ? 1 : (node.y - file.y) / away;
     const reach = node.radius + LABEL_GAP;
     const anchorY = node.y + dy * reach;
     node.labelX = round(node.x + dx * reach);
@@ -385,11 +436,12 @@ export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
     const bow = total === 1 ? 0 : (index - (total - 1) / 2) * PARALLEL_EDGE_BOW;
     const scope = scopeOf(from, to);
 
-    from.externalDegree += scope === 'folder' ? 0 : 1;
-    to.externalDegree += scope === 'folder' ? 0 : 1;
+    const leavesFolder = scope === 'package' || scope === 'cross-package';
+    from.externalDegree += leavesFolder ? 1 : 0;
+    to.externalDegree += leavesFolder ? 1 : 0;
     from.crossPackageDegree += scope === 'cross-package' ? 1 : 0;
     to.crossPackageDegree += scope === 'cross-package' ? 1 : 0;
-    if (scope === 'folder') folderById.get(from.folderId)!.internalEdges += 1;
+    if (!leavesFolder) folderById.get(from.folderId)!.internalEdges += 1;
     else {
       folderById.get(from.folderId)!.externalEdges += 1;
       folderById.get(to.folderId)!.externalEdges += 1;
@@ -405,5 +457,5 @@ export function layoutChangeMap(map: ChangeMap): ChangeMapLayout {
 
   const right = Math.max(...packages.map((group) => group.x + group.radius));
   const bottom = Math.max(...packages.map((group) => group.y + group.radius));
-  return { nodes, folders, packages, edges, width: round(right + PADDING), height: round(bottom + PADDING) };
+  return { nodes, files, folders, packages, edges, width: round(right + PADDING), height: round(bottom + PADDING) };
 }
