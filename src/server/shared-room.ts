@@ -1449,7 +1449,7 @@ export async function replyInSharedRoom(
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
     repository.updateSharedMessage(messageId, {
       retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
-      retrievedMemoryDetail: memoryEvidence.length ? {
+      retrievedMemoryDetail: memoryAttempted ? {
         query: memoryQuery,
         items: memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
       } : null,

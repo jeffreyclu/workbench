@@ -1508,7 +1508,10 @@ describe('WorkItemRepository', () => {
       expect(retrieval).toHaveBeenCalledOnce();
       expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
       expect(replies.map((reply) => repository.getSharedMessageById(reply.id)?.retrievedMemoryCount)).toEqual([0, 0]);
-      expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id))).toEqual([null, null]);
+      expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id))).toEqual([
+        expect.objectContaining({ query: expect.stringContaining('Sept 6 - Sept 13'), items: [] }),
+        expect.objectContaining({ query: expect.stringContaining('Sept 6 - Sept 13'), items: [] }),
+      ]);
     } finally {
       process.env.PATH = previousPath;
       rmSync(directory, { recursive: true, force: true });

@@ -1312,6 +1312,14 @@ window than routine RAG so work executed over time is represented instead of
 being cut down to the ordinary eight-result prompt. This policy applies equally
 to Codex, Claude/Opus, and Palmyra.
 
+Memory-badge semantics (correction from Jeffrey, 2026-09-16): every new agent
+reply must visibly identify the memory layer it used. When selective long-term
+search does not run, the badge says `Active` because the bounded on-disk active
+conversation context was still supplied; it must not show an unexplained dash.
+When long-term search runs, the badge retains its numeric match count. A zero
+result remains clickable and shows the exact query plus an empty-result message,
+rather than opening a dialog that claims no retrieval detail was recorded.
+
 ### The knowledge graph is a derived SQLite index, never a second source of truth
 
 *Decision from Jeffrey, 2026-09-09.* Workbench's canonical task, project,

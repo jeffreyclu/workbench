@@ -1974,7 +1974,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
     if (run.messageId) repository.updateSharedMessage(run.messageId, {
       retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
-      retrievedMemoryDetail: memoryEvidence.length ? {
+      retrievedMemoryDetail: memoryAttempted ? {
         query: memoryQuery,
         items: memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
       } : null,

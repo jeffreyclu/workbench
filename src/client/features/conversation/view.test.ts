@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type SharedMessage } from '../../../shared/contracts';
 import { conversationCacheSpendWarning } from './cache-spend';
-import { composerSelectionForConversation, composerSelectionFromConversation, executionKindForConversationSend, latestConversationExecutionKind, replyBadge } from './view';
+import { composerSelectionForConversation, composerSelectionFromConversation, executionKindForConversationSend, latestConversationExecutionKind, memoryBadgePresentation, replyBadge } from './view';
 
 describe('replyBadge', () => {
   it('shows the actual model alongside the compact agent, profile, usage, and duration telemetry', () => {
@@ -67,6 +67,21 @@ describe('replyBadge', () => {
       cacheReadInputTokens: null,
       kind: 'execute',
     })).toBe('Claude · execute · claude-sonnet-5 (standard) · default · 120 in · 340 out · 1.5s');
+  });
+});
+
+describe('memoryBadgePresentation', () => {
+  it('shows active conversation memory instead of an empty dash when long-term search was unnecessary', () => {
+    expect(memoryBadgePresentation(null)).toEqual({
+      label: 'Active',
+      title: 'Active conversation memory was supplied; long-term memory search was not needed',
+      disabled: true,
+    });
+  });
+
+  it('keeps long-term retrieval counts inspectable, including a zero-result query', () => {
+    expect(memoryBadgePresentation(0)).toEqual(expect.objectContaining({ label: '0', disabled: false }));
+    expect(memoryBadgePresentation(3)).toEqual(expect.objectContaining({ label: '3', disabled: false }));
   });
 });
 

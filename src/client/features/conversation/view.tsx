@@ -169,6 +169,23 @@ export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'ac
   return [`${agent}${message.kind ? ` · ${message.kind}` : ''} · ${model} · ${profile} · ${usage}`, cacheRead, duration, fallback].filter(Boolean).join(' · ');
 }
 
+export function memoryBadgePresentation(retrievedMemoryCount: number | null): { label: string; title: string; disabled: boolean } {
+  if (typeof retrievedMemoryCount === 'number') {
+    return {
+      label: String(retrievedMemoryCount),
+      title: retrievedMemoryCount > 0
+        ? `Retrieved ${retrievedMemoryCount} long-term memory match${retrievedMemoryCount === 1 ? '' : 'es'} using search and relationships — click to view`
+        : 'Long-term memory search ran but found no matches — click to view the query',
+      disabled: false,
+    };
+  }
+  return {
+    label: 'Active',
+    title: 'Active conversation memory was supplied; long-term memory search was not needed',
+    disabled: true,
+  };
+}
+
 /**
  * A manual conversation has no task classification. Its current visible type
  * is the latest classified agent turn, which deliberately allows the next
@@ -1391,6 +1408,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                 ? splitBodyAtInterjections(message.body, liveInterjections)
                 : null;
               const splitIntoBubbles = (segments?.length ?? 0) > 1;
+              const memoryBadge = memoryBadgePresentation(message.retrievedMemoryCount);
 
               const renderHeader = (showSummaryBadges: boolean) => (
                 <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>
@@ -1398,15 +1416,11 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                   {showSummaryBadges && isAgentMessage && <button
                     type="button"
                     className={`memory-badge${typeof message.retrievedMemoryCount === 'number' ? '' : ' memory-badge-not-run'}`}
-                    disabled={typeof message.retrievedMemoryCount !== 'number'}
+                    disabled={memoryBadge.disabled}
                     onClick={() => setRetrievedMemoryMessageId(message.id)}
-                    title={typeof message.retrievedMemoryCount === 'number'
-                      ? message.retrievedMemoryCount > 0
-                        ? `Retrieved ${message.retrievedMemoryCount} memory match${message.retrievedMemoryCount === 1 ? '' : 'es'} using search and relationships — click to view`
-                        : 'Memory retrieval ran but found no matches'
-                      : 'Memory retrieval did not run for this message'}
+                    title={memoryBadge.title}
                   >
-                    <Search size={11} /> {typeof message.retrievedMemoryCount === 'number' ? message.retrievedMemoryCount : '—'}
+                    <Search size={11} /> {memoryBadge.label}
                   </button>}
                   {showSummaryBadges && <span className="header-badge-row">
                     {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
