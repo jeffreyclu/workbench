@@ -748,3 +748,33 @@ The one legitimate reason to write types by hand is hey-api's literal collapse: 
 fields as `kind: string` / `mode: string`, so generated unions cannot be narrowed. The codebase's
 established response is a small hand-patched literal union layered over the generated type (see
 `DetectedAuth` in `create-custom-connector/api/byo.queries.ts`), not a hand-written client.
+
+## Contract tests must be derived from the backend, not restate the audit
+
+When an audit concludes "the frontend matches what the backend expects", Jeffrey wants that
+conclusion enforced by tests rather than asserted in prose. On 2026-09-16, during the AIS
+password-grant work, he said: "what i need is unit tests for this logic. we need to guarantee that
+your audit - ie what the backend expects - matches the frontend permutation EXACTLY."
+
+The weak form he is rejecting is a test that restates the finding as a literal, such as
+`expect([...OPENAPI_AUTH_TYPES_WITH_CUSTOM_HEADERS]).toEqual([AUTH_TYPE.OAUTH2, AUTH_TYPE.PASSWORD])`.
+That passes forever and drifts silently the moment the backend changes. The strong form drives the
+real mapper over every reachable permutation and checks the emitted payload against a contract table
+that is itself pinned to the generated client, so regenerating the client after a backend change
+fails the suite instead of shipping a 400.
+
+Two related traps. First, the backend source of truth is `origin/main`, not whatever branch happens
+to be checked out locally: the `be.mcp-gateway` working copy was eight days stale and was missing an
+entire auth variant, which made an earlier audit wrong. Second, when a contract test surfaces a real
+defect, leave it failing and report it rather than weakening the assertion to keep the suite green.
+
+## A PR link is the review target, not the local checkout
+
+When Jeffrey supplies a pull-request URL, the review must be performed against that pull request's
+head commit as it exists on GitHub, fetched with the `gh` CLI (`gh pr view/diff <n> --repo <owner/repo>`,
+and `gh api repos/<owner/repo>/contents/<path>?ref=<head-sha>` for the surrounding files a hunk needs).
+His local working tree is frequently on an unrelated branch with unrelated uncommitted changes, so
+reading it produces a review of code that is not in the pull request at all. He corrected this on
+2026-09-16, in strong terms, after a review of PR #5371 cited files and line numbers taken from the
+local `jeffrey/CON-154/ais-password-grant` branch instead of the PR head. Never substitute the local
+checkout, and never cite local paths or line numbers as evidence for a PR review.

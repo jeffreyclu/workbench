@@ -367,13 +367,12 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
     // against this pane's own body before touching state — otherwise
     // highlighting text in an unrelated pane would steal this one's handle.
     if (!onOpenLinesDetail) return;
-    const onSelectionChange = () => {
+    const measure = (): typeof lineSelection => {
       const body = diffBody.current;
       const selection = window.getSelection();
       if (!body || !selection || selection.isCollapsed || selection.rangeCount === 0
         || !body.contains(selection.anchorNode) || !body.contains(selection.focusNode)) {
-        setLineSelection(null);
-        return;
+        return null;
       }
       const startRow = closestLineRow(selection.anchorNode);
       const endRow = closestLineRow(selection.focusNode);
@@ -382,25 +381,36 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
       // widened to cover them: a lines-only context is only honest when it
       // is all one hunk, and stitching two together would misnumber it.
       if (!startRow || !endRow || !decisionId || decisionId !== endRow.dataset.decisionId) {
-        setLineSelection(null);
-        return;
+        return null;
       }
       const start = lineCoords(startRow.dataset.lineKey ?? '');
       const end = lineCoords(endRow.dataset.lineKey ?? '');
       if (start.hunkRange !== end.hunkRange) {
-        setLineSelection(null);
-        return;
+        return null;
       }
-      setLineSelection({
+      return {
         decisionId,
         hunkRange: start.hunkRange,
         startIndex: Math.min(start.index, end.index),
         endIndex: Math.max(start.index, end.index),
         rect: selection.getRangeAt(0).getBoundingClientRect(),
-      });
+      };
     };
+    const onSelectionChange = () => setLineSelection(measure());
+    // `position: fixed` on the handle is measured against the viewport, so a
+    // scroll anywhere the selection sits inside — the pane's own scroller or
+    // the page around it — has to re-measure it too. Scroll does not bubble,
+    // so this has to listen in the capture phase to hear it from any
+    // scrollable ancestor, not just window-level scrolling. Without this the
+    // handle stayed wherever the selection was made and drifted away from
+    // the actual highlighted text the moment either scrolled.
+    const onScroll = () => setLineSelection((current) => current && measure());
     document.addEventListener('selectionchange', onSelectionChange);
-    return () => document.removeEventListener('selectionchange', onSelectionChange);
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener('selectionchange', onSelectionChange);
+      window.removeEventListener('scroll', onScroll, { capture: true });
+    };
   }, [onOpenLinesDetail]);
 
   useEffect(() => setPeekDecisionId(null), [filePath]);

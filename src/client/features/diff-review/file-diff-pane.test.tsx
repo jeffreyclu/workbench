@@ -75,6 +75,35 @@ describe('review file diff pane', () => {
     expect(onOpenLinesDetail).toHaveBeenCalledWith(hunks[0].decisionId, { hunkRange: hunks[0].range, startIndex: 0, endIndex: 1 }, expect.any(HTMLElement));
   });
 
+  it('re-measures the handle position on scroll, so it tracks the selection instead of drifting', () => {
+    const onOpenLinesDetail = vi.fn();
+    const { container } = render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={hunks}
+      decisions={[decision(null)]}
+      activeDecisionId={hunks[0].decisionId}
+      onSelect={() => {}}
+      onOpenLinesDetail={onOpenLinesDetail}
+    />);
+    const rows = container.querySelectorAll('[data-line-key]');
+    let top = 100;
+    Range.prototype.getBoundingClientRect = () => ({ ...new DOMRect(), top, right: 200 }) as DOMRect;
+    window.getSelection()?.setBaseAndExtent(rows[0], 0, rows[1], 0);
+    fireEvent(document, new Event('selectionchange'));
+
+    const handleBefore = screen.getByRole('button', { name: /review, ask and get ai assist/i });
+    expect(handleBefore.style.top).toBe(`${top - 34}px`);
+
+    // The selection itself has not changed, only the scroll position — the
+    // rect the handle was placed from is now stale.
+    top = 300;
+    fireEvent.scroll(window);
+
+    const handleAfter = screen.getByRole('button', { name: /review, ask and get ai assist/i });
+    expect(handleAfter.style.top).toBe(`${top - 34}px`);
+  });
+
   it('draws no highlight handle when nothing is passed to open it', () => {
     const { container } = render(<DiffReviewFileDiffPane
       filePath="src/example.ts"
