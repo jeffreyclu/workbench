@@ -763,6 +763,32 @@ fi`,
     database.close();
   });
 
+  it('routes dual task completion through the conversation supervisor and creates one synthesis', async () => {
+    const review = '## Problem\nReview found one defect.\n\n## Solution\n### Pass 1\nBlocking: src/button.ts:2 drops the click. Preserve the handler.\n\n### Pass 2\nNo material issues.\n\n### Pass 3\nNo material issues.\n\n### Pass 4\nNo material issues.\n\n### Pass 5\nNo material issues.\n\n## Context\nStatic review only.';
+    const { directory, log } = fakeAgentDirectory(
+      `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: review } })}'`,
+      `printf '%s\\n' '${JSON.stringify({ type: 'result', result: review })}'`,
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Review dual task', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const conversation = repository.createConversation('Dual task', task.id);
+    const request = repository.createSharedMessage('system', `Execute: ${task.title}`, 'completed', conversation.id, [], 'both');
+    const codexReply = repository.createSharedMessage('codex', '', 'running', conversation.id, [], 'none', null, null, request.id, 'review');
+    const claudeReply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'none', null, null, request.id, 'review');
+    const codexRun = repository.createRun(task.id, 'review', 'codex', 'codex', 'Review it.', conversation.id, codexReply.id);
+    const claudeRun = repository.createRun(task.id, 'review', 'claude', 'claude', 'Review it.', conversation.id, claudeReply.id);
+
+    await executeAgentRun(repository, codexRun, 'test-owner', 60_000);
+    expect(repository.listAllSharedMessages(conversation.id).filter((message) => message.author === 'system' && message.body.startsWith('Synthesis:'))).toHaveLength(0);
+    await executeAgentRun(repository, claudeRun, 'test-owner', 60_000);
+
+    const syntheses = repository.listAllSharedMessages(conversation.id).filter((message) => message.author === 'system' && message.body.startsWith('Synthesis:'));
+    expect(syntheses).toEqual([expect.objectContaining({ status: 'completed', dispatchGroupId: request.id })]);
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex', 'claude', 'claude']);
+    database.close();
+  });
+
   it('makes a second mutating run wait for a workspace another run is editing', async () => {
     const { directory, log } = fakeAgentDirectory(
       `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Edited it.' } })}'`,

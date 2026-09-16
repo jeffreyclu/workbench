@@ -2314,7 +2314,7 @@ async function superviseTerminalConversationReply(repository: WorkItemRepository
     await superviseConversationAfterReply(repository, run.conversationId, run.messageId);
   } catch (error) {
     try {
-      repository.logDiagnostic('scheduler_error', 'system', 'failure', `Conversation synthesis supervision failed: ${error instanceof Error ? error.message : String(error)}`, undefined, 'conversation_supervisor_error');
+      repository.logDiagnostic('scheduler_error', 'scheduler', 'failure', `Conversation synthesis supervision failed: ${error instanceof Error ? error.message : String(error)}`, undefined, 'conversation_supervisor_error');
     } catch { /* Repository teardown must not turn a settled run into an unhandled rejection. */ }
   }
 }

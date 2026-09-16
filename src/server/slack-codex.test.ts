@@ -15,6 +15,6 @@ describe('Codex-hosted Slack integration', () => {
 
   it('normalizes daily Slack signals', async () => {
     const signals = await scanSlackWithCodex(async () => '<slack-result>{"signals":[{"title":"Review RFC","summary":"Ava requested review","url":"https://writer.slack.com/archives/C/p1","occurredAt":"2026-08-19T12:00:00Z"},{"bad":true}]}</slack-result>');
-    expect(signals).toEqual([{ provider: 'slack', title: 'Review RFC', summary: 'Ava requested review', url: 'https://writer.slack.com/archives/C/p1', occurredAt: '2026-08-19T12:00:00Z' }]);
+    expect(signals).toEqual([{ provider: 'slack', title: 'Review RFC', summary: 'Ava requested review', url: 'https://writer.slack.com/archives/C/p1', occurredAt: '2026-08-19T12:00:00Z', activeWork: true }]);
   });
 });
