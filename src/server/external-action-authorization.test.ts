@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EXTERNAL_ACTION_COMMANDS, classifyExternalActionAuthorization } from './external-action-authorization.js';
+import { EXTERNAL_ACTION_COMMANDS, classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, missingRequiredExecutables } from './external-action-authorization.js';
 
 const authorizedCommands = [
   'commit all changes',
@@ -52,6 +52,7 @@ describe('external action authorization command catalog', () => {
 
   it.each([
     'why are the agents not pushing?',
+    "why can't you create a Linear ticket?",
     'these agents cannot push',
     'did you push?',
     'do not push',
@@ -84,12 +85,44 @@ describe('external action authorization command catalog', () => {
   });
 
   it('treats opening a draft PR as authorization for its required branch push', async () => {
-    await expect(classifyExternalActionAuthorization({
+    const authorization = await classifyExternalActionAuthorization({
       currentMessage: 'open another draft pr',
-    })).resolves.toEqual(expect.objectContaining({
+    });
+    expect(authorization).toEqual(expect.objectContaining({
       granted: true,
       operation: expect.stringMatching(/Push the named branch if needed and create or open the named pull request/),
+      capability: expect.objectContaining({ requiredExecutables: ['git', 'gh'] }),
     }));
+    expect(missingRequiredExecutables(authorization, '')).toEqual(['git', 'gh']);
+  });
+
+  it.each([
+    'spin up one more draft GitHub PR for this branch',
+    'please put this into Linear as a ticket',
+    'can you publish this in Confluence now',
+    'I need you to post that update in Slack',
+  ])('grants a scoped external mutation despite wording modifiers: %s', async (currentMessage) => {
+    await expect(classifyExternalActionAuthorization({ currentMessage })).resolves.toEqual(expect.objectContaining({
+      granted: true,
+      capability: expect.objectContaining({ command: currentMessage, source: 'direct_command' }),
+    }));
+  });
+
+  it('attaches the exact required Workbench tool to a Linear creation capability', async () => {
+    const authorization = await classifyExternalActionAuthorization({ currentMessage: 'please put this into Linear as a ticket' });
+    expect(authorization).toEqual(expect.objectContaining({
+      granted: true,
+      capability: expect.objectContaining({ actionIds: ['linear_create'], requiredWorkbenchTools: ['create_linear_issue'] }),
+    }));
+    expect(externalActionAttempted(authorization, ['mcp__workbench__create_linear_issue'])).toBe(true);
+  });
+
+  it.each([
+    'I cannot create it because no supervisor-issued mutation capability exists.',
+    'The required write tool is not exposed in the registry.',
+    'I am blocked from creating the ticket.',
+  ])('rejects an unsupported blocker claim: %s', (output) => {
+    expect(hasUnsupportedCapabilityDenial(output)).toBe(true);
   });
 
   it('keeps an explicit creation grant when a later clause forbids duplicates', async () => {

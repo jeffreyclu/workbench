@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionContractForAuthorization, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnsupportedCapabilityDenial, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, missingRequiredExecutables, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -19,6 +19,7 @@ import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutRea
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
+import { preflightWorkbenchTools } from './palmyra-workbench-tools.js';
 import { editFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
@@ -117,6 +118,7 @@ interface CodexAppServerEvent {
   method?: string;
   error?: { message?: unknown };
   result?: {
+    data?: unknown;
     thread?: { id?: string };
     turn?: { id?: string };
     turnId?: string;
@@ -315,7 +317,7 @@ export function warmSharedRoomCodex(cwd: string, accountProfile = DEFAULT_ACCOUN
 }
 
 /** Codex's app-server is the provider protocol that supports turn/steer. */
-function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, _mutating = false): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number; cacheHandoffRequested: boolean; terminalWarning?: string | null }> {
+function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, _mutating = false, requiredWorkbenchTools: readonly string[] = []): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number; cacheHandoffRequested: boolean; terminalWarning?: string | null }> {
   return new Promise((resolveOutput, reject) => {
     const command = codexAppServerCommand();
     const claimed = claimWarmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile);
@@ -324,7 +326,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     const initialized = Boolean(claimed);
     if (!process.env.VITEST) warmSharedRoomCodex(cwd, accountProfile);
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
-    let workbenchMcpReady = false; let turnStartRequested = false;
+    let workbenchMcpReady = false; let toolInventoryRequestId: number | null = null; let toolInventoryVerified = requiredWorkbenchTools.length === 0; let turnStartRequested = false;
     let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     let peakContextTokens = 0;
     type PendingCodexSteer = { body: string; resolve: (accepted: boolean) => void };
@@ -398,6 +400,10 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
     };
     const maybeStartTurn = () => {
       if (!threadId || !workbenchMcpReady || turnStartRequested || settled) return;
+      if (!toolInventoryVerified) {
+        if (toolInventoryRequestId === null) toolInventoryRequestId = request('mcpServerStatus/list', { threadId, detail: 'toolsAndAuthOnly' });
+        return;
+      }
       turnStartRequested = true;
       request('turn/start', codexTurnStartParams(threadId, cwd, prompt));
     };
@@ -458,6 +464,20 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           if (startupTimeout) clearTimeout(startupTimeout);
           providerWatchdog?.accepted();
           onReady(steer);
+        }
+        if (typeof event.id === 'number' && event.id === toolInventoryRequestId) {
+          const servers = Array.isArray(event.result?.data) ? event.result.data : [];
+          const workbench = servers.find((entry) => entry && typeof entry === 'object' && (entry as Record<string, unknown>).name === 'workbench') as Record<string, unknown> | undefined;
+          const tools = workbench?.tools && typeof workbench.tools === 'object' ? workbench.tools as Record<string, unknown> : {};
+          const missing = requiredWorkbenchTools.filter((tool) => !(tool in tools));
+          if (missing.length) {
+            fail(new Error(`Codex Workbench tool preflight failed before the turn started. Missing: ${missing.join(', ')}.`));
+            return;
+          }
+          toolInventoryVerified = true;
+          onEvent({ kind: 'decision', detail: `Supervisor preflight passed: ${requiredWorkbenchTools.join(', ')} available.` });
+          maybeStartTurn();
+          continue;
         }
         if (typeof event.id === 'number' && pendingSteers.has(event.id)) {
           const pending = pendingSteers.get(event.id)!;
@@ -563,7 +583,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
   });
 }
 
-export async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false, expiredThreadPrompt?: string): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number }> {
+export async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false, expiredThreadPrompt?: string, requiredWorkbenchTools: readonly string[] = []): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number }> {
   let segmentPrompt = prompt;
   let segmentResume = resumeThreadId;
   let aggregate: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
@@ -582,7 +602,7 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
       }, onReady, onEvent, (usage) => {
         const aggregateUsage = addUsage(before, usage);
         onUsage(aggregateUsage);
-      }, segmentResume, accountProfile, mutating);
+      }, segmentResume, accountProfile, mutating, requiredWorkbenchTools);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof CodexProviderStallError && !lifecycleRecoveryUsed && !signal.aborted) {
@@ -1490,6 +1510,14 @@ export async function replyInSharedRoom(
       : Promise.resolve([]));
     const [externalAuthorization, turnGrounding, memoryEvidence] = await Promise.all([externalAuthorizationPromise, groundingPromise, memoryPromise]);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
+    const missingExecutables = missingRequiredExecutables(externalAuthorization);
+    if (missingExecutables.length) throw new Error(`External-action preflight failed before the turn started. Missing executables: ${missingExecutables.join(', ')}.`);
+    const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
+    await preflightWorkbenchTools(requiredWorkbenchTools);
+    if (externalAuthorization.granted) repository.addAgentStreamEvents(messageId, runId ?? null, [{
+      kind: 'decision',
+      detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} from Jeffrey's current command.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
+    }]);
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
     const shortTermMemory = repository.getSharedContextWithItems(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });
     const shortTermContext = shortTermMemory.text;
@@ -1553,7 +1581,7 @@ export async function replyInSharedRoom(
           repository.updateSharedMessage(messageId, telemetry);
           if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, 'codex', 'usage', telemetry); }
         });
-      }, resumeThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')), expiredThreadPrompt)
+      }, resumeThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')), expiredThreadPrompt, requiredWorkbenchTools)
         .then(({ output, threadId, usage, peakContextTokens }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, peakContextTokens, fallbackFrom: null, fallbackReason: null }));
     const palmyraImages = [...thread].reverse().find((message) => message.author === 'jeffrey')?.attachments ?? [];
     const runPalmyraReply = (palmyraPrompt: string, previousMessages = palmyraContext, imageAttachments = palmyraImages) => runPalmyraAgent({
@@ -1563,6 +1591,7 @@ export async function replyInSharedRoom(
       signal: controller.signal,
       previousMessages,
       imageAttachments,
+      requiredWorkbenchTools,
       onProgress: (partial) => {
         if (controller.signal.aborted) return;
         updateLiveSharedBody(repository, messageId, partial, runId);
@@ -1653,6 +1682,19 @@ export async function replyInSharedRoom(
       recoveryUsed = true;
       return runCodexReply(recoveryPromptForThread(freshPrompt, requirement, resumeThreadId), resumeThreadId, full);
     };
+    const attemptedAuthorizedAction = () => externalActionAttempted(
+      externalAuthorization,
+      turnEvents().filter((event) => event.kind === 'tool' || event.kind === 'file_write').map((event) => event.detail),
+    );
+    if (externalAuthorization.granted && hasUnsupportedCapabilityDenial(result.output) && !attemptedAuthorizedAction()) {
+      const reason = 'Agent claimed the authorized action was blocked without attempting its required tool or command.';
+      repository.updateSharedMessage(messageId, { body: `● ${reason} Recovering this tracked turn with the granted capability…` });
+      const recovered = await recoveryRun(`Recovery requirement: Jeffrey's current command already granted this external action. The supervisor has verified every required Workbench tool before this turn. Attempt the authorized operation now through the specified tool or normal CLI route. Do not inspect tool registries, ask for another capability, substitute a read-only connector, or repeat the prior blocker. Report a blocker only if the attempted operation returns a concrete error, and include that exact error.`);
+      if (hasUnsupportedCapabilityDenial(recovered.output) && !attemptedAuthorizedAction()) throw new Error(reason);
+      result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.fallbackFrom, fallbackReason: reason };
+      repository.updateSharedMessage(messageId, { author: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+      if (runId) repository.updateRun(runId, { agent: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+    }
     if (result.agent === 'claude' && hasRejectedWorkbenchPromptEnvelope(result.output)) {
       const reason = 'Claude rejected Workbench orchestration metadata as a prompt-injection attempt.';
       repository.setConversationClaudeSessionId(target.conversationId, null);

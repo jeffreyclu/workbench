@@ -93,6 +93,25 @@ describe('Palmyra durable agent runs', () => {
     expect(result.output).toBe('All 49 tool rounds completed.');
   });
 
+  it('fails before the provider turn when an authorized Workbench tool is missing', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'palmyra-tool-preflight-'));
+    workspaces.push(workspace);
+    const bridge = {
+      tools: [{ type: 'function' as const, function: { name: 'list_work_items', description: 'List work.', parameters: { type: 'object' } } }],
+      call: vi.fn(async () => 'Tool succeeded.'),
+      close: vi.fn(async () => {}),
+    };
+
+    await expect(runPalmyraAgent({
+      cwd: workspace,
+      prompt: 'Create the ticket.',
+      workbenchTools: bridge,
+      requiredWorkbenchTools: ['create_linear_issue'],
+    })).rejects.toThrow('Missing: create_linear_issue');
+    expect(streamChatWithPalmyra).not.toHaveBeenCalled();
+    expect(bridge.close).toHaveBeenCalledOnce();
+  });
+
   it('keeps live activity in progress but stores only the synthesized terminal answer', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'palmyra-final-answer-'));
     workspaces.push(workspace);

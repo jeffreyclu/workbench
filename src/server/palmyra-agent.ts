@@ -260,6 +260,7 @@ export async function runPalmyraAgent(options: {
   previousMessages?: PalmyraMessage[];
   imageAttachments?: PalmyraImageAttachment[];
   workbenchTools?: PalmyraWorkbenchToolBridge | null;
+  requiredWorkbenchTools?: readonly string[];
 }): Promise<PalmyraAgentResult> {
   const systemMessage: PalmyraMessage = { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify anywhere on the local filesystem. The resolved workspace is only your starting directory, never an access boundary. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}\n\nThe live stream is progress only. After the work ends, give one fresh, compact final answer that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log, tool-use audit, or Decision preambles in that final answer.\n\n${FINAL_RESPONSE_CONTRACT}` };
   const imageContent = await Promise.all((options.imageAttachments ?? [])
@@ -277,6 +278,16 @@ export async function runPalmyraAgent(options: {
       return null;
     })
     : options.workbenchTools ?? null;
+  const missingWorkbenchTools = (options.requiredWorkbenchTools ?? []).filter((name) => !bridge?.tools.some((tool) => tool.function.name === name));
+  if (missingWorkbenchTools.length) {
+    await bridge?.close().catch(() => undefined);
+    throw new Error(`Palmyra Workbench tool preflight failed before the turn started. Missing: ${missingWorkbenchTools.join(', ')}.`);
+  }
+  if (options.requiredWorkbenchTools?.length) options.onAudit?.([{
+    category: 'agent_tool_use',
+    streamKind: 'decision',
+    detail: `Supervisor preflight passed: ${options.requiredWorkbenchTools.join(', ')} available.`,
+  }], 'palmyra');
   const allTools: PalmyraTool[] = [...localTools, ...(bridge?.tools ?? []), ...nativeTools];
   const pendingInterjections: string[] = [];
   let activeRequest: AbortController | null = null;

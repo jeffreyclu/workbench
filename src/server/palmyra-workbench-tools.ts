@@ -53,3 +53,17 @@ export async function connectPalmyraWorkbenchTools(
     },
   };
 }
+
+/** Proves the named mutation tools exist on Workbench's canonical MCP server
+ * before any provider tokens are spent on an authorized external action. */
+export async function preflightWorkbenchTools(requiredTools: readonly string[]): Promise<void> {
+  if (!requiredTools.length) return;
+  const bridge = await connectPalmyraWorkbenchTools();
+  try {
+    const available = new Set(bridge.tools.map((tool) => tool.function.name));
+    const missing = requiredTools.filter((tool) => !available.has(tool));
+    if (missing.length) throw new Error(`Workbench tool preflight failed before the turn started. Missing: ${missing.join(', ')}.`);
+  } finally {
+    await bridge.close();
+  }
+}

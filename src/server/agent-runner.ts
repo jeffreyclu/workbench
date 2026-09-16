@@ -8,7 +8,7 @@ import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
 import { agentAccountEnv, agentSubprocessEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
-import { classifyExternalActionAuthorization, type ExternalActionAuthorization } from './external-action-authorization.js';
+import { classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, missingRequiredExecutables, type ExternalActionAuthorization } from './external-action-authorization.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
@@ -117,12 +117,12 @@ Complete the requested capability. Report decisions, evidence, risks, files chan
 
 ${FINAL_RESPONSE_CONTRACT}`;
 
-export { classifyExternalActionAuthorization } from './external-action-authorization.js';
+export { classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, missingRequiredExecutables } from './external-action-authorization.js';
 export type { ExternalActionAuthorization, ExternalActionAuthorizationContext } from './external-action-authorization.js';
 
 export function externalActionContractForAuthorization(decision: ExternalActionAuthorization): string {
   if (!decision.granted || !decision.operation) return EXTERNAL_ACTION_CONTRACT;
-  return `${EXTERNAL_ACTION_CAPABILITY_PREFIX} Jeffrey explicitly authorized this one current-turn operation:\n\n${decision.operation}\n\nPerform only that action and destination. ${EXTERNAL_ACTION_CAPABILITY_SUFFIX}`;
+  return `${EXTERNAL_ACTION_CAPABILITY_PREFIX} Jeffrey explicitly authorized this one current-turn operation:\n\n${decision.operation}\n\nYou must attempt the authorized operation through the specified tool or normal CLI route. You may report it blocked only after that attempted tool or command returns a concrete error, which you must quote exactly. Do not inspect a tool registry, ask for another capability, or substitute a read-only connector. Perform only that action and destination. ${EXTERNAL_ACTION_CAPABILITY_SUFFIX}`;
 }
 
 /** Recover the already-resolved one-turn contract when Workbench must open a
@@ -2039,6 +2039,14 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const sharedContext = [shortTermContext, externalContext].filter(Boolean).join('\n\n');
     const [externalAuthorization, memoryEvidence] = await Promise.all([externalAuthorizationPromise, memoryPromise]);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
+    const missingExecutables = missingRequiredExecutables(externalAuthorization);
+    if (missingExecutables.length) throw new Error(`External-action preflight failed before the turn started. Missing executables: ${missingExecutables.join(', ')}.`);
+    const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
+    if (requiredWorkbenchTools.length) await (await import('./palmyra-workbench-tools.js')).preflightWorkbenchTools(requiredWorkbenchTools);
+    if (externalAuthorization.granted && run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, [{
+      kind: 'decision',
+      detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} from Jeffrey's current command.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
+    }]);
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
     const retrievedMemoryItems = [
       ...shortTermMemory.items,
@@ -2085,7 +2093,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // choice and its reason so the activity log explains what actually ran.
     repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
     let result = run.agent === 'palmyra'
-      ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, previousMessages: palmyraContext, imageAttachments: item.attachments ?? [], onProgress: (partialOutput) => {
+      ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, previousMessages: palmyraContext, imageAttachments: item.attachments ?? [], requiredWorkbenchTools, onProgress: (partialOutput) => {
         repository.updateRun(run.id, { output: partialOutput });
         if (run.messageId) {
           repository.updateSharedMessage(run.messageId, { body: partialOutput });
@@ -2128,6 +2136,36 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       })));
     }, run.kind, run.accountProfile, undefined, undefined, resumeSessionId, !resumesSession);
+    const attemptedAuthorizedAction = () => externalActionAttempted(
+      externalAuthorization,
+      observedRunEvents
+        .filter((event) => event.streamKind === 'tool' || event.streamKind === 'file_write')
+        .flatMap((event) => [event.detail, event.command ?? '']),
+    );
+    if (externalAuthorization.granted && hasUnsupportedCapabilityDenial(result.output) && !attemptedAuthorizedAction()) {
+      const reason = 'Agent claimed the authorized action was blocked without attempting its required tool or command.';
+      repository.addActivity(item.id, 'system', 'progress', `${reason} Recovering the same run with Codex.`);
+      repository.updateRun(run.id, { output: `● ${reason} Recovering this tracked run with the granted capability…` });
+      if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● ${reason} Recovering this tracked run with the granted capability…` });
+      const recovered = await runAgentCommandWithFallback('codex', cwd, `${prompt}\n\nRecovery requirement: Jeffrey's current command already granted this external action. The supervisor verified every required Workbench tool before this turn. Attempt the authorized operation now through the specified tool or normal CLI route. Do not inspect tool registries, ask for another capability, substitute a read-only connector, or repeat the prior blocker. Report a blocker only if the attempted operation returns a concrete error, and include that exact error.`, (partialOutput) => {
+        repository.updateRun(run.id, { output: partialOutput });
+        if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
+      }, controller.signal, undefined, profile, (usage) => {
+        const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+        repository.updateRun(run.id, telemetry);
+        if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
+      }, (entries, producingAgent) => {
+        for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
+        for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
+        if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
+          kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+        })));
+      }, run.kind, run.accountProfile);
+      if (hasUnsupportedCapabilityDenial(recovered.output) && !attemptedAuthorizedAction()) throw new Error(reason);
+      result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.agent === 'codex' ? result.fallbackFrom : null, fallbackReason: reason };
+      repository.updateRun(run.id, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: reason });
+      if (run.messageId) repository.updateSharedMessage(run.messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: reason });
+    }
     // Post-turn checkpoint. Execute runs resume a Claude CLI session across
     // turns, so without a bound each later turn starts already carrying every
     // earlier turn's tool history and re-reads it on every request. When this

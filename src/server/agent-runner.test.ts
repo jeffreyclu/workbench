@@ -598,7 +598,11 @@ fi`;
   });
 
   it('keeps a granted one-turn capability first across a cache continuation', () => {
-    const capability = externalActionContractForAuthorization({ granted: true, operation: 'Publish the approved artifact.' });
+    const capability = externalActionContractForAuthorization({
+      granted: true,
+      operation: 'Publish the approved artifact.',
+      capability: { actionIds: ['artifact'], command: 'publish it', requiredExecutables: [], requiredWorkbenchTools: ['publish_artifact'], source: 'direct_command' },
+    });
     const continuation = cacheContinuationPrompt(`${capability}\n\nDo the work.`, 'Checkpoint saved.');
     expect(continuation.startsWith(capability)).toBe(true);
   });

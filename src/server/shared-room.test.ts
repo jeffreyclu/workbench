@@ -487,7 +487,11 @@ describe('compactConversationHistory', () => {
   });
 
   it('starts a fresh provider session for an authorized external mutation', () => {
-    expect(providerSessionForAuthorization('stale-thread', { granted: true, operation: 'Create the Linear tickets.' })).toBeNull();
+    expect(providerSessionForAuthorization('stale-thread', {
+      granted: true,
+      operation: 'Create the Linear tickets.',
+      capability: { actionIds: ['linear_create'], command: 'create the Linear tickets', requiredExecutables: [], requiredWorkbenchTools: ['create_linear_issue'], source: 'direct_command' },
+    })).toBeNull();
     expect(providerSessionForAuthorization('current-thread', { granted: false, operation: null })).toBe('current-thread');
   });
 
@@ -866,6 +870,63 @@ describe('shared-room Codex warming', () => {
       'Do not start this turn.', directory, new AbortController().signal,
       () => undefined, () => undefined, () => undefined, () => undefined,
     )).rejects.toThrow('Codex could not load Workbench tools: missing bearer token');
+  });
+
+  it('preflights every required Workbench tool before starting the Codex turn', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-tool-preflight-'));
+    temporaryDirectories.push(directory);
+    const log = join(directory, 'requests.log');
+    const fakeAppServer = [
+      '#!/bin/sh',
+      `IFS= read -r initialize; printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      `IFS= read -r bootstrap; printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"mcpServer/startupStatus/updated","params":{"threadId":"thread-1","name":"workbench","status":"ready"}}'`,
+      `IFS= read -r inventory; printf '%s\n' "$inventory" >> '${log}'; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"data":[{"name":"workbench","tools":{"create_linear_issue":{"name":"create_linear_issue"}}}]}}'`,
+      `IFS= read -r turn; printf '%s\n' "$turn" >> '${log}'; printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"turn":{"id":"turn-1"}}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"message-1","delta":"Attempted the authorized operation."}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-1","status":"completed"}}}'`,
+      'while IFS= read -r request; do :; done',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+    const events: string[] = [];
+
+    const result = await runSteerableCodex(
+      'Create the ticket.', directory, new AbortController().signal,
+      () => undefined, () => undefined, (event) => events.push(event.detail), () => undefined,
+      undefined, 'default', false, undefined, ['create_linear_issue'],
+    );
+
+    expect(result.output).toBe('Attempted the authorized operation.');
+    const requests = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(requests.map((request) => request.method)).toEqual(['mcpServerStatus/list', 'turn/start']);
+    expect(events).toContain('Supervisor preflight passed: create_linear_issue available.');
+  });
+
+  it('fails before turn start when a required Workbench tool is missing', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-codex-tool-missing-'));
+    temporaryDirectories.push(directory);
+    const log = join(directory, 'requests.log');
+    const fakeAppServer = [
+      '#!/bin/sh',
+      `IFS= read -r initialize; printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake-codex"}}}'`,
+      `IFS= read -r bootstrap; printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'`,
+      `printf '%s\n' '{"jsonrpc":"2.0","method":"mcpServer/startupStatus/updated","params":{"threadId":"thread-1","name":"workbench","status":"ready"}}'`,
+      `IFS= read -r inventory; printf '%s\n' "$inventory" >> '${log}'; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"data":[{"name":"workbench","tools":{}}]}}'`,
+      'while IFS= read -r request; do :; done',
+    ].join('\n');
+    writeFileSync(join(directory, 'codex'), fakeAppServer);
+    chmodSync(join(directory, 'codex'), 0o755);
+    process.env.PATH = directory;
+
+    await expect(runSteerableCodex(
+      'Create the ticket.', directory, new AbortController().signal,
+      () => undefined, () => undefined, () => undefined, () => undefined,
+      undefined, 'default', false, undefined, ['create_linear_issue'],
+    )).rejects.toThrow('Missing: create_linear_issue');
+    const requests = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(requests.map((request) => request.method)).toEqual(['mcpServerStatus/list']);
   });
 
   it('contains a closed app-server stdin pipe to the turn instead of crashing Workbench', async () => {

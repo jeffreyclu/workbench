@@ -1433,6 +1433,30 @@ push the named branch required by that pull request. Natural forms such as
 “open another draft PR” are complete commands; agents must not demand a second
 push or PR-creation permission prompt.
 
+### External-action commands produce enforced execution capabilities
+
+*Correction from Jeffrey, 2026-09-16.* Workbench must treat Jeffrey's explicit
+current-turn command to mutate an external system as the authorization. The
+supervisor records a typed, one-turn capability containing the action family,
+the exact command, its source, and every required Workbench tool. Exact catalog
+rules provide known routes, while a direct-command fallback recognizes wording
+modifiers without expanding questions, status reports, examples, or negations
+into grants.
+
+Before provider tokens are spent, Workbench lists its canonical MCP tools,
+checks every required local executable such as `git` or `gh`, and fails the turn
+if a required route is absent. Codex additionally checks the exact app-server
+thread's tool inventory after MCP startup reports ready; Palmyra checks the exact
+bridge it will use. The grant and successful preflight are visible in the
+conversation decision graph.
+
+An agent may report an authorized action blocked only after the required tool
+or normal CLI command was actually attempted and returned a concrete error. A
+claim that permission, capability, or tooling is unavailable without an attempt
+is rejected. Workbench recovers the same tracked turn once with the existing
+capability; a repeated unsupported denial fails inside the harness instead of
+being delivered to Jeffrey as a blocker.
+
 ### The code relationship map is a zoomable domain map (2026-09-11)
 
 *Decision from Jeffrey.* Node area reflects the amount of changed code in the
