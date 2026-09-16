@@ -92,11 +92,14 @@ describe('diff review change navigation', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Code relationship diagram' });
     expect(dialog).toHaveClass('change-map-fullscreen');
-    expect(within(dialog).getByRole('group', { name: 'Change map diagram' })).toBeInTheDocument();
+    const canvas = within(dialog).getByRole('group', { name: 'Change map diagram' });
+    expect(canvas).toBeInTheDocument();
+    expect(dialog.querySelector('.change-map-top-hud')).toBeInTheDocument();
+    expect(dialog.querySelector('.change-map-bottom-hud')).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Exit full screen' })).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole('button', { name: /Decision 2:/ }));
-    expect(dialog.querySelector('.change-map-code')).not.toBeNull();
+    expect(canvas.querySelector('.change-map-code')).not.toBeNull();
 
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Code relationship diagram' })).toBeNull();

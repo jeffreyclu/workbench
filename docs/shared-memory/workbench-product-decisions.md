@@ -295,6 +295,9 @@ after pending work.
 viewport-filling review workspace. Full screen preserves the same focused/all
 scope, zoom, pan, edge explanations, and inline code inspection; it exits by
 its visible control, Escape, or the backdrop and returns focus to its opener.
+"Full screen" means the graph canvas touches all four viewport edges. Titles,
+scope controls, instructions, explanations, legends, progress, zoom, and the
+optional code reader float over the canvas; none may reserve canvas space.
 
 Review verdicts are optimistic: the queue, counts, and selected decision update
 in the click frame while the database write completes behind them. Saving a

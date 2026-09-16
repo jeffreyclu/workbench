@@ -637,6 +637,11 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-edge:hover .change-map-edge-label, .change-map-edge.active .change-map-edge-label, .change-map-edge.touches-selection .change-map-edge-label { opacity: 1; }
 .change-map-edge.dimmed .change-map-edge-label { opacity: 0; }
 .change-map-explanation { margin: 0; padding: 0 14px 8px; color: #a9a89f; font: 10px 'DM Mono'; }
+.change-map-progress-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 8px; list-style: none; }
+.change-map-progress-legend li { display: inline-flex; align-items: center; gap: 7px; color: #a9a89f; font: 10px 'DM Mono'; }
+.change-map-progress-legend li span { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
+.change-map-progress-legend li.came-from { color: #d6bd76; }.change-map-progress-legend li.reviewed { color: #c7c7be; }
+.change-map-progress-legend li.reviewed span { border-color: #8bbd75; background: #8bbd75; }
 .change-map-omitted { margin: 0; padding: 0 14px 10px; font: 9px 'DM Mono'; }
 .change-map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 12px; list-style: none; }
 .change-map-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
@@ -656,15 +661,34 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-category-legend li.category-docs { --category-tone: #9aa7b8; }
 .change-map-category-legend li.category-tooling { --category-tone: #86a0a8; }
 .change-map-category-legend li.category-other { --category-tone: #6b6a64; }
-.change-map-fullscreen-backdrop { z-index: 70; padding: 10px; }
-.change-map-fullscreen { display: grid; grid-template-rows: auto minmax(0, 1fr); width: 100%; height: 100%; max-height: none; padding: 0; overflow: hidden; border-radius: 10px; background: #11120f; }
-.change-map-fullscreen-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 14px; border-bottom: 1px solid #303129; background: #171914; }
-.change-map-fullscreen-header > div { min-width: 0; }.change-map-fullscreen-header span { display: inline-flex; align-items: center; gap: 6px; color: #9bab6b; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }.change-map-fullscreen-header h2 { margin: 3px 0 0; color: #e8e9e0; font-size: 17px; }.change-map-fullscreen-header small { display: block; margin-top: 2px; overflow: hidden; color: #77786f; font: 9px 'DM Mono'; text-overflow: ellipsis; white-space: nowrap; }
-.change-map-fullscreen-header > button { display: grid; flex: 0 0 36px; width: 36px; height: 36px; padding: 0; place-items: center; color: #aaa9a2; border: 1px solid #45483d; border-radius: 7px; background: #20211d; cursor: pointer; }.change-map-fullscreen-header > button:hover, .change-map-fullscreen-header > button:focus-visible { color: var(--acid); border-color: #65783f; outline: 0; }
-.change-map-fullscreen > .change-map-content { display: flex; flex-direction: column; min-height: 0; padding: 10px 0 0; overflow: hidden; }
-.change-map-fullscreen .change-map-canvas { flex: 1 1 auto; min-height: 280px; }
-.change-map-fullscreen .change-map-surface { height: 100%; min-height: 280px; }
-.change-map-fullscreen .change-map-explanation { flex: 0 0 auto; }
+/* This is a workspace, not a large dialog: the graph owns every viewport pixel
+   and every title, explanation, legend and control floats above that canvas. */
+.dialog-backdrop.change-map-fullscreen-backdrop { z-index: 70; place-items: stretch; padding: 0; overflow: hidden; background: #080907; }
+.dialog.change-map-fullscreen { position: relative; width: 100vw; max-width: none; height: 100dvh; max-height: none; padding: 0; overflow: hidden; border: 0; border-radius: 0; background: #10110e; box-shadow: none; }
+.change-map-fullscreen-header { position: absolute; z-index: 5; top: 12px; right: 12px; left: 12px; display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 60px; padding: 9px 10px 9px 14px; pointer-events: none; border: 1px solid #34372c; border-radius: 10px; background: linear-gradient(90deg, #171914ee, #171914c7 52%, #17191480); box-shadow: 0 8px 28px #0008; backdrop-filter: blur(10px); }
+.change-map-fullscreen-header > div { min-width: 0; }.change-map-fullscreen-header span { display: inline-flex; align-items: center; gap: 6px; color: #9bab6b; font: 700 9px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }.change-map-fullscreen-header h2 { margin: 3px 0 0; color: #e8e9e0; font-size: 17px; }.change-map-fullscreen-header small { display: block; margin-top: 2px; overflow: hidden; color: #8c8d84; font: 9px 'DM Mono'; text-overflow: ellipsis; white-space: nowrap; }
+.change-map-fullscreen-header > button { display: grid; flex: 0 0 40px; width: 40px; height: 40px; padding: 0; place-items: center; pointer-events: auto; color: #c0bfb8; border: 1px solid #4c5040; border-radius: 8px; background: #20221ce6; cursor: pointer; }.change-map-fullscreen-header > button:hover, .change-map-fullscreen-header > button:focus-visible { color: var(--acid); border-color: #65783f; outline: 0; }
+.change-map-fullscreen > .change-map-content { position: absolute; inset: 0; min-width: 0; min-height: 0; padding: 0; overflow: hidden; }
+.change-map-fullscreen .change-map-canvas { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; margin: 0; border: 0; border-radius: 0; background: #10110e; }
+.change-map-fullscreen .change-map-surface { width: 100%; height: 100%; min-height: 0; }
+.change-map-fullscreen .change-map-top-hud, .change-map-fullscreen .change-map-bottom-hud { position: absolute; z-index: 4; left: 12px; width: min(720px, calc(100vw - 24px)); pointer-events: none; }
+.change-map-fullscreen .change-map-top-hud { top: 112px; }
+.change-map-fullscreen .change-map-bottom-hud { bottom: 12px; }
+.change-map-fullscreen .change-map-scope, .change-map-fullscreen .change-map-key, .change-map-fullscreen .change-map-explanation, .change-map-fullscreen .change-map-progress-legend, .change-map-fullscreen .change-map-category-legend, .change-map-fullscreen .change-map-legend, .change-map-fullscreen .change-map-omitted { width: fit-content; max-width: 100%; padding: 7px 10px; border: 1px solid #32352b; background: #151612d9; box-shadow: 0 6px 22px #0007; backdrop-filter: blur(9px); }
+.change-map-fullscreen .change-map-scope { border-radius: 8px 8px 0 0; }.change-map-fullscreen .change-map-scope + .change-map-key { border-top: 0; border-radius: 0 0 8px 8px; }
+.change-map-fullscreen .change-map-key { line-height: 1.45; border-radius: 8px; }
+.change-map-fullscreen .change-map-scope button { pointer-events: auto; }
+.change-map-fullscreen .change-map-bottom-hud { display: flex; flex-direction: column; align-items: flex-start; }
+.change-map-fullscreen .change-map-bottom-hud > * + * { border-top: 0; }
+.change-map-fullscreen .change-map-bottom-hud > :first-child { border-radius: 8px 8px 0 0; }.change-map-fullscreen .change-map-bottom-hud > :last-child { border-radius: 0 0 8px 8px; }
+.change-map-fullscreen .change-map-explanation { color: #c2c1b9; line-height: 1.45; }
+.change-map-fullscreen .change-map-progress-legend, .change-map-fullscreen .change-map-category-legend, .change-map-fullscreen .change-map-legend { gap: 7px 14px; }
+/* Reading a node's code is another overlay in full screen. The graph remains
+   viewport-sized beneath it instead of surrendering forty percent of itself. */
+.change-map-fullscreen .change-map-canvas.with-code { display: block; }
+.change-map-fullscreen .change-map-canvas.with-code .change-map-surface { width: 100%; height: 100%; }
+.change-map-fullscreen .change-map-canvas.with-code > .change-map-code { position: absolute; z-index: 6; top: 112px; right: 12px; bottom: 12px; width: clamp(320px, 36vw, 560px); overflow: auto; border: 1px solid #3d4035; border-radius: 10px; box-shadow: 0 16px 50px #000c; }
+.change-map-fullscreen .change-map-canvas.with-code .change-map-zoom { right: auto; left: 12px; }
 .diff-review-queue-region { min-width: 0; }
 .workspace-diff .diff-review-decision-queue { background: #11110f; }
 .diff-review-decision-queue ol { display: flex; margin: 0; padding: 0; overflow-x: auto; overscroll-behavior-x: contain; list-style: none; }

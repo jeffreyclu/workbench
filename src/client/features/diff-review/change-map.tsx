@@ -73,21 +73,23 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, deci
     : `${layout.edges.length} ${layout.edges.length === 1 ? 'relationship' : 'relationships'} across ${relatedCount} of ${layout.nodes.length} changes`;
 
   const diagramContents = (fullScreenView: boolean) => <div className="change-map-content">
-    {selectedId && <div className="change-map-scope">
-      <span>{showingAll
-        ? `All ${map.nodes.length} changes`
-        : `Focused on change ${map.nodes.find((node) => node.id === selectedId)?.ordinal ?? ''} · ${focused.visibleConnections} direct ${focused.visibleConnections === 1 ? 'relationship' : 'relationships'}`}</span>
-      {(focused.hiddenConnections > 0 || showingAll || focused.map.nodes.length < map.nodes.length) && <button type="button" onClick={() => setFullMapForSelection(showingAll ? null : selectedId)}>
-        {showingAll ? 'Focus on current change' : `Show all ${map.nodes.length} changes`}
-      </button>}
-    </div>}
-    {/* The three readings, said out loud. A diagram whose shape has to be
-        guessed at is a puzzle, and a reviewer already has one of those open. */}
-    <p className="change-map-key">
-      Each disc is a change, sized by how much code it moves. The rings around it are its folder and its package. Click a disc to read its code beside the diagram.
-      {layout.edges.length > 0 && ` ${reaching} of ${layout.edges.length} ${layout.edges.length === 1 ? 'relationship reaches' : 'relationships reach'} outside their own folder.`}
-      {' '}Scroll to zoom, drag to pan.
-    </p>
+    <div className="change-map-top-hud">
+      {selectedId && <div className="change-map-scope">
+        <span>{showingAll
+          ? `All ${map.nodes.length} changes`
+          : `Focused on change ${map.nodes.find((node) => node.id === selectedId)?.ordinal ?? ''} · ${focused.visibleConnections} direct ${focused.visibleConnections === 1 ? 'relationship' : 'relationships'}`}</span>
+        {(focused.hiddenConnections > 0 || showingAll || focused.map.nodes.length < map.nodes.length) && <button type="button" onClick={() => setFullMapForSelection(showingAll ? null : selectedId)}>
+          {showingAll ? 'Focus on current change' : `Show all ${map.nodes.length} changes`}
+        </button>}
+      </div>}
+      {/* The three readings, said out loud. A diagram whose shape has to be
+          guessed at is a puzzle, and a reviewer already has one of those open. */}
+      <p className="change-map-key">
+        Each disc is a change, sized by how much code it moves. The rings around it are its folder and its package. Click a disc to read its code beside the diagram.
+        {layout.edges.length > 0 && ` ${reaching} of ${layout.edges.length} ${layout.edges.length === 1 ? 'relationship reaches' : 'relationships reach'} outside their own folder.`}
+        {' '}Scroll to zoom, drag to pan.
+      </p>
+    </div>
     <ChangeMapCanvas
       layout={layout}
       selectedId={selectedId}
@@ -106,25 +108,27 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, deci
       onSelect={decisions ? (decisionId) => setInspectedId((current) => (current === decisionId ? null : decisionId)) : onSelect}
       onSelectEdge={setSelectedEdgeId}
     />
-    <p className="change-map-explanation" role="status">
-      {selectedEdge
-        ? plainRelationText(selectedEdge.explanation)
-        : layout.edges.length === 0
-          ? 'Nothing in this diff references anything else in it. Each change stands alone.'
-          : 'Select a line to read why two changes are related, or a disc to read its code beside the diagram.'}
-    </p>
-    <ChangeMapProgressLegend nodes={map.nodes} cameFromId={cameFromId} />
-    {/* Colour is a claim about what kind of code a change is, so the claim is
-        written down next to it rather than left to be inferred. */}
-    {categoriesPresent.length > 0 && <ul className="change-map-category-legend" aria-label="Kinds of code">
-      {categoriesPresent.map((category) => <li key={category} className={`category-${category}`} title={CODE_CATEGORY_DESCRIPTIONS[category]}>
-        <span aria-hidden="true" />{CODE_CATEGORY_LABELS[category]}
-      </li>)}
-    </ul>}
-    {relationsPresent.length > 0 && <ul className="change-map-legend" aria-label="Relationship types">
-      {relationsPresent.map((relation: ChangeRelation) => <li key={relation} className={`relation-${relation}`}><span aria-hidden="true" />{CHANGE_RELATION_LABELS[relation]}</li>)}
-    </ul>}
-    {map.omittedEdges > 0 && <p className="muted change-map-omitted">{map.omittedEdges} weaker relationships are not drawn; this diff exceeds the map limit.</p>}
+    <div className="change-map-bottom-hud">
+      <p className="change-map-explanation" role="status">
+        {selectedEdge
+          ? plainRelationText(selectedEdge.explanation)
+          : layout.edges.length === 0
+            ? 'Nothing in this diff references anything else in it. Each change stands alone.'
+            : 'Select a line to read why two changes are related, or a disc to read its code beside the diagram.'}
+      </p>
+      <ChangeMapProgressLegend nodes={map.nodes} cameFromId={cameFromId} />
+      {/* Colour is a claim about what kind of code a change is, so the claim is
+          written down next to it rather than left to be inferred. */}
+      {categoriesPresent.length > 0 && <ul className="change-map-category-legend" aria-label="Kinds of code">
+        {categoriesPresent.map((category) => <li key={category} className={`category-${category}`} title={CODE_CATEGORY_DESCRIPTIONS[category]}>
+          <span aria-hidden="true" />{CODE_CATEGORY_LABELS[category]}
+        </li>)}
+      </ul>}
+      {relationsPresent.length > 0 && <ul className="change-map-legend" aria-label="Relationship types">
+        {relationsPresent.map((relation: ChangeRelation) => <li key={relation} className={`relation-${relation}`}><span aria-hidden="true" />{CHANGE_RELATION_LABELS[relation]}</li>)}
+      </ul>}
+      {map.omittedEdges > 0 && <p className="muted change-map-omitted">{map.omittedEdges} weaker relationships are not drawn; this diff exceeds the map limit.</p>}
+    </div>
   </div>;
 
   return <>
