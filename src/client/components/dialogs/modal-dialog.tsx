@@ -9,6 +9,7 @@ function focusableElements(dialog: HTMLElement) {
 type ModalDialogProps = {
   children: ReactNode;
   className?: string;
+  backdropClassName?: string;
   label?: string;
   labelledBy?: string;
   describedBy?: string;
@@ -16,7 +17,7 @@ type ModalDialogProps = {
   closeDisabled?: boolean;
 };
 
-export function ModalDialog({ children, className = '', label, labelledBy, describedBy, onClose, closeDisabled = false }: ModalDialogProps) {
+export function ModalDialog({ children, className = '', backdropClassName = '', label, labelledBy, describedBy, onClose, closeDisabled = false }: ModalDialogProps) {
   const dialogRef = useRef<HTMLElement>(null);
   const previouslyFocusedElement = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
 
@@ -58,7 +59,7 @@ export function ModalDialog({ children, className = '', label, labelledBy, descr
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !closeDisabled) onClose(); }}>
+    <div className={`dialog-backdrop ${backdropClassName}`.trim()} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !closeDisabled) onClose(); }}>
       <section ref={dialogRef} className={`dialog ${className}`.trim()} role="dialog" aria-modal="true" aria-label={label} aria-labelledby={labelledBy} aria-describedby={describedBy} tabIndex={-1} onKeyDown={handleKeyDown}>
         {children}
       </section>

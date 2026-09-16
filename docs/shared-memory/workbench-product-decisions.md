@@ -291,6 +291,11 @@ show declarations before the implementations or call sites that depend on them,
 then use source order as the deterministic tie-breaker. Settled decisions remain
 after pending work.
 
+*Expansion from Jeffrey, 2026-09-16.* The full change diagram can expand into a
+viewport-filling review workspace. Full screen preserves the same focused/all
+scope, zoom, pan, edge explanations, and inline code inspection; it exits by
+its visible control, Escape, or the backdrop and returns focus to its opener.
+
 ### Code review is an automation-first attention stack
 
 *Decision from Jeffrey, 2026-08-29.* Treat each logical code block as a discrete

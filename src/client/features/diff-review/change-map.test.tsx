@@ -83,6 +83,26 @@ describe('diff review change navigation', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('group', { name: 'Change map diagram' })).toBeInTheDocument();
   });
+  it('opens the code relationship diagram full screen and restores focus after Escape', () => {
+    render(<DiffReviewChangeMap map={map} decisions={decisions} selectedId="type" onSelect={() => {}} />);
+
+    const openFullScreen = screen.getByRole('button', { name: 'Open code relationship diagram full screen' });
+    openFullScreen.focus();
+    fireEvent.click(openFullScreen);
+
+    const dialog = screen.getByRole('dialog', { name: 'Code relationship diagram' });
+    expect(dialog).toHaveClass('change-map-fullscreen');
+    expect(within(dialog).getByRole('group', { name: 'Change map diagram' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Exit full screen' })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Decision 2:/ }));
+    expect(dialog.querySelector('.change-map-code')).not.toBeNull();
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Code relationship diagram' })).toBeNull();
+    expect(openFullScreen).toHaveFocus();
+    expect(screen.getByRole('button', { name: /Full change diagram/ })).toHaveAttribute('aria-expanded', 'true');
+  });
   it('opens a large overview on the selected neighborhood with an explicit full-map control', () => {
     const extraNodes = Array.from({ length: 8 }, (_, index) => node(`extra-${index}`, index + 4, `extra-${index}`, 1));
     const largeMap: ChangeMap = {
