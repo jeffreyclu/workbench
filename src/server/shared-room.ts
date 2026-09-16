@@ -1935,15 +1935,6 @@ export async function superviseConversationAfterReply(repository: WorkItemReposi
   return synthesizeSharedTurn(repository, conversationId, replyId);
 }
 
-/** Recover terminal dual turns whose completion hook was interrupted. */
-export async function supervisePendingConversationSyntheses(repository: WorkItemRepository): Promise<number> {
-  let synthesized = 0;
-  for (const candidate of repository.listPendingSynthesisReplies()) {
-    if (await superviseConversationAfterReply(repository, candidate.conversationId, candidate.replyId)) synthesized += 1;
-  }
-  return synthesized;
-}
-
 /** Retry a failed system handoff without re-running either underlying agent. */
 export async function retrySharedSynthesis(repository: WorkItemRepository, failedMessageId: string): Promise<SharedMessage | null> {
   const failed = repository.getSharedMessageById(failedMessageId);

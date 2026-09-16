@@ -4,7 +4,7 @@ import { buildReviewDecisions, contentHashOfLines } from '../shared/review-decis
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
-import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, isSharedReplyActive, registerActiveReplySteering, runSharedBackgroundJob, synthesisSource } from './shared-room.js';
+import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, isSharedReplyActive, registerActiveReplySteering, runSharedBackgroundJob, superviseConversationAfterReply, synthesisSource } from './shared-room.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
@@ -1492,35 +1492,33 @@ describe('WorkItemRepository', () => {
     const conversation = repository.createConversation('Dual task synthesis');
     const request = repository.createSharedMessage('system', 'Execute: review the connector PR', 'completed', conversation.id, [], 'both');
     const codex = repository.createSharedMessage('codex', '', 'canceled', conversation.id, [], 'none', null, null, request.id, 'review');
-    const claude = repository.createSharedMessage('claude', '', 'canceled', conversation.id, [], 'none', null, null, request.id, 'review');
+    repository.createSharedMessage('claude', '', 'canceled', conversation.id, [], 'none', null, null, request.id, 'review');
 
     expect(synthesisSource(repository, conversation.id, codex.id)).toEqual(expect.objectContaining({ requestId: request.id }));
-    const pending = repository.listPendingSynthesisReplies();
-    expect(pending).toHaveLength(1);
-    expect(pending[0]?.conversationId).toBe(conversation.id);
-    expect([codex.id, claude.id]).toContain(pending[0]?.replyId);
 
     const claimed = repository.claimSharedSynthesis(conversation.id, request.id);
     expect(claimed).toEqual(expect.objectContaining({ author: 'system', dispatchGroupId: request.id, status: 'running' }));
     expect(repository.claimSharedSynthesis(conversation.id, request.id)).toBeNull();
-    expect(repository.listPendingSynthesisReplies()).toEqual([]);
   });
 
-  it('never schedules recovery synthesis for archived conversations or archived tasks', () => {
+  it('never supervises terminal replies in archived conversations or archived tasks', async () => {
     const task = repository.create({ title: 'Archived task', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
     const taskConversation = repository.createConversation('Archived task conversation', task.id);
     const taskRequest = repository.createSharedMessage('system', 'Execute archived task', 'completed', taskConversation.id, [], 'both');
-    repository.createSharedMessage('codex', 'Codex result', 'completed', taskConversation.id, [], 'none', null, null, taskRequest.id);
+    const taskCodex = repository.createSharedMessage('codex', 'Codex result', 'completed', taskConversation.id, [], 'none', null, null, taskRequest.id);
     repository.createSharedMessage('claude', 'Claude result', 'completed', taskConversation.id, [], 'none', null, null, taskRequest.id);
     repository.archive(task.id, false);
 
     const conversation = repository.createConversation('Archived conversation');
     const request = repository.createSharedMessage('jeffrey', 'Archived dual request', 'completed', conversation.id, [], 'both');
-    repository.createSharedMessage('codex', 'Codex result', 'completed', conversation.id, [], 'none', null, null, request.id);
+    const conversationCodex = repository.createSharedMessage('codex', 'Codex result', 'completed', conversation.id, [], 'none', null, null, request.id);
     repository.createSharedMessage('claude', 'Claude result', 'completed', conversation.id, [], 'none', null, null, request.id);
     repository.setConversationArchived(conversation.id, true);
 
-    expect(repository.listPendingSynthesisReplies()).toEqual([]);
+    await expect(superviseConversationAfterReply(repository, taskConversation.id, taskCodex.id)).resolves.toBe(false);
+    await expect(superviseConversationAfterReply(repository, conversation.id, conversationCodex.id)).resolves.toBe(false);
+    expect(repository.listAllSharedMessages(taskConversation.id).some((message) => message.body.startsWith('Synthesis:'))).toBe(false);
+    expect(repository.listAllSharedMessages(conversation.id).some((message) => message.body.startsWith('Synthesis:'))).toBe(false);
   });
 
   it('retrieves one shared memory snapshot for a dated repeat request before concurrent replies', async () => {

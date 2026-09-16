@@ -865,34 +865,6 @@ export class WorkItemRepository {
     });
   }
 
-  /** Durable recovery input for the conversation supervisor. Completion hooks
-   * handle the normal path; this finds any terminal dual pair missed by a crash. */
-  listPendingSynthesisReplies(limit = 10): Array<{ conversationId: string; replyId: string }> {
-    return (this.database.prepare(`SELECT request.conversation_id, MIN(reply.id) AS reply_id
-      FROM shared_messages request
-      JOIN shared_conversations conversation ON conversation.id = request.conversation_id
-      LEFT JOIN work_items item ON item.id = conversation.work_item_id
-      JOIN shared_messages reply ON reply.dispatch_group_id = request.id
-      LEFT JOIN agent_runs run ON run.message_id = reply.id
-      WHERE request.dispatch_target = 'both'
-        AND request.author IN ('jeffrey', 'system')
-        AND conversation.archived_at IS NULL
-        AND (conversation.work_item_id IS NULL OR item.archived_at IS NULL)
-        AND reply.author IN ('codex', 'claude')
-        AND NOT EXISTS (
-          SELECT 1 FROM shared_messages synthesis
-          WHERE synthesis.conversation_id = request.conversation_id
-            AND synthesis.author = 'system'
-            AND synthesis.dispatch_group_id = request.id
-            AND synthesis.body LIKE 'Synthesis:%'
-        )
-      GROUP BY request.id, request.conversation_id
-      HAVING SUM(CASE WHEN COALESCE(run.requested_agent, reply.author) = 'codex' AND reply.status IN ('completed', 'failed', 'canceled') THEN 1 ELSE 0 END) > 0
-         AND SUM(CASE WHEN COALESCE(run.requested_agent, reply.author) = 'claude' AND reply.status IN ('completed', 'failed', 'canceled') THEN 1 ELSE 0 END) > 0
-      ORDER BY MIN(reply.created_at) ASC
-      LIMIT ?`).all(limit) as Array<{ conversation_id: string; reply_id: string }>).map((row) => ({ conversationId: row.conversation_id, replyId: row.reply_id }));
-  }
-
   /** Mirrors linked conversation files into the task's durable agent context. */
   private syncConversationAttachmentsToWorkItem(conversation: SharedConversation): void {
     if (!conversation.workItemId) return;
