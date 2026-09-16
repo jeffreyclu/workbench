@@ -604,15 +604,15 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-node-risk-dot.band-low { fill: #8bbd75; }
 .change-map-node-risk-dot.band-elevated { fill: #d6bd76; }
 .change-map-node-risk-dot.band-high { fill: #e1a68f; }
-.change-map-edge, .change-map-arrow, .change-map-legend li { --relation-tone: #56554e; }
-.change-map-edge.relation-passes-parameter, .change-map-arrow.relation-passes-parameter, .change-map-legend li.relation-passes-parameter { --relation-tone: #e5b769; }
-.change-map-edge.relation-implements, .change-map-arrow.relation-implements, .change-map-legend li.relation-implements { --relation-tone: #c69bd8; }
-.change-map-edge.relation-references-type, .change-map-arrow.relation-references-type, .change-map-legend li.relation-references-type { --relation-tone: #9ab6d8; }
-.change-map-edge.relation-imports, .change-map-arrow.relation-imports, .change-map-legend li.relation-imports { --relation-tone: #6f9f8c; }
-.change-map-edge.relation-calls, .change-map-arrow.relation-calls, .change-map-legend li.relation-calls { --relation-tone: #8bbd75; }
-.change-map-edge.relation-uses, .change-map-arrow.relation-uses, .change-map-legend li.relation-uses { --relation-tone: #77766f; }
-.change-map-arrow path { fill: var(--relation-tone); }
+.change-map-edge, .change-map-legend li { --relation-tone: #56554e; }
+.change-map-edge.relation-passes-parameter, .change-map-legend li.relation-passes-parameter { --relation-tone: #e5b769; }
+.change-map-edge.relation-implements, .change-map-legend li.relation-implements { --relation-tone: #c69bd8; }
+.change-map-edge.relation-references-type, .change-map-legend li.relation-references-type { --relation-tone: #9ab6d8; }
+.change-map-edge.relation-imports, .change-map-legend li.relation-imports { --relation-tone: #6f9f8c; }
+.change-map-edge.relation-calls, .change-map-legend li.relation-calls { --relation-tone: #8bbd75; }
+.change-map-edge.relation-uses, .change-map-legend li.relation-uses { --relation-tone: #77766f; }
 .change-map-edge-line { fill: none; stroke: var(--relation-tone); stroke-width: 1.4; opacity: 0.7; }
+.change-map-edge-flow { fill: var(--relation-tone); pointer-events: none; filter: drop-shadow(0 0 3px var(--relation-tone)); }
 /* Reach, as weight. A line inside one folder is quiet; a line into another
    package is the heaviest thing on the diagram, because it is the one that
    makes the change stop being self-contained. */
@@ -629,13 +629,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-edge.active .change-map-edge-line, .change-map-edge.touches-selection .change-map-edge-line { opacity: 1; stroke-width: 2.2; }
 .change-map-edge-target { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
 .change-map-edge-target:focus-visible { outline: none; stroke: var(--acid); stroke-opacity: 0.3; }
-/* Every line carries its name; whether the name is drawn is a question of
-   crowding. A handful of arrows read better named, and a busy diagram reads
-   better naming only the line the reviewer is pointing at or has selected. */
-.change-map-edge-label { fill: #b8b7ae; font: 10px 'DM Mono'; paint-order: stroke; stroke: #101010; stroke-width: 3.5px; pointer-events: none; opacity: 0; }
-.change-map-canvas.labelled .change-map-edge-label { opacity: 0.78; }
-.change-map-edge:hover .change-map-edge-label, .change-map-edge.active .change-map-edge-label, .change-map-edge.touches-selection .change-map-edge-label { opacity: 1; }
-.change-map-edge.dimmed .change-map-edge-label { opacity: 0; }
+.change-map-edge.dimmed .change-map-edge-flow { opacity: 0.25; }
 .change-map-explanation { margin: 0; padding: 0 14px 8px; color: #a9a89f; font: 10px 'DM Mono'; }
 .change-map-progress-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 8px; list-style: none; }
 .change-map-progress-legend li { display: inline-flex; align-items: center; gap: 7px; color: #a9a89f; font: 10px 'DM Mono'; }

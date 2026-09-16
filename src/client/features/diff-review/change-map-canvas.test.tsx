@@ -132,6 +132,23 @@ describe('change map canvas', () => {
     expect(new Set(angles).size).toBe(3);
   });
 
+  it('flows each dependency into its consumer without arrows or line labels', () => {
+    const { container } = draw();
+    const lines = [...container.querySelectorAll('.change-map-edge-line')];
+    const flows = [...container.querySelectorAll('.change-map-edge-flow animateMotion')];
+
+    expect(flows).toHaveLength(lines.length);
+    expect(container.querySelector('marker')).toBeNull();
+    expect(container.querySelector('.change-map-edge-label')).toBeNull();
+    flows.forEach((flow, index) => {
+      // `edge()` stores hub as the definition and each other node as the
+      // consumer. Following the exact path forward therefore makes the called
+      // code flow into the caller, never the reverse.
+      expect(flow).toHaveAttribute('path', lines[index].getAttribute('d'));
+      expect(flow).toHaveAttribute('keyPoints', '0;1');
+    });
+  });
+
   it('weights a line by how far out of its folder it goes', () => {
     const { container } = draw();
 

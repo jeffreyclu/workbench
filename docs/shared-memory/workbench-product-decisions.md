@@ -299,6 +299,10 @@ its visible control, Escape, or the backdrop and returns focus to its opener.
 scope controls, instructions, explanations, legends, progress, zoom, and the
 optional code reader float over the canvas; none may reserve canvas space.
 
+Relationships use visual flow, not arrowheads or per-line text. A light pulse
+moves from called/imported/used code into the caller or consumer: dependencies
+flow into the code that consumes them. The direction must never be inverted.
+
 Review verdicts are optimistic: the queue, counts, and selected decision update
 in the click frame while the database write completes behind them. Saving a
 verdict must not rescan repositories or refetch rows the write already returned;

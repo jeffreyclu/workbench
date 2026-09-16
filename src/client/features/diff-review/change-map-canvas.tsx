@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { Crosshair, Minus, Plus } from 'lucide-react';
-import { CHANGE_RELATIONS, changeEdgeLabel, type ChangeMapNode, changeEdgeContinuity } from '../../../shared/change-map.js';
+import { changeEdgeLabel, type ChangeMapNode, changeEdgeContinuity } from '../../../shared/change-map.js';
 import { CODE_CATEGORY_LABELS, type CodeCategory } from './change-map-taxonomy.js';
 import type { ChangeMapLayout } from './change-map-layout.js';
 import { plainRelationText } from './change-map-logic.js';
@@ -34,7 +34,6 @@ const ZOOM_STEP = 1.35;
 const MAX_WHEEL_STEP = 1.2;
 /** Below this the captions are noise, above it there is room for all of them. */
 const LABEL_ZOOM = 1.15;
-const ALWAYS_LABEL_EDGES = 8;
 const CAPTION_RADIUS = 19;
 
 interface Camera {
@@ -348,7 +347,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
   };
 
   return <div
-    className={`change-map-canvas${layout.edges.length <= ALWAYS_LABEL_EDGES ? ' labelled' : ''}${panning ? ' panning' : ''}${codePanel ? ' with-code' : ''}`}
+    className={`change-map-canvas${panning ? ' panning' : ''}${codePanel ? ' with-code' : ''}`}
     role="group"
     aria-label={label}
     tabIndex={0}
@@ -366,11 +365,6 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
       onPointerUp={endPan}
       onPointerCancel={endPan}
     >
-      <defs>
-        {CHANGE_RELATIONS.map((relation) => <marker key={relation} id={`change-map-arrow-${relation}`} className={`change-map-arrow relation-${relation}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M 0 1 L 8 4 L 0 7 z" />
-        </marker>)}
-      </defs>
       {/* The packages, then the folders inside them. They are drawn first and
           never take a click: they are the ground the graph sits on, and what
           makes a line leaving one of them visible as leaving it. */}
@@ -393,12 +387,16 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
             : `${Math.round(group.containment * 100)}% internal`}</tspan>
         </text>
       </g>)}
-      {orderedEdges.map((edge) => {
+      {orderedEdges.map((edge, edgeIndex) => {
         const active = edge.id === selectedEdgeId;
         const touchesSelection = edge.fromId === selectedId || edge.toId === selectedId;
         const dimmed = Boolean(selectedId) && !touchesSelection && !active;
+        const showFlow = edge.change === 'added' && (!dimmed || layout.edges.length <= 12);
         return <g key={edge.id} className={`change-map-edge relation-${edge.relation} scope-${edge.scope} ${changeEdgeContinuity(edge)}${active ? ' active' : ''}${touchesSelection ? ' touches-selection' : ''}${dimmed ? ' dimmed' : ''}`}>
-          <path className="change-map-edge-line" d={edge.path} markerEnd={`url(#change-map-arrow-${edge.relation})`} />
+          <path className="change-map-edge-line" d={edge.path} />
+          {showFlow && <circle className="change-map-edge-flow" r="3.5" aria-hidden="true">
+            <animateMotion path={edge.path} dur="1.8s" begin={`${-(edgeIndex % 8) * 0.21}s`} repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear" />
+          </circle>}
           <path
             className="change-map-edge-target"
             d={edge.path}
@@ -408,7 +406,6 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
             onClick={() => onSelectEdge(active ? null : edge.id)}
             onKeyDown={(event) => activate(event, () => onSelectEdge(active ? null : edge.id))}
           />
-          <text className="change-map-edge-label" x={edge.labelX} y={edge.labelY} textAnchor="middle">{changeEdgeLabel(edge)}</text>
         </g>;
       })}
       {orderedNodes.map((node) => {
