@@ -71,11 +71,11 @@ describe('replyBadge', () => {
 });
 
 describe('memoryBadgePresentation', () => {
-  it('shows active conversation memory instead of an empty dash when long-term search was unnecessary', () => {
+  it('keeps an older uncounted reply clickable without inventing a count', () => {
     expect(memoryBadgePresentation(null)).toEqual({
-      label: 'Active',
-      title: 'Active conversation memory was supplied; long-term memory search was not needed',
-      disabled: true,
+      label: '—',
+      title: 'Memory count was not recorded for this older reply — click to inspect available detail',
+      disabled: false,
     });
   });
 

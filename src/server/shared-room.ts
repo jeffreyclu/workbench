@@ -1447,14 +1447,19 @@ export async function replyInSharedRoom(
     const [externalAuthorization, turnGrounding, memoryEvidence] = await Promise.all([externalAuthorizationPromise, groundingPromise, memoryPromise]);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
+    const shortTermMemory = repository.getSharedContextWithItems(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });
+    const shortTermContext = shortTermMemory.text;
+    const retrievedMemoryItems = [
+      ...shortTermMemory.items,
+      ...memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
+    ];
     repository.updateSharedMessage(messageId, {
-      retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
-      retrievedMemoryDetail: memoryAttempted ? {
+      retrievedMemoryCount: retrievedMemoryItems.length,
+      retrievedMemoryDetail: {
         query: memoryQuery,
-        items: memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
-      } : null,
+        items: retrievedMemoryItems,
+      },
     });
-    const shortTermContext = repository.getSharedContext(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });
     const freshPrompt = buildSharedReplyPrompt(
       agent,
       shortTermContext,
@@ -1479,7 +1484,9 @@ export async function replyInSharedRoom(
       sharedContextChars: shortTermContext.length,
       connectionContextChars: connectionContext.length,
       conversationMessageCount: thread.length,
-      retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
+      retrievedMemoryCount: retrievedMemoryItems.length,
+      shortTermMemoryCount: shortTermMemory.items.length,
+      longTermMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryChars: memoryContext.length,
       authoritativeObjective: turnGrounding.objective,
       groundingSource: turnGrounding.source,

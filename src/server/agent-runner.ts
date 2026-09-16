@@ -1967,17 +1967,22 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // retains its original context. Resumed prompts still receive the newest
     // bounded on-disk short-term memory and any selectively retrieved history.
     const resumesSession = Boolean(resumeSessionId || palmyraContext?.length);
-    const shortTermContext = repository.getSharedContext(undefined, { workItemId: item.id, conversationId: run.conversationId ?? undefined, query: run.instructions });
+    const shortTermMemory = repository.getSharedContextWithItems(undefined, { workItemId: item.id, conversationId: run.conversationId ?? undefined, query: run.instructions });
+    const shortTermContext = shortTermMemory.text;
     const sharedContext = [shortTermContext, externalContext].filter(Boolean).join('\n\n');
     const [externalAuthorization, memoryEvidence] = await Promise.all([externalAuthorizationPromise, memoryPromise]);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
+    const retrievedMemoryItems = [
+      ...shortTermMemory.items,
+      ...memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
+    ];
     if (run.messageId) repository.updateSharedMessage(run.messageId, {
-      retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
-      retrievedMemoryDetail: memoryAttempted ? {
+      retrievedMemoryCount: retrievedMemoryItems.length,
+      retrievedMemoryDetail: {
         query: memoryQuery,
-        items: memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
-      } : null,
+        items: retrievedMemoryItems,
+      },
     });
     if (resumesSession) repository.addActivity(item.id, 'system', 'progress', `Resuming ${run.agent === 'palmyra' ? 'Palmyra context' : 'Claude session'} with bounded continuation context.`);
     const prompt = resumesSession
@@ -1989,7 +1994,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       strategyChars: item.strategy?.length ?? 0,
       instructionChars: run.instructions.length,
       sharedContextChars: sharedContext.length,
-      retrievedMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
+      retrievedMemoryCount: retrievedMemoryItems.length,
+      shortTermMemoryCount: shortTermMemory.items.length,
+      longTermMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryChars: memoryContext.length,
     });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });

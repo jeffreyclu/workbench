@@ -24,6 +24,19 @@ interface ShortTermConversation {
   entries: ShortTermEntry[];
 }
 
+export interface ShortTermMemoryItem {
+  source: 'active_conversation';
+  title: string;
+  body: string;
+  createdAt: string;
+  retrievalPath: string[];
+}
+
+export interface ShortTermMemoryContext {
+  text: string;
+  items: ShortTermMemoryItem[];
+}
+
 const WORD = /[a-z0-9][a-z0-9_-]{2,}/g;
 
 function words(value: string): Set<string> {
@@ -148,8 +161,8 @@ export class ShortTermMemoryStore {
     return memories;
   }
 
-  context(scope: { conversationId?: string; workItemId?: string; query?: string } = {}, budget = 2_400): string {
-    if (!this.root) return '';
+  contextWithItems(scope: { conversationId?: string; workItemId?: string; query?: string } = {}, budget = 2_400): ShortTermMemoryContext {
+    if (!this.root) return { text: '', items: [] };
     const queryWords = words(scope.query ?? '');
     const scored = this.memories().map((memory) => {
       const haystack = words(`${memory.title} ${memory.projectName ?? ''} ${memory.sharedBrief} ${memory.entries.map((entry) => `${entry.facts} ${entry.decisions} ${entry.blockers} ${entry.evidence}`).join(' ')}`);
@@ -159,6 +172,7 @@ export class ShortTermMemoryStore {
     }).sort((a, b) => b.score - a.score || b.memory.updatedAt.localeCompare(a.memory.updatedAt));
     const prefix = `Short-term memory from active conversations (on disk at ${this.root}; use this before long-term recall):\n`;
     let output = prefix;
+    const items: ShortTermMemoryItem[] = [];
     for (const [index, { memory }] of scored.slice(0, 5).entries()) {
       const complete = renderConversation(memory);
       const perConversationBudget = memory.id === scope.conversationId ? 1_100 : index === 0 ? 900 : 600;
@@ -166,12 +180,21 @@ export class ShortTermMemoryStore {
       const rendered = `${output === prefix ? '' : '\n\n'}${section}`;
       if (output.length + rendered.length > budget) {
         const remaining = budget - output.length;
-        if (remaining > 200) output += `${rendered.slice(0, remaining - 1)}…`;
+        if (remaining > 200) {
+          const partial = `${rendered.slice(0, remaining - 1)}…`;
+          output += partial;
+          items.push({ source: 'active_conversation', title: memory.title, body: partial.trim(), createdAt: memory.updatedAt, retrievalPath: [`active conversation ${memory.id}`] });
+        }
         break;
       }
       output += rendered;
+      items.push({ source: 'active_conversation', title: memory.title, body: section, createdAt: memory.updatedAt, retrievalPath: [`active conversation ${memory.id}`] });
     }
-    return output === prefix ? `${prefix}No active conversation memory yet.` : output;
+    return { text: output === prefix ? `${prefix}No active conversation memory yet.` : output, items };
+  }
+
+  context(scope: { conversationId?: string; workItemId?: string; query?: string } = {}, budget = 2_400): string {
+    return this.contextWithItems(scope, budget).text;
   }
 
   private writeIndex(): void {

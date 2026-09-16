@@ -1507,10 +1507,10 @@ describe('WorkItemRepository', () => {
       await vi.waitFor(() => expect(replies.some((reply) => isSharedReplyActive(reply.id))).toBe(false), { timeout: 5_000 });
       expect(retrieval).toHaveBeenCalledOnce();
       expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expect.arrayContaining(['claude', 'codex']));
-      expect(replies.map((reply) => repository.getSharedMessageById(reply.id)?.retrievedMemoryCount)).toEqual([0, 0]);
+      expect(replies.map((reply) => repository.getSharedMessageById(reply.id)?.retrievedMemoryCount)).toEqual([1, 1]);
       expect(replies.map((reply) => repository.getRetrievedMemoryDetail(reply.id))).toEqual([
-        expect.objectContaining({ query: expect.stringContaining('Sept 6 - Sept 13'), items: [] }),
-        expect.objectContaining({ query: expect.stringContaining('Sept 6 - Sept 13'), items: [] }),
+        expect.objectContaining({ query: expect.stringContaining('Sept 6 - Sept 13'), items: [expect.objectContaining({ source: 'active_conversation', title: 'Concurrent retrieval' })] }),
+        expect.objectContaining({ query: expect.stringContaining('Sept 6 - Sept 13'), items: [expect.objectContaining({ source: 'active_conversation', title: 'Concurrent retrieval' })] }),
       ]);
     } finally {
       process.env.PATH = previousPath;

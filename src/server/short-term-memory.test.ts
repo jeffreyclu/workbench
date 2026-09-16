@@ -25,9 +25,12 @@ describe('short-term conversation memory', () => {
     repository.recordSharedBriefEntry(related.id, decision.id, 'jeffrey', 'decision', decision.body);
 
     const context = repository.getSharedContext(undefined, { conversationId: current.id, query: 'connector promotion' });
+    const structured = repository.getSharedContextWithItems(undefined, { conversationId: current.id, query: 'connector promotion' });
     expect(context).toContain(`on disk at ${root}`);
     expect(context).toContain('Current work');
     expect(context).toContain('Remember that I led the connector migration.');
+    expect(structured.items.map((item) => item.title)).toEqual(expect.arrayContaining(['Current work', 'Staff promotion evidence']));
+    expect(structured.items.every((item) => item.source === 'active_conversation')).toBe(true);
     expect(existsSync(join(root, `${related.id}.json`))).toBe(true);
     expect(readFileSync(join(root, 'index.md'), 'utf8')).toContain('Staff promotion evidence');
 

@@ -1258,13 +1258,17 @@ export class WorkItemRepository {
    * Scope is explicit so unrelated rooms cannot leak context into an agent run.
    */
   getSharedContext(_excludeConversationId?: string, scope?: { workItemId?: string; conversationId?: string; query?: string }): string {
-    const shortTerm = this.shortTermMemory.context(scope);
-    if (shortTerm) return shortTerm;
+    return this.getSharedContextWithItems(_excludeConversationId, scope).text;
+  }
+
+  getSharedContextWithItems(_excludeConversationId?: string, scope?: { workItemId?: string; conversationId?: string; query?: string }): { text: string; items: Array<{ source: string; title: string; body: string; createdAt: string; retrievalPath?: string[] }> } {
+    const shortTerm = this.shortTermMemory.contextWithItems(scope);
+    if (shortTerm.text) return shortTerm;
     // Compatibility-only diagnostic path. Agent runners always provide a
     // scope; never use this global scrape to build an agent prompt.
     if (!scope?.conversationId && !scope?.workItemId) {
       const recent = this.listSharedMessages(120).messages.filter((message) => message.status === 'completed' && message.body).slice(-2);
-      return ['Recent shared room:', recent.map((message) => `${message.author}: ${message.body.slice(0, 600)}`).join('\n') || 'No recent conversation.'].join('\n');
+      return { text: ['Recent shared room:', recent.map((message) => `${message.author}: ${message.body.slice(0, 600)}`).join('\n') || 'No recent conversation.'].join('\n'), items: [] };
     }
     const rows = this.database.prepare(`SELECT author, kind, facts, decisions, blockers, evidence, created_at FROM shared_brief_entries
       WHERE (? IS NOT NULL AND conversation_id = ?) OR (? IS NOT NULL AND work_item_id = ?)
@@ -1278,7 +1282,16 @@ export class WorkItemRepository {
       row.evidence ? `  Evidence: ${row.evidence.slice(0, 700)}` : '',
     ].filter(Boolean).join('\n'));
     const editableBrief = scope.conversationId ? this.getConversation(scope.conversationId)?.sharedBrief?.trim() : '';
-    return ['Structured shared brief for every agent:', editableBrief ? `Jeffrey's maintained brief:\n${editableBrief}` : '', entries.length ? entries.join('\n\n') : 'No completed handoffs or decisions yet.'].filter(Boolean).join('\n\n');
+    const text = ['Structured shared brief for every agent:', editableBrief ? `Jeffrey's maintained brief:\n${editableBrief}` : '', entries.length ? entries.join('\n\n') : 'No completed handoffs or decisions yet.'].filter(Boolean).join('\n\n');
+    return {
+      text,
+      items: entries.length || editableBrief ? [{
+        source: 'active_conversation',
+        title: this.getConversation(scope.conversationId ?? '')?.title ?? 'Active conversation memory',
+        body: text,
+        createdAt: rows.at(-1)?.created_at ?? new Date().toISOString(),
+      }] : [],
+    };
   }
 
   list(): WorkItem[] {

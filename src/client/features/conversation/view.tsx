@@ -173,16 +173,14 @@ export function memoryBadgePresentation(retrievedMemoryCount: number | null): { 
   if (typeof retrievedMemoryCount === 'number') {
     return {
       label: String(retrievedMemoryCount),
-      title: retrievedMemoryCount > 0
-        ? `Retrieved ${retrievedMemoryCount} long-term memory match${retrievedMemoryCount === 1 ? '' : 'es'} using search and relationships — click to view`
-        : 'Long-term memory search ran but found no matches — click to view the query',
+      title: `Supplied ${retrievedMemoryCount} memory item${retrievedMemoryCount === 1 ? '' : 's'} from active context and long-term search — click to view`,
       disabled: false,
     };
   }
   return {
-    label: 'Active',
-    title: 'Active conversation memory was supplied; long-term memory search was not needed',
-    disabled: true,
+    label: '—',
+    title: 'Memory count was not recorded for this older reply — click to inspect available detail',
+    disabled: false,
   };
 }
 
