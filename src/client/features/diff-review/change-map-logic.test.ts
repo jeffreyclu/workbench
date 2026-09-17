@@ -6,7 +6,7 @@ function node(id: string, ordinal: number): ChangeMapNode {
   return {
     id, ordinal, label: id, degree: 1, subject: id, filePath: `src/${id}.ts`, fileCount: 1,
     filePaths: [`src/${id}.ts`], symbols: [], signatureChanges: [],
-    behavior: `Changes ${id}.`, additions: 1, deletions: 0, state: null, riskSignals: [],
+    behavior: `Changes ${id}.`, additions: 1, deletions: 0, changeKind: 'modified', state: null, riskSignals: [],
   };
 }
 

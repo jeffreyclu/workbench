@@ -35,6 +35,9 @@ const MAX_WHEEL_STEP = 1.2;
 /** Below this the captions are noise, above it there is room for all of them. */
 const LABEL_ZOOM = 1.15;
 const CAPTION_RADIUS = 19;
+/** Several small pulses make direction readable immediately. One large pulse
+ * became a fake-looking node when the reviewer zoomed in. */
+const EDGE_FLOW_PULSES = 3;
 
 interface Camera {
   x: number;
@@ -106,6 +109,13 @@ function markSymbol(symbol: ChangeMapNode['symbols'][number]): string {
  * it changes. The disc says size and reach by shape; none of that survives
  * into a screen reader, so it is said in words here instead. */
 function nodeContext(node: ChangeMapNode & { category: CodeCategory; externalDegree: number; crossPackageDegree: number }): string {
+  const changeKind = node.changeKind === 'added'
+    ? ' Net-new code.'
+    : node.changeKind === 'removed'
+      ? ' Deleted code.'
+      : node.changeKind === 'modified'
+        ? ' Modified code.'
+        : '';
   const files = node.filePaths.length > 0 ? ` Files: ${node.filePaths.join(', ')}.` : '';
   const symbols = node.symbols.length > 0 ? ` Declares: ${node.symbols.map(markSymbol).join(', ')}.` : '';
   const signatures = node.signatureChanges.map((change) => {
@@ -113,7 +123,7 @@ function nodeContext(node: ChangeMapNode & { category: CodeCategory; externalDeg
     const removed = change.removed.length > 0 ? `removes ${change.removed.join(', ')}` : '';
     return `${change.symbol} ${[added, removed].filter(Boolean).join(' and ')}`;
   });
-  return ` ${CODE_CATEGORY_LABELS[node.category]} code, ${node.additions + node.deletions} lines changed.${files}${symbols}${signatures.length > 0 ? ` Signature changes: ${signatures.join('; ')}.` : ''}`;
+  return ` ${CODE_CATEGORY_LABELS[node.category]} code, ${node.additions + node.deletions} lines changed.${changeKind}${files}${symbols}${signatures.length > 0 ? ` Signature changes: ${signatures.join('; ')}.` : ''}`;
 }
 
 /** How far this change reaches, which is the question the rings exist to
@@ -322,22 +332,26 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
     move();
   };
 
+  // Opening a node's code is the strongest local question on the canvas. Let
+  // that inspected node focus the relationships while its panel is open;
+  // otherwise the current review decision remains the focus.
+  const relationshipFocusId = inspectedId ?? selectedId;
   const connectedIds = new Set(layout.edges
-    .filter((edge) => edge.fromId === selectedId || edge.toId === selectedId)
+    .filter((edge) => edge.fromId === relationshipFocusId || edge.toId === relationshipFocusId)
     .flatMap((edge) => [edge.fromId, edge.toId]));
 
   // Lines that answer the current selection are painted last, so they sit on
   // top of the ones the reviewer is not asking about rather than under them.
   const orderedEdges = [...layout.edges].sort((left, right) =>
-    Number(left.fromId === selectedId || left.toId === selectedId) - Number(right.fromId === selectedId || right.toId === selectedId));
+    Number(left.fromId === relationshipFocusId || left.toId === relationshipFocusId) - Number(right.fromId === relationshipFocusId || right.toId === relationshipFocusId));
 
   // Big discs are drawn first so a small one is never lost underneath one that
   // happens to be near it.
   const orderedNodes = [...layout.nodes].sort((left, right) => right.radius - left.radius);
 
-  const selectedFolder = layout.nodes.find((node) => node.id === selectedId)?.folderId ?? null;
-  const selectedPackage = layout.nodes.find((node) => node.id === selectedId)?.packageId ?? null;
-  const selectedFile = layout.nodes.find((node) => node.id === selectedId)?.fileId ?? null;
+  const selectedFolder = layout.nodes.find((node) => node.id === relationshipFocusId)?.folderId ?? null;
+  const selectedPackage = layout.nodes.find((node) => node.id === relationshipFocusId)?.packageId ?? null;
+  const selectedFile = layout.nodes.find((node) => node.id === relationshipFocusId)?.fileId ?? null;
   const showEveryCaption = camera.zoom >= LABEL_ZOOM;
   const showsCode = inspectedId !== undefined;
 
@@ -370,14 +384,14 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
           never take a click: they are the ground the graph sits on, and what
           makes a line leaving one of them visible as leaving it. */}
       {layout.packages.map((group) => <g key={group.id} className={`change-map-package${selectedPackage === group.id ? ' selected' : ''}`} aria-hidden="true">
-        <circle className="change-map-package-ring" cx={group.x} cy={group.y} r={group.radius} />
+        <circle className="change-map-package-ring" cx={group.x} cy={group.y} r={group.radius} vectorEffect="non-scaling-stroke" />
         <text className="change-map-package-label" x={group.x} y={group.y - group.radius + 20} textAnchor="middle">
           {pathTail(group.label, 40)}
           <tspan className="change-map-group-count" dx="8">{group.nodeCount} {group.nodeCount === 1 ? 'change' : 'changes'} · {group.folderCount} {group.folderCount === 1 ? 'folder' : 'folders'}</tspan>
         </text>
       </g>)}
       {layout.folders.map((group) => <g key={group.id} className={`change-map-folder${selectedFolder === group.id ? ' selected' : ''}${group.externalEdges > 0 && group.containment < 0.5 ? ' reaching' : ''}`} aria-hidden="true">
-        <circle className="change-map-folder-ring" cx={group.x} cy={group.y} r={group.radius} />
+        <circle className="change-map-folder-ring" cx={group.x} cy={group.y} r={group.radius} vectorEffect="non-scaling-stroke" />
         <text className="change-map-folder-label" x={group.x} y={group.y - group.radius + 15} textAnchor="middle">
           {pathTail(group.label, 34)}
           {/* Said in the drawing as line length, and in words here, because
@@ -389,7 +403,7 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
         </text>
       </g>)}
       {layout.files.map((group) => <g key={group.id} className={`change-map-file${selectedFile === group.id ? ' selected' : ''}`} aria-hidden="true">
-        <circle className="change-map-file-ring" cx={group.x} cy={group.y} r={group.radius} />
+        <circle className="change-map-file-ring" cx={group.x} cy={group.y} r={group.radius} vectorEffect="non-scaling-stroke" />
         <text className="change-map-file-label" x={group.x} y={group.y - group.radius + 13} textAnchor="middle">
           {pathTail(group.label, 28)}
           <tspan className="change-map-group-count" dx="6">{group.nodeCount} {group.nodeCount === 1 ? 'change' : 'changes'}</tspan>
@@ -397,17 +411,26 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
       </g>)}
       {orderedEdges.map((edge, edgeIndex) => {
         const active = edge.id === selectedEdgeId;
-        const touchesSelection = edge.fromId === selectedId || edge.toId === selectedId;
-        const dimmed = Boolean(selectedId) && !touchesSelection && !active;
+        const touchesSelection = edge.fromId === relationshipFocusId || edge.toId === relationshipFocusId;
+        const dimmed = Boolean(relationshipFocusId) && !touchesSelection && !active;
         const showFlow = edge.change === 'added' && (!dimmed || layout.edges.length <= 12);
         return <g key={edge.id} className={`change-map-edge relation-${edge.relation} scope-${edge.scope} ${changeEdgeContinuity(edge)}${active ? ' active' : ''}${touchesSelection ? ' touches-selection' : ''}${dimmed ? ' dimmed' : ''}`}>
-          <path className="change-map-edge-line" d={edge.path} />
-          {showFlow && <circle className="change-map-edge-flow" r="3.5" aria-hidden="true">
-            <animateMotion path={edge.path} dur="1.8s" begin={`${-(edgeIndex % 8) * 0.21}s`} repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear" />
-          </circle>}
+          <path className="change-map-edge-line" d={edge.path} vectorEffect="non-scaling-stroke">
+            {edge.change === 'removed' && <animate attributeName="opacity" values="0.65;0.08;0.65" dur="2.4s" begin={`${-(edgeIndex % 6) * 0.19}s`} repeatCount="indefinite" />}
+          </path>
+          {showFlow && Array.from({ length: EDGE_FLOW_PULSES }, (_, pulseIndex) => <circle
+            key={pulseIndex}
+            className={`change-map-edge-flow${edge.relation === 'references-type' ? ' reference' : ''}`}
+            r={(edge.relation === 'references-type' ? 3.2 : 2.7) / camera.zoom}
+            vectorEffect="non-scaling-stroke"
+            aria-hidden="true"
+          >
+            <animateMotion path={edge.path} dur="1.8s" begin={`${-(edgeIndex % 6) * 0.13 - pulseIndex * 0.6}s`} repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear" />
+          </circle>)}
           <path
             className="change-map-edge-target"
             d={edge.path}
+            vectorEffect="non-scaling-stroke"
             role="button"
             tabIndex={0}
             aria-label={`${changeEdgeLabel(edge)}: ${plainRelationText(edge.explanation)}`}
@@ -441,9 +464,16 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
           onKeyDown={(event) => activate(event, () => onSelect(node.id))}
         >
           {/* The disc is the change, and its area is how much code the change
-              moves. The ring around it is the reviewer's own verdict. */}
-          <circle className="change-map-node-body" cx={node.x} cy={node.y} r={node.radius} />
-          <circle className="change-map-node-rail" cx={node.x} cy={node.y} r={node.radius} />
+              moves. The inner ring says whether the code is new, deleted or
+              modified; the outer ring is the reviewer's own verdict. */}
+          <circle className="change-map-node-body" cx={node.x} cy={node.y} r={node.radius} vectorEffect="non-scaling-stroke" />
+          {node.changeKind && (node.changeKind === 'modified'
+            ? <>
+                <circle className="change-map-node-change-ring change-added-half" cx={node.x} cy={node.y} r={Math.max(1, node.radius - 3.5)} pathLength="100" vectorEffect="non-scaling-stroke" />
+                <circle className="change-map-node-change-ring change-removed-half" cx={node.x} cy={node.y} r={Math.max(1, node.radius - 3.5)} pathLength="100" vectorEffect="non-scaling-stroke" />
+              </>
+            : <circle className={`change-map-node-change-ring change-${node.changeKind}`} cx={node.x} cy={node.y} r={Math.max(1, node.radius - 3.5)} vectorEffect="non-scaling-stroke" />)}
+          <circle className="change-map-node-rail" cx={node.x} cy={node.y} r={node.radius} vectorEffect="non-scaling-stroke" />
           {node.radius >= 14 && <text className="change-map-node-ordinal" x={node.x} y={node.y + 4} textAnchor="middle">{node.ordinal}</text>}
           {captioned && <text className="change-map-node-title" x={node.labelX} y={node.titleY} textAnchor={node.labelAnchor}>{truncate(node.label, 26)}</text>}
           {captioned && <text className="change-map-node-counts" x={node.labelX} y={node.countsY} textAnchor={node.labelAnchor}>

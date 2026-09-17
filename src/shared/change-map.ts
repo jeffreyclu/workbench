@@ -84,6 +84,11 @@ export interface ChangeMapSignatureChange {
   removed: string[];
 }
 
+/** What happened to the code represented by a decision. This is deliberately
+ * separate from code category and review state: those are already encoded by
+ * the disc fill and outer rail. */
+export type ChangeMapNodeChangeKind = 'added' | 'removed' | 'modified';
+
 export interface ChangeMapNode {
   /** The review decision id, so selection is shared with the queue and the diff pane. */
   id: string;
@@ -102,10 +107,20 @@ export interface ChangeMapNode {
   behavior: string;
   additions: number;
   deletions: number;
+  /** Present for nodes backed by a diff decision. Context-only nodes in maps
+   * that reuse this canvas leave it blank rather than inventing a Git status. */
+  changeKind?: ChangeMapNodeChangeKind;
   state: DiffHunkReviewState | null;
   riskSignals: ReviewRiskSignal[];
   /** Number of edges touching this node, in either direction. */
   degree: number;
+}
+
+function decisionChangeKind(decision: ReviewDecision): ChangeMapNodeChangeKind {
+  const statuses = new Set(decision.hunks.map((hunk) => hunk.fileStatus));
+  if (statuses.size === 1 && statuses.has('added')) return 'added';
+  if (statuses.size === 1 && statuses.has('removed')) return 'removed';
+  return 'modified';
 }
 
 export interface ChangeMapEdge {
@@ -463,6 +478,7 @@ export function buildChangeMap(allDecisions: ReviewDecision[]): ChangeMap {
       behavior: decision.behavior,
       additions: decision.additions,
       deletions: decision.deletions,
+      changeKind: decisionChangeKind(decision),
       state: decision.state,
       riskSignals: decision.riskSignals,
       degree: degrees.get(decision.id) ?? 0,

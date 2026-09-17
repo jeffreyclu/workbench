@@ -416,4 +416,22 @@ describe('module specifier resolution', () => {
     expect(node.symbols).toContainEqual({ name: 'loadWorkspace', kind: 'value', change: 'changed' });
     expect(node.signatureChanges).toContainEqual({ symbol: 'loadWorkspace', added: ['signal'], removed: [] });
   });
+
+  it('carries Git file status into each node as new, deleted, or modified code', () => {
+    const added = decision('src/new.ts', ['+export const newValue = true;']);
+    added.hunks[0].fileStatus = 'added';
+    const removed = decision('src/old.ts', ['-export const oldValue = true;']);
+    removed.hunks[0].fileStatus = 'removed';
+    const modified = groupedDecision([
+      { filePath: 'src/replacement.ts', lines: ['+export const replacement = true;'] },
+      { filePath: 'src/legacy.ts', lines: ['-export const legacy = true;'] },
+    ]);
+    modified.hunks[0].fileStatus = 'added';
+    modified.hunks[1].fileStatus = 'removed';
+
+    const map = buildChangeMap([added, removed, modified]);
+    expect(map.nodes.find((node) => node.id === added.id)?.changeKind).toBe('added');
+    expect(map.nodes.find((node) => node.id === removed.id)?.changeKind).toBe('removed');
+    expect(map.nodes.find((node) => node.id === modified.id)?.changeKind).toBe('modified');
+  });
 });

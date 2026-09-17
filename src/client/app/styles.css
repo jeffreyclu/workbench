@@ -592,6 +592,14 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-node.state-reviewed { opacity: 0.55; }
 .change-map-node.state-reviewed.selected, .change-map-node.state-reviewed.came-from, .change-map-node.state-reviewed:hover, .change-map-node.state-reviewed:focus-visible { opacity: 1; }
 .change-map-node.isolated .change-map-node-body { stroke-dasharray: 3 3; }
+/* Git change kind gets a thin inner rail, leaving the disc fill free to say
+   what kind of code this is and the outer rail free for the review verdict. */
+.change-map-node-change-ring { fill: none; stroke-width: 2; pointer-events: none; }
+.change-map-node-change-ring.change-added { stroke: #8bbd75; }
+.change-map-node-change-ring.change-removed { stroke: #e1a68f; }
+.change-map-node-change-ring.change-added-half, .change-map-node-change-ring.change-removed-half { stroke-dasharray: 50 50; transform-box: fill-box; transform-origin: center; transform: rotate(-90deg); }
+.change-map-node-change-ring.change-added-half { stroke: #8bbd75; }
+.change-map-node-change-ring.change-removed-half { stroke: #e1a68f; stroke-dashoffset: 50; }
 /* The reviewer's own verdict, as a ring just outside the disc. It rides on top
    of the category colour rather than replacing it: what kind of code this is
    and whether it has been read are two different questions. */
@@ -618,7 +626,10 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-edge.relation-calls, .change-map-legend li.relation-calls { --relation-tone: #8bbd75; }
 .change-map-edge.relation-uses, .change-map-legend li.relation-uses { --relation-tone: #77766f; }
 .change-map-edge-line { fill: none; stroke: var(--relation-tone); stroke-width: 1.4; opacity: 0.7; }
-.change-map-edge-flow { fill: var(--relation-tone); pointer-events: none; filter: drop-shadow(0 0 3px var(--relation-tone)); }
+.change-map-edge-flow { fill: var(--relation-tone); pointer-events: none; filter: drop-shadow(0 0 2px var(--relation-tone)); }
+/* A type reference is a pointer to a definition, not another call. Hollow
+   pulses give references their own visual grammar without adding labels. */
+.change-map-edge-flow.reference { fill: #10110e; stroke: var(--relation-tone); stroke-width: 1.5; }
 /* Reach, as weight. A line inside one folder is quiet; a line into another
    package is the heaviest thing on the diagram, because it is the one that
    makes the change stop being self-contained. */
@@ -636,13 +647,21 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-edge.active .change-map-edge-line, .change-map-edge.touches-selection .change-map-edge-line { opacity: 1; stroke-width: 2.2; }
 .change-map-edge-target { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
 .change-map-edge-target:focus-visible { outline: none; stroke: var(--acid); stroke-opacity: 0.3; }
-.change-map-edge.dimmed .change-map-edge-flow { opacity: 0.25; }
+/* When a node's code is open, unrelated crossings recede instead of becoming
+   a wall of equally loud lines across the zoomed viewport. */
+.change-map-edge.dimmed { opacity: 0.14; }
 .change-map-explanation { margin: 0; padding: 0 14px 8px; color: #a9a89f; font: 10px 'DM Mono'; }
 .change-map-progress-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 8px; list-style: none; }
 .change-map-progress-legend li { display: inline-flex; align-items: center; gap: 7px; color: #a9a89f; font: 10px 'DM Mono'; }
 .change-map-progress-legend li span { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
 .change-map-progress-legend li.came-from { color: #d6bd76; }.change-map-progress-legend li.reviewed { color: #c7c7be; }
 .change-map-progress-legend li.reviewed span { border-color: #8bbd75; background: #8bbd75; }
+.change-map-change-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 8px; list-style: none; }
+.change-map-change-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
+.change-map-change-legend li span { width: 10px; height: 10px; border: 2px solid; border-radius: 50%; }
+.change-map-change-legend li.change-added span { border-color: #8bbd75; }
+.change-map-change-legend li.change-removed span { border-color: #e1a68f; }
+.change-map-change-legend li.change-modified span { border-color: #8bbd75 #e1a68f #e1a68f #8bbd75; transform: rotate(45deg); }
 .change-map-omitted { margin: 0; padding: 0 14px 10px; font: 9px 'DM Mono'; }
 .change-map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0 14px 12px; list-style: none; }
 .change-map-legend li { display: inline-flex; align-items: center; gap: 6px; color: #85847d; font: 9px 'DM Mono'; }
@@ -675,7 +694,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-fullscreen .change-map-top-hud, .change-map-fullscreen .change-map-bottom-hud { position: absolute; z-index: 4; left: 12px; width: min(720px, calc(100vw - 24px)); pointer-events: none; }
 .change-map-fullscreen .change-map-top-hud { top: 112px; }
 .change-map-fullscreen .change-map-bottom-hud { bottom: 12px; }
-.change-map-fullscreen .change-map-scope, .change-map-fullscreen .change-map-key, .change-map-fullscreen .change-map-explanation, .change-map-fullscreen .change-map-progress-legend, .change-map-fullscreen .change-map-category-legend, .change-map-fullscreen .change-map-legend, .change-map-fullscreen .change-map-omitted { width: fit-content; max-width: 100%; padding: 7px 10px; border: 1px solid #32352b; background: #151612d9; box-shadow: 0 6px 22px #0007; backdrop-filter: blur(9px); }
+.change-map-fullscreen .change-map-scope, .change-map-fullscreen .change-map-key, .change-map-fullscreen .change-map-explanation, .change-map-fullscreen .change-map-progress-legend, .change-map-fullscreen .change-map-change-legend, .change-map-fullscreen .change-map-category-legend, .change-map-fullscreen .change-map-legend, .change-map-fullscreen .change-map-omitted { width: fit-content; max-width: 100%; padding: 7px 10px; border: 1px solid #32352b; background: #151612d9; box-shadow: 0 6px 22px #0007; backdrop-filter: blur(9px); }
 .change-map-fullscreen .change-map-scope { border-radius: 8px 8px 0 0; }.change-map-fullscreen .change-map-scope + .change-map-key { border-top: 0; border-radius: 0 0 8px 8px; }
 .change-map-fullscreen .change-map-key { line-height: 1.45; border-radius: 8px; }
 .change-map-fullscreen .change-map-scope button { pointer-events: auto; }
@@ -683,7 +702,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .change-map-fullscreen .change-map-bottom-hud > * + * { border-top: 0; }
 .change-map-fullscreen .change-map-bottom-hud > :first-child { border-radius: 8px 8px 0 0; }.change-map-fullscreen .change-map-bottom-hud > :last-child { border-radius: 0 0 8px 8px; }
 .change-map-fullscreen .change-map-explanation { color: #c2c1b9; line-height: 1.45; }
-.change-map-fullscreen .change-map-progress-legend, .change-map-fullscreen .change-map-category-legend, .change-map-fullscreen .change-map-legend { gap: 7px 14px; }
+.change-map-fullscreen .change-map-progress-legend, .change-map-fullscreen .change-map-change-legend, .change-map-fullscreen .change-map-category-legend, .change-map-fullscreen .change-map-legend { gap: 7px 14px; }
 /* Reading a node's code is another overlay in full screen. The graph remains
    viewport-sized beneath it instead of surrendering forty percent of itself. */
 .change-map-fullscreen .change-map-canvas.with-code { display: block; }

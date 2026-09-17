@@ -31,14 +31,17 @@ import { categoryOf, folderLabel, folderOf, packageOf, type CodeCategory } from 
 export const CHANGE_MAP_MIN_NODE_RADIUS = 12;
 export const CHANGE_MAP_MAX_NODE_RADIUS = 40;
 
-const NODE_GAP = 30;
-const FILE_PAD = 18;
-const FILE_GAP = 26;
-const FOLDER_PAD = 22;
-const FOLDER_GAP = 34;
-const PACKAGE_PAD = 34;
-const PACKAGE_GAP = 52;
-const PADDING = 48;
+/** These gaps reserve room for captions, not just circles. Packing only the
+ * discs made the geometry technically non-overlapping while filenames and
+ * symbol names still printed directly on top of one another. */
+const NODE_GAP = 72;
+const FILE_PAD = 32;
+const FILE_GAP = 64;
+const FOLDER_PAD = 36;
+const FOLDER_GAP = 88;
+const PACKAGE_PAD = 48;
+const PACKAGE_GAP = 120;
+const PADDING = 72;
 /** How far apart two lines joining the same pair are bowed, so a mutual
  * dependency reads as two arrows rather than one thick one. */
 const PARALLEL_EDGE_BOW = 14;

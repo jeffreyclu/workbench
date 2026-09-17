@@ -119,7 +119,7 @@ describe('diff review queue logic', () => {
       id: decision.id, ordinal: decision.ordinal, label: decision.subject ?? 'change', subject: decision.subject,
       filePath: decision.filePaths[0], fileCount: decision.filePaths.length, behavior: decision.behavior,
       filePaths: decision.filePaths, symbols: [], signatureChanges: [],
-      additions: decision.additions, deletions: decision.deletions, state: decision.state, riskSignals: decision.riskSignals, degree,
+      additions: decision.additions, deletions: decision.deletions, changeKind: 'modified', state: decision.state, riskSignals: decision.riskSignals, degree,
     });
     const changeMap: ChangeMap = {
       nodes: [node(isolated, 0), node(declaration, 1), node(dependent, 1), node(hub, 2)],

@@ -12,7 +12,7 @@ function node(id: string, ordinal: number, overrides: Partial<ChangeMapNode> = {
   return {
     id, ordinal, label: id, degree: 1, subject: id, filePath: `src/client/features/queue/${id}.ts`, fileCount: 1,
     filePaths: [`src/client/features/queue/${id}.ts`], symbols: [], signatureChanges: [],
-    behavior: `Changes ${id}.`, additions: 5, deletions: 1, state: null, riskSignals: [],
+    behavior: `Changes ${id}.`, additions: 5, deletions: 1, changeKind: 'modified', state: null, riskSignals: [],
     ...overrides,
   };
 }
@@ -104,6 +104,30 @@ describe('change map canvas', () => {
     expect(nodeGroup(container, 'server')).toHaveClass('category-data');
   });
 
+  it('uses an inner ring to distinguish new, deleted, and modified code', () => {
+    const kinds: ChangeMap = {
+      nodes: [
+        node('new-code', 1, { changeKind: 'added', degree: 0 }),
+        node('deleted-code', 2, { changeKind: 'removed', degree: 0 }),
+        node('modified-code', 3, { changeKind: 'modified', degree: 0 }),
+      ],
+      edges: [],
+      omittedEdges: 0,
+    };
+    const { container } = render(<ChangeMapCanvas
+      layout={layoutChangeMap(kinds)} selectedId={null} selectedEdgeId={null}
+      onSelect={() => {}} onSelectEdge={() => {}}
+    />);
+
+    expect(nodeGroup(container, 'new-code').querySelectorAll('.change-map-node-change-ring.change-added')).toHaveLength(1);
+    expect(nodeGroup(container, 'deleted-code').querySelectorAll('.change-map-node-change-ring.change-removed')).toHaveLength(1);
+    expect(nodeGroup(container, 'modified-code').querySelectorAll('.change-map-node-change-ring.change-added-half')).toHaveLength(1);
+    expect(nodeGroup(container, 'modified-code').querySelectorAll('.change-map-node-change-ring.change-removed-half')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Decision 1:.*Net-new code/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decision 2:.*Deleted code/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decision 3:.*Modified code/ })).toBeInTheDocument();
+  });
+
   it('draws the folder a change sits in, inside the package that holds it', () => {
     const { container } = draw();
     const files = [...container.querySelectorAll('.change-map-file-label')].map((item) => item.textContent);
@@ -135,21 +159,51 @@ describe('change map canvas', () => {
     expect(new Set(angles).size).toBe(3);
   });
 
-  it('flows each dependency into its consumer without arrows or line labels', () => {
+  it('flows each dependency into its consumer with several screen-sized pulses and no arrows or line labels', () => {
     const { container } = draw();
     const lines = [...container.querySelectorAll('.change-map-edge-line')];
     const flows = [...container.querySelectorAll('.change-map-edge-flow animateMotion')];
 
-    expect(flows).toHaveLength(lines.length);
+    expect(flows).toHaveLength(lines.length * 3);
     expect(container.querySelector('marker')).toBeNull();
     expect(container.querySelector('.change-map-edge-label')).toBeNull();
     flows.forEach((flow, index) => {
       // `edge()` stores hub as the definition and each other node as the
       // consumer. Following the exact path forward therefore makes the called
       // code flow into the caller, never the reverse.
-      expect(flow).toHaveAttribute('path', lines[index].getAttribute('d'));
+      expect(flow).toHaveAttribute('path', lines[Math.floor(index / 3)].getAttribute('d'));
       expect(flow).toHaveAttribute('keyPoints', '0;1');
     });
+  });
+
+  it('fades a removed relationship instead of showing live direction pulses', () => {
+    const removedMap: ChangeMap = {
+      nodes: [node('definition', 1), node('former-consumer', 2)],
+      edges: [{ ...edge('definition', 'former-consumer'), change: 'removed' }],
+      omittedEdges: 0,
+    };
+    const { container } = draw({ layout: layoutChangeMap(removedMap) });
+
+    expect(container.querySelector('.change-map-edge.severed .change-map-edge-line animate[attributeName="opacity"]')).not.toBeNull();
+    expect(container.querySelector('.change-map-edge-flow')).toBeNull();
+  });
+
+  it('shows type references as hollow animated pulses', () => {
+    const referenceMap: ChangeMap = {
+      nodes: [node('type', 1), node('consumer', 2)],
+      edges: [{ ...edge('type', 'consumer'), relation: 'references-type' }],
+      omittedEdges: 0,
+    };
+    const { container } = draw({ layout: layoutChangeMap(referenceMap) });
+
+    expect(container.querySelectorAll('.change-map-edge-flow.reference')).toHaveLength(3);
+  });
+
+  it('focuses relationship lines on the node whose code is open', () => {
+    const { container } = draw({ inspectedId: 'neighbour' });
+
+    expect(container.querySelector('.change-map-edge.dimmed')).not.toBeNull();
+    expect(container.querySelector('.change-map-edge.touches-selection')).not.toBeNull();
   });
 
   it('weights a line by how far out of its folder it goes', () => {
@@ -283,6 +337,24 @@ describe('change map canvas', () => {
 
       expect(scale()).toBeGreaterThan(before);
       expect(scale()).toBeLessThanOrEqual(before * 1.2 + 0.001);
+    } finally {
+      laid.restore();
+    }
+  });
+
+  it('keeps line weight and flow-pulse size stable while zooming', () => {
+    const laid = layOut(800, 560);
+    try {
+      const { container } = draw();
+      const surface = container.querySelector('.change-map-surface')!;
+      const line = container.querySelector('.change-map-edge-line')!;
+      const pulse = container.querySelector('.change-map-edge-flow')!;
+      const radiusBefore = Number(pulse.getAttribute('r'));
+
+      expect(line).toHaveAttribute('vector-effect', 'non-scaling-stroke');
+      fireEvent.wheel(surface, { deltaY: -400, clientX: 400, clientY: 280 });
+
+      expect(Number(pulse.getAttribute('r'))).toBeLessThan(radiusBefore);
     } finally {
       laid.restore();
     }

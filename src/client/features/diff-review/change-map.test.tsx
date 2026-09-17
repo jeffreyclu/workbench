@@ -12,7 +12,7 @@ function node(id: string, ordinal: number, label: string, degree: number): Chang
   return {
     id, ordinal, label, degree, subject: label, filePath: `src/${id}.ts`, fileCount: 1,
     filePaths: [`src/${id}.ts`], symbols: [{ name: label, kind: 'value' as const, change: 'changed' as const }], signatureChanges: [],
-    behavior: `Changes ${label}.`, additions: 1, deletions: 1, state: null, riskSignals: [],
+    behavior: `Changes ${label}.`, additions: 1, deletions: 1, changeKind: 'modified', state: null, riskSignals: [],
   };
 }
 
@@ -203,5 +203,15 @@ describe('diff review change navigation', () => {
     const legend = screen.getByRole('list', { name: 'Kinds of code' });
     expect(legend).toHaveTextContent('Types');
     expect(legend).toHaveTextContent('Logic');
+  });
+
+  it('explains the inner ring for new, modified, and deleted code', () => {
+    render(<DiffReviewChangeMap map={map} selectedId={null} onSelect={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /Full change diagram/ }));
+
+    const legend = screen.getByRole('list', { name: 'Code change kind' });
+    expect(legend).toHaveTextContent('New');
+    expect(legend).toHaveTextContent('Modified');
+    expect(legend).toHaveTextContent('Deleted');
   });
 });

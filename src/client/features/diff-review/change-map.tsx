@@ -117,6 +117,11 @@ export const DiffReviewChangeMap = memo(function DiffReviewChangeMap({ map, deci
             : 'Select a line to read why two changes are related, or a disc to read its code beside the diagram.'}
       </p>
       <ChangeMapProgressLegend nodes={map.nodes} cameFromId={cameFromId} />
+      <ul className="change-map-change-legend" aria-label="Code change kind">
+        <li className="change-added"><span aria-hidden="true" />New</li>
+        <li className="change-modified"><span aria-hidden="true" />Modified</li>
+        <li className="change-removed"><span aria-hidden="true" />Deleted</li>
+      </ul>
       {/* Colour is a claim about what kind of code a change is, so the claim is
           written down next to it rather than left to be inferred. */}
       {categoriesPresent.length > 0 && <ul className="change-map-category-legend" aria-label="Kinds of code">

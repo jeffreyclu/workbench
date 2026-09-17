@@ -6,7 +6,7 @@ function node(id: string, ordinal: number, overrides: Partial<ChangeMapNode> = {
   return {
     id, ordinal, label: id, degree: 1, subject: id, filePath: `src/shared/${id}.ts`, fileCount: 1,
     filePaths: [`src/shared/${id}.ts`], symbols: [], signatureChanges: [],
-    behavior: `Changes ${id}.`, additions: 4, deletions: 2, state: null, riskSignals: [],
+    behavior: `Changes ${id}.`, additions: 4, deletions: 2, changeKind: 'modified', state: null, riskSignals: [],
     ...overrides,
   };
 }
@@ -256,6 +256,35 @@ describe('change map layout', () => {
       expect(placed.x - placed.radius).toBeGreaterThan(0);
       expect(placed.y - placed.radius).toBeGreaterThan(0);
     }
+  });
+
+  it('leaves caption room between neighbouring nodes and containment rings', () => {
+    const map: ChangeMap = {
+      nodes: [
+        node('first-long-symbol', 1, { filePath: 'src/client/feature/view.tsx' }),
+        node('second-long-symbol', 2, { filePath: 'src/client/feature/view.tsx' }),
+        node('third-long-symbol', 3, { filePath: 'src/client/feature/logic.ts' }),
+        node('fourth-long-symbol', 4, { filePath: 'src/client/other/model.ts' }),
+        node('fifth-long-symbol', 5, { filePath: 'src/server/routes.ts' }),
+      ],
+      edges: [],
+      omittedEdges: 0,
+    };
+    const layout = layoutChangeMap(map);
+    const rimGap = (left: { x: number; y: number; radius: number }, right: { x: number; y: number; radius: number }) =>
+      Math.hypot(left.x - right.x, left.y - right.y) - left.radius - right.radius;
+
+    const first = find(layout.nodes, 'first-long-symbol');
+    const second = find(layout.nodes, 'second-long-symbol');
+    expect(rimGap(first, second)).toBeGreaterThanOrEqual(70);
+
+    const featureFiles = layout.files.filter((file) => file.folderId === 'src/client/feature');
+    expect(rimGap(featureFiles[0], featureFiles[1])).toBeGreaterThanOrEqual(60);
+
+    const clientFolders = layout.folders.filter((folder) => folder.packageId === 'src/client');
+    expect(rimGap(clientFolders[0], clientFolders[1])).toBeGreaterThanOrEqual(80);
+
+    expect(rimGap(layout.packages[0], layout.packages[1])).toBeGreaterThanOrEqual(110);
   });
 
   it('draws every relationship as one direct line, never a routed elbow', () => {
