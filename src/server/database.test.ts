@@ -92,6 +92,7 @@ const EXPECTED_MIGRATIONS = [
   '076_palmyra_agent_records',
   '077_shared_conversation_palmyra_context',
   '078_knowledge_graph',
+  '079_conversation_external_action_grants',
 ];
 
 describe('openDatabase', () => {
@@ -866,6 +867,22 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT relation FROM knowledge_graph_edges WHERE from_node_id = ? AND to_node_id = ?").get(`conversation:${conversation.id}`, `work_item:${task.id}`))
       .toEqual({ relation: 'linked_to_task' });
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '078_knowledge_graph'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds conversation-scoped external action grants when upgrading from migration 078', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP INDEX idx_conversation_external_action_grants_expiry; DROP TABLE conversation_external_action_grants;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '079_conversation_external_action_grants'").run();
+    expect(current.prepare("SELECT id FROM schema_migrations WHERE id = '078_knowledge_graph'").get()).toBeTruthy();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'conversation_external_action_grants'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_conversation_external_action_grants_expiry'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '079_conversation_external_action_grants'").get()).toBeTruthy();
     upgraded.close();
   });
 

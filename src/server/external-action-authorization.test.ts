@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EXTERNAL_ACTION_COMMANDS, classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, missingRequiredExecutables } from './external-action-authorization.js';
+import { EXTERNAL_ACTION_COMMANDS, classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, mergeExternalActionAuthorizations, missingRequiredExecutables } from './external-action-authorization.js';
 
 const authorizedCommands = [
   'commit all changes',
@@ -20,6 +20,9 @@ const authorizedCommands = [
   'create the two authorized Linear tickets',
   'create the tickets in Linear',
   'update the Linear issue',
+  'rewrite the Linear ticket',
+  'RE-WRITE THE FUCKING TICKET TO BE LESS WORDY',
+  'the LINEAR TICKET YOU JUST MADE IS TOO FUCKING WORDY',
   'create a Jira ticket',
   'post the message to Slack',
   'write a Confluence page',
@@ -115,6 +118,42 @@ describe('external action authorization command catalog', () => {
       capability: expect.objectContaining({ actionIds: ['linear_create'], requiredWorkbenchTools: ['create_linear_issue'] }),
     }));
     expect(externalActionAttempted(authorization, ['mcp__workbench__create_linear_issue'])).toBe(true);
+  });
+
+  it.each([
+    'rewrite the Linear ticket',
+    'RE-WRITE THE FUCKING TICKET TO BE LESS WORDY',
+    'the LINEAR TICKET YOU JUST MADE IS TOO FUCKING WORDY',
+  ])('attaches the Linear update tool to the corrective command: %s', async (currentMessage) => {
+    await expect(classifyExternalActionAuthorization({ currentMessage })).resolves.toEqual(expect.objectContaining({
+      granted: true,
+      capability: expect.objectContaining({ actionIds: ['linear_update'], requiredWorkbenchTools: ['update_linear_issue'] }),
+    }));
+  });
+
+  it('treats an immediate complaint about a just-created Linear ticket as an update command', async () => {
+    await expect(classifyExternalActionAuthorization({
+      currentMessage: "brooo that's so fucking wordy",
+      precedingAgentMessage: 'Filed CON-420 — https://linear.app/writer/issue/CON-420/example',
+    })).resolves.toEqual(expect.objectContaining({
+      granted: true,
+      capability: expect.objectContaining({ actionIds: ['linear_update'], requiredWorkbenchTools: ['update_linear_issue'], source: 'terse_followup' }),
+    }));
+  });
+
+  it('combines active conversation grants without widening beyond their named actions and tools', async () => {
+    const push = await classifyExternalActionAuthorization({ currentMessage: 'push the branch' });
+    const linear = await classifyExternalActionAuthorization({ currentMessage: 'rewrite the Linear ticket' });
+    const combined = mergeExternalActionAuthorizations([push, linear]);
+
+    expect(combined).toEqual(expect.objectContaining({
+      granted: true,
+      capability: expect.objectContaining({
+        actionIds: ['push', 'linear_update'],
+        requiredExecutables: ['git'],
+        requiredWorkbenchTools: ['update_linear_issue'],
+      }),
+    }));
   });
 
   it.each([

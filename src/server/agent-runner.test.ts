@@ -599,7 +599,7 @@ fi`;
     )).toEqual({ inputTokens: 3, cacheCreationInputTokens: 2, cacheReadInputTokens: 12, outputTokens: null });
   });
 
-  it('keeps a granted one-turn capability first across a cache continuation', () => {
+  it('keeps a granted conversation capability first across a cache continuation', () => {
     const capability = externalActionContractForAuthorization({
       granted: true,
       operation: 'Publish the approved artifact.',
@@ -617,7 +617,7 @@ fi`;
     expect(prompt).toContain('if it launches a forbidden full suite, use `git push --no-verify`');
   });
 
-  it('puts a granted one-turn capability first in fresh and resumed work-item prompts', () => {
+  it('puts a granted conversation capability first in fresh and resumed work-item prompts', () => {
     const capability = 'Supervisor-issued external-action capability: Publish the approved artifact.';
     const run = { agent: 'claude', kind: 'execute', instructions: 'Publish it.' } as AgentRun;
     const memory = 'Retrieved durable context: this is historical evidence.';

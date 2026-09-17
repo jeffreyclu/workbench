@@ -1150,7 +1150,7 @@ export function precedingHumanMessageForSharedReply(thread: SharedMessage[]): st
 }
 
 /** External mutations always start a fresh provider session. Besides keeping a
- * one-turn capability out of unrelated session history, this forces the agent
+ * scoped capability out of unrelated session history, this forces the agent
  * to load Workbench's current MCP tool catalog before it acts. */
 export function providerSessionForAuthorization(sessionId: string | null | undefined, authorization: ExternalActionAuthorization): string | null {
   return authorization.granted ? null : sessionId ?? null;
@@ -1508,7 +1508,8 @@ export async function replyInSharedRoom(
         return [];
       })
       : Promise.resolve([]));
-    const [externalAuthorization, turnGrounding, memoryEvidence] = await Promise.all([externalAuthorizationPromise, groundingPromise, memoryPromise]);
+    const [freshExternalAuthorization, turnGrounding, memoryEvidence] = await Promise.all([externalAuthorizationPromise, groundingPromise, memoryPromise]);
+    const externalAuthorization = repository.resolveConversationExternalActionAuthorization(target.conversationId, freshExternalAuthorization);
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const missingExecutables = missingRequiredExecutables(externalAuthorization);
     if (missingExecutables.length) throw new Error(`External-action preflight failed before the turn started. Missing executables: ${missingExecutables.join(', ')}.`);
@@ -1516,7 +1517,7 @@ export async function replyInSharedRoom(
     await preflightWorkbenchTools(requiredWorkbenchTools);
     if (externalAuthorization.granted) repository.addAgentStreamEvents(messageId, runId ?? null, [{
       kind: 'decision',
-      detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} from Jeffrey's current command.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
+      detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
     const shortTermMemory = repository.getSharedContextWithItems(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });

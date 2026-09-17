@@ -2336,6 +2336,27 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // External-action authorization is conversation-scoped for a short,
+    // explicit lease. Persisting it here lets a follow-up or provider retry
+    // use the same grant after a process restart without widening it to other
+    // conversations or actions.
+    id: '079_conversation_external_action_grants',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE conversation_external_action_grants (
+          conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          action_id TEXT NOT NULL,
+          authorization_json TEXT NOT NULL,
+          granted_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          PRIMARY KEY (conversation_id, action_id)
+        );
+        CREATE INDEX idx_conversation_external_action_grants_expiry
+          ON conversation_external_action_grants(expires_at);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

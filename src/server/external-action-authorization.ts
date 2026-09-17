@@ -6,7 +6,7 @@ export type ExternalActionCapability = {
   command: string;
   requiredExecutables: string[];
   requiredWorkbenchTools: string[];
-  source: 'direct_command' | 'terse_followup';
+  source: 'direct_command' | 'terse_followup' | 'conversation_lease';
 };
 
 export type ExternalActionAuthorization =
@@ -26,8 +26,30 @@ export type AuthorizationRule = {
   requiredWorkbenchTools?: readonly string[];
 };
 
+export const EXTERNAL_ACTION_GRANT_TTL_MS = 5 * 60 * 1_000;
+
+/** Combines still-active, independently scoped grants without turning them
+ * into a generic mutation permission. Every tool and action remains the union
+ * of capabilities Jeffrey explicitly granted in this conversation. */
+export function mergeExternalActionAuthorizations(authorizations: readonly ExternalActionAuthorization[]): ExternalActionAuthorization {
+  const granted = authorizations.filter((authorization): authorization is Extract<ExternalActionAuthorization, { granted: true }> => authorization.granted);
+  if (granted.length === 0) return { granted: false, operation: null };
+  const latest = granted.at(-1)!;
+  return {
+    granted: true,
+    operation: [...new Set(granted.map((authorization) => authorization.operation))].join(' '),
+    capability: {
+      actionIds: [...new Set(granted.flatMap((authorization) => authorization.capability.actionIds))],
+      command: [...new Set(granted.map((authorization) => authorization.capability.command))].join(' | ').slice(0, 1_500),
+      requiredExecutables: [...new Set(granted.flatMap((authorization) => authorization.capability.requiredExecutables))],
+      requiredWorkbenchTools: [...new Set(granted.flatMap((authorization) => authorization.capability.requiredWorkbenchTools))],
+      source: latest.capability.source,
+    },
+  };
+}
+
 /**
- * The complete supported one-turn command vocabulary. Keep this declarative:
+ * The complete supported external-action command vocabulary. Keep this declarative:
  * every entry is exercised as a table in the test suite, and adding a new
  * external integration means adding its mutations here instead of teaching a
  * probabilistic classifier another example.
@@ -44,7 +66,7 @@ export const EXTERNAL_ACTION_COMMANDS: readonly AuthorizationRule[] = [
   { id: 'github_workflow', description: 'Dispatch, rerun, or cancel the named GitHub workflow', requiredExecutables: ['gh'], pattern: /\b(?:dispatch|trigger|run|rerun|re-run|cancel)\s+(?:the\s+|a\s+)?(?:github\s+)?(?:actions?\s+)?workflow\b/i },
   { id: 'github_release', description: 'Create, publish, edit, or delete the named GitHub release or tag', requiredExecutables: ['gh'], pattern: /\b(?:create|publish|edit|update|delete|remove)\s+(?:the\s+|a\s+)?(?:github\s+)?(?:release|tag)\b/i },
   { id: 'linear_create', description: 'Create the requested Linear ticket', requiredWorkbenchTools: ['create_linear_issue'], pattern: /\b(?:create|open|file|write|make|add)\s+(?:(?:a|the|one|two|three|both|these|those|requested|authorized|following|\d+)\s+){0,4}(?:new\s+)?linear\s+(?:tickets?|issues?|cards?)\b|\b(?:create|open|file|write|make|add)\s+(?:(?:a|the|one|two|three|both|these|those|requested|authorized|following|\d+)\s+){0,4}(?:new\s+)?(?:tickets?|issues?|cards?)\s+(?:in|on)\s+linear\b|\blinear\s+(?:tickets?|issues?|cards?)(?:\s+[^.!?\n]{0,50})?\s+(?:needs?\s+to\s+be|must\s+be|should\s+be)\s+(?:created|opened|filed|written|added)\b/i },
-  { id: 'linear_update', description: 'Update the named Linear ticket', requiredWorkbenchTools: ['update_linear_issue'], pattern: /\b(?:update|edit|change|move|close|cancel|archive|delete|comment(?:\s+on)?|assign|label|link|unlink)\s+(?:the\s+)?(?:linear\s+)?(?:ticket|issue|card)\b|\b(?:update|edit|change)\s+(?:the\s+)?(?:status|description|title|priority|assignee|labels?)\s+(?:of|on|for)\s+(?:the\s+)?linear\s+(?:ticket|issue|card)\b|\blinear\s+(?:ticket|issue|card)(?:\s+[^.!?\n]{0,50})?\s+(?:needs?\s+to\s+be|must\s+be|should\s+be)\s+(?:updated|edited|changed|moved|closed|canceled|archived|deleted|assigned|labeled|linked)\b/i },
+  { id: 'linear_update', description: 'Update the named Linear ticket', requiredWorkbenchTools: ['update_linear_issue'], pattern: /\b(?:update|edit|change|re[- ]?write|reword|shorten|simplify|move|close|cancel|archive|delete|comment(?:\s+on)?|assign|label|link|unlink)\s+(?:the\s+)?(?:(?:fucking|motherfucking)\s+)*(?:linear\s+)?(?:ticket|issue|card)\b|\b(?:update|edit|change|re[- ]?write|reword|shorten|simplify)\s+(?:the\s+)?(?:status|description|title|priority|assignee|labels?|body|copy)\s+(?:of|on|for)\s+(?:the\s+)?linear\s+(?:ticket|issue|card)\b|\blinear\s+(?:ticket|issue|card)(?:\s+[^.!?\n]{0,50})?\s+(?:needs?\s+to\s+be|must\s+be|should\s+be)\s+(?:updated|edited|rewritten|reworded|shortened|simplified|changed|moved|closed|canceled|archived|deleted|assigned|labeled|linked)\b|\b(?:linear\s+)?(?:ticket|issue|card)\b[^.!?\n]{0,100}\b(?:is|was|looks?|seems?)\s+(?:(?:so|way|far|too|fucking|motherfucking)\s+)*(?:wordy|verbose|long|detailed)\b/i },
   { id: 'project_tracker', description: 'Create or update the named Jira, Asana, or Shortcut ticket', pattern: /\b(?:create|open|file|write|make|add|update|edit|change|move|close|cancel|archive|delete|comment(?:\s+on)?|assign|label|link|unlink)\s+(?:a\s+|the\s+)?(?:jira|asana|shortcut)\s+(?:ticket|issue|card|task)\b|\b(?:create|open|file|write|make|add|update|edit|change|move|close|cancel|archive|delete|comment(?:\s+on)?|assign|label|link|unlink)\s+(?:a\s+|the\s+)?(?:ticket|issue|card|task)\s+(?:in|on)\s+(?:jira|asana|shortcut)\b/i },
   { id: 'slack_message', description: 'Send, post, edit, delete, reply to, or react to the named Slack message', pattern: /\b(?:send|post|publish|edit|update|delete|remove|reply\s+to|react\s+to)\s+(?:a\s+|the\s+|that\s+|this\s+)?(?:slack\s+)?(?:message|post|reply|dm|comment)\b|\b(?:send|post|publish|edit|update|delete|remove|reply|react)\b[^.!?\n]{0,80}\b(?:in|on|to)\s+slack\b/i },
   { id: 'confluence', description: 'Create, publish, update, comment on, move, archive, or delete the named Confluence page', pattern: /\b(?:create|write|publish|update|edit|rewrite|comment\s+on|move|archive|delete|remove)\s+(?:a\s+|the\s+|that\s+|this\s+)?(?:confluence\s+)?(?:page|document|doc)\b|\b(?:create|write|publish|update|edit|rewrite|comment|move|archive|delete|remove)\b[^.!?\n]{0,80}\b(?:in|on|to)\s+confluence\b/i },
@@ -60,7 +82,7 @@ export const EXTERNAL_ACTION_COMMANDS: readonly AuthorizationRule[] = [
   { id: 'external_api', description: 'Perform the named mutating external API request', pattern: /\b(?:post|put|patch|delete)\s+(?:the\s+|this\s+|that\s+|an?\s+)?(?:request\s+)?(?:to\s+)?(?:the\s+)?(?:external\s+)?api\b|\bcall\s+(?:the\s+)?api\s+to\s+(?:create|update|edit|delete|publish|send)\b/i },
 ] as const;
 
-const COMMAND_START = /^(?:commit|amend|push|force[- ]?push|promote|ship|deploy|release|rollback|roll back|publish|open|create|raise|file|submit|write|make|add|put|spin\s+up|update|edit|rewrite|change|rename|relink|approve|review|comment|post|request|merge|close|reopen|mark|convert|delete|remove|dispatch|trigger|run|rerun|re-run|cancel|move|archive|assign|label|link|unlink|send|reply|react|upload|save|copy|forward|deprecate|unpublish|restart|stop|start|destroy|call|npm|gcloud|aws|az|wrangler|vercel)\b/i;
+const COMMAND_START = /^(?:commit|amend|push|force[- ]?push|promote|ship|deploy|release|rollback|roll back|publish|open|create|raise|file|submit|write|re[- ]?write|reword|shorten|simplify|make|add|put|spin\s+up|update|edit|change|rename|relink|approve|review|comment|post|request|merge|close|reopen|mark|convert|delete|remove|dispatch|trigger|run|rerun|re-run|cancel|move|archive|assign|label|link|unlink|send|reply|react|upload|save|copy|forward|deprecate|unpublish|restart|stop|start|destroy|call|npm|gcloud|aws|az|wrangler|vercel)\b/i;
 const LEADING_REQUEST = /^(?:(?:ok(?:ay)?|please|now|just|then|also|finally|fucking|fuck|motherfucker|motherfucking)\b[\s,:-]*|(?:can|could|would|will)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+|you\s+(?:can|may|should|must|need\s+to|have\s+to)\s+|go\s+ahead(?:\s+and)?\s+)+/i;
 const PASSIVE_REQUEST = /\b(?:needs?\s+to(?:\s+be)?|must\s+be|should\s+be|has\s+to(?:\s+be)?|have\s+to(?:\s+be)?)\s+(?:created|opened|updated|edited|rewritten|changed|renamed|relinked|approved|reviewed|commented|merged|closed|reopened|deleted|removed|published|promoted|deployed|sent|pushed|committed)\b/i;
 const TERSE_APPROVAL = /^(?:ok(?:ay)?\s+)?(?:yes|yeah|yep|approved?(?:\s+(?:it|this|that))?|do it|go|go ahead(?:\s+and\s+do\s+it)?|proceed|continue|ship it|send it|post it|publish it|push it|(?:now\s+)?you have (?:my\s+)?permission|permission granted|authorized)(?:\s+(?:now|please))?[.!]*$/i;
@@ -68,6 +90,9 @@ const TERSE_APPROVAL_FILLER = /\b(?:you|codex|claude|palmyra|fuck|fucking|fcking
 const META_EXAMPLE = /\b(?:is another (?:one|command)|add (?:this|that|it) to (?:the\s+)?(?:list|commands?)|command list|authorization (?:list|regex|parser)|regex (?:list|against|for))\b/i;
 const NEGATED_COMMAND_START = /^(?:do\s+not|don'?t|not|never|no)\s+(?:ever\s+)?(?:commit|amend|push|force[- ]?push|promote|deploy|publish|open|create|update|edit|approve|merge|comment|post|send|delete|remove|release)\b/i;
 const STATUS_REPORT = /^(?:(?:ok(?:ay)?|so|well)\s+)?(?:commit|amend|push|promote|deploy|publish|merge|approval?)\s+(?:is|was|seems|looks|keeps|failed|fails|broke|doesn'?t|does not)\b/i;
+const CORRECTIVE_EXTERNAL_REQUEST = /\b(?:linear\s+)?(?:ticket|issue|card)\b[^.!?\n]{0,100}\b(?:is|was|looks?|seems?)\s+(?:(?:so|way|far|too|fucking|motherfucking)\s+)*(?:wordy|verbose|long|detailed)\b/i;
+const CORRECTIVE_FOLLOWUP = /^(?:(?:bro+|ugh|no|wrong|seriously|jesus)\b[\s,!:-]*)?(?:that|it|this)(?:(?:\s+(?:is|was))|'s)?\s+(?:(?:so|way|far|too|fucking|motherfucking)\s+)*(?:wordy|verbose|long|detailed)[.!]*$/i;
+const LINEAR_REFERENCE = /\blinear\b|linear\.app\//i;
 
 function matchingRules(message: string): AuthorizationRule[] {
   return EXTERNAL_ACTION_COMMANDS.filter((rule) => rule.pattern.test(message));
@@ -105,7 +130,7 @@ function directCommand(message: string): boolean {
   if (!trimmed || META_EXAMPLE.test(trimmed) || STATUS_REPORT.test(trimmed)) return false;
   const stripped = trimmed.replace(LEADING_REQUEST, '').trim();
   if (NEGATED_COMMAND_START.test(stripped)) return false;
-  return COMMAND_START.test(stripped) || PASSIVE_REQUEST.test(trimmed);
+  return COMMAND_START.test(stripped) || PASSIVE_REQUEST.test(trimmed) || CORRECTIVE_EXTERNAL_REQUEST.test(trimmed);
 }
 
 function terseApproval(message: string): boolean {
@@ -196,7 +221,7 @@ export function externalActionAttempted(authorization: ExternalActionAuthorizati
 }
 
 /**
- * Deterministic one-turn authorization. It recognizes only an explicit command
+ * Deterministic authorization for a newly received command. It recognizes only an explicit command
  * in the newest message, or a terse approval of a concrete operation in the
  * immediately preceding agent response. Old approvals and quoted examples do
  * not carry forward.
@@ -207,6 +232,16 @@ export async function classifyExternalActionAuthorization(context: ExternalActio
 
   const directRules = robustMatchingRules(current);
   if (directRules.length && directCommand(current)) return authorizationFor(directRules, current, 'direct_command');
+
+  // A terse correction immediately after Workbench created or edited a Linear
+  // ticket is still an order about that ticket. Requiring Jeffrey to repeat
+  // the noun and mutation verb is what caused "that's too wordy" to become a
+  // chat-only suggestion instead of an actual ticket edit.
+  const precedingAgent = context.precedingAgentMessage?.trim() ?? '';
+  if (CORRECTIVE_FOLLOWUP.test(current) && LINEAR_REFERENCE.test(precedingAgent)) {
+    const linearUpdate = EXTERNAL_ACTION_COMMANDS.find((rule) => rule.id === 'linear_update')!;
+    return authorizationFor([linearUpdate], current, 'terse_followup', precedingAgent);
+  }
 
   if (terseApproval(current)) {
     const pending = context.precedingAgentMessage?.trim() || context.precedingHumanMessage?.trim() || '';

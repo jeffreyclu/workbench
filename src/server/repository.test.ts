@@ -9,6 +9,7 @@ import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
 import { HEARTBEAT_MS } from './scheduler.js';
+import type { ExternalActionAuthorization } from './external-action-authorization.js';
 
 describe('WorkItemRepository', () => {
   let database: WorkbenchDatabase;
@@ -32,6 +33,34 @@ describe('WorkItemRepository', () => {
     }, { timeout: 10_000 });
     database.close();
     setEmbedder(null);
+  });
+
+  it('keeps an external mutation grant in only its conversation for five minutes', () => {
+    const conversation = repository.createConversation('Granted conversation');
+    const otherConversation = repository.createConversation('Other conversation');
+    const grantedAt = new Date('2026-09-17T18:00:00.000Z');
+    const authorization = {
+      granted: true,
+      operation: 'Update the named Linear ticket.',
+      capability: {
+        actionIds: ['linear_update'],
+        command: 'rewrite the Linear ticket',
+        requiredExecutables: [],
+        requiredWorkbenchTools: ['update_linear_issue'],
+        source: 'direct_command',
+      },
+    } satisfies ExternalActionAuthorization;
+
+    expect(repository.resolveConversationExternalActionAuthorization(conversation.id, authorization, grantedAt))
+      .toEqual(expect.objectContaining({ granted: true }));
+
+    const noFreshGrant = { granted: false, operation: null } as const;
+    expect(repository.resolveConversationExternalActionAuthorization(conversation.id, noFreshGrant, new Date('2026-09-17T18:04:59.999Z')))
+      .toEqual(expect.objectContaining({ granted: true, capability: expect.objectContaining({ actionIds: ['linear_update'], source: 'conversation_lease' }) }));
+    expect(repository.resolveConversationExternalActionAuthorization(otherConversation.id, noFreshGrant, new Date('2026-09-17T18:04:59.999Z')))
+      .toEqual(noFreshGrant);
+    expect(repository.resolveConversationExternalActionAuthorization(conversation.id, noFreshGrant, new Date('2026-09-17T18:05:00.000Z')))
+      .toEqual(noFreshGrant);
   });
 
   it('keeps one immutable workspace diff record per reviewed revision after the workspace is clean', () => {

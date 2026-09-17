@@ -27,6 +27,7 @@ import { WorkItemService } from './services/work-item-service.js';
 import { ConversationService } from './services/conversation-service.js';
 import { ShortTermMemoryStore } from './short-term-memory.js';
 import { normalizeLabels, providerSyncFields, providerValues, sameProviderValue, type ProviderFieldValue, type ProviderSnapshotRow, type ProviderSnapshotValues } from './repositories/provider-sync-support.js';
+import { EXTERNAL_ACTION_GRANT_TTL_MS, mergeExternalActionAuthorizations, type ExternalActionAuthorization } from './external-action-authorization.js';
 
 export type { ProviderWorkItem } from './services/provider-sync-service.js';
 
@@ -352,6 +353,40 @@ export class WorkItemRepository {
 
   getConversation(id: string): SharedConversation | null {
     return this.listConversations('all').find((conversation) => conversation.id === id) ?? null;
+  }
+
+  persistConversationExternalActionGrant(conversationId: string, authorization: ExternalActionAuthorization, now = new Date()): void {
+    if (!authorization.granted || !this.getConversation(conversationId)) return;
+    const grantedAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + EXTERNAL_ACTION_GRANT_TTL_MS).toISOString();
+    this.conversations.saveExternalActionGrant(
+      conversationId,
+      authorization.capability.actionIds,
+      JSON.stringify(authorization),
+      grantedAt,
+      expiresAt,
+    );
+  }
+
+  getConversationExternalActionGrants(conversationId: string, now = new Date()): ExternalActionAuthorization[] {
+    return this.conversations.listActiveExternalActionGrants(conversationId, now.toISOString()).flatMap(({ authorizationJson }) => {
+      try {
+        const authorization = JSON.parse(authorizationJson) as ExternalActionAuthorization;
+        if (!authorization.granted) return [];
+        return [{
+          ...authorization,
+          capability: { ...authorization.capability, source: 'conversation_lease' as const },
+        }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  resolveConversationExternalActionAuthorization(conversationId: string, fresh: ExternalActionAuthorization, now = new Date()): ExternalActionAuthorization {
+    const leased = this.getConversationExternalActionGrants(conversationId, now);
+    if (fresh.granted) this.persistConversationExternalActionGrant(conversationId, fresh, now);
+    return mergeExternalActionAuthorizations([...leased, fresh]);
   }
 
   listConversationPage(limit: number, cursor: string | null, view: 'active' | 'archive' = 'active'): ConversationPage {

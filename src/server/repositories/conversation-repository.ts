@@ -158,6 +158,33 @@ export class ConversationRepository {
     return Number(this.database.prepare('UPDATE shared_conversations SET palmyra_context_json = ?, updated_at = ? WHERE id = ?').run(context, new Date().toISOString(), id).changes) > 0;
   }
 
+  saveExternalActionGrant(conversationId: string, actionIds: readonly string[], authorizationJson: string, grantedAt: string, expiresAt: string): void {
+    const save = this.database.prepare(`
+      INSERT INTO conversation_external_action_grants
+        (conversation_id, action_id, authorization_json, granted_at, expires_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(conversation_id, action_id) DO UPDATE SET
+        authorization_json = excluded.authorization_json,
+        granted_at = excluded.granted_at,
+        expires_at = excluded.expires_at
+    `);
+    this.unitOfWork.transaction(() => {
+      for (const actionId of actionIds) save.run(conversationId, actionId, authorizationJson, grantedAt, expiresAt);
+    });
+  }
+
+  listActiveExternalActionGrants(conversationId: string, now: string): Array<{ authorizationJson: string; expiresAt: string }> {
+    this.database.prepare('DELETE FROM conversation_external_action_grants WHERE expires_at <= ?').run(now);
+    return (this.database.prepare(`
+      SELECT authorization_json, MAX(expires_at) AS expires_at
+      FROM conversation_external_action_grants
+      WHERE conversation_id = ? AND expires_at > ?
+      GROUP BY authorization_json
+      ORDER BY expires_at ASC
+    `).all(conversationId, now) as Array<{ authorization_json: string; expires_at: string }>)
+      .map((row) => ({ authorizationJson: row.authorization_json, expiresAt: row.expires_at }));
+  }
+
   updateWorkItemId(id: string, workItemId: string | null): boolean {
     return Number(this.database.prepare('UPDATE shared_conversations SET work_item_id = ?, updated_at = ? WHERE id = ?').run(workItemId, new Date().toISOString(), id).changes) > 0;
   }
