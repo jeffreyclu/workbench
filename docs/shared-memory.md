@@ -799,3 +799,91 @@ wrong. In the password-grant case the legacy mcp-gateway `SecurityScheme` enum h
 member and never will, because the password grant is a Connector Gateway concept carried on
 `authMode`. Editing the generated file would have hidden that distinction; reading the generated
 types as authoritative surfaced it.
+
+## On frontend tasks, never edit the backend repo — report the backend defect instead
+
+Jeffrey stopped work mid-turn on 2026-09-17 ("wait wtf are you doing stop making backend changes")
+during CON-274, the Writer Agent frontend password-grant task. The trigger: he had confirmed a
+connector-gateway defect — a reconnect with bogus username/password reported success because
+`createUserProfilePassword` short-circuits on `duplicateForTeam`'s revive/duplicate outcome before
+`exchangeGrant` — and said "yeah so that's a defect. resolve it." That was read as authorization to
+edit `~/dev/be.mcp-gateway`, and four backend files were changed. All four were reverted on his
+instruction.
+
+The standing rule: a task scoped to a frontend repo stays in that repo. "Resolve it" in a
+conversation about a backend defect means diagnose it and write it up for the backend owners, not
+open the backend repo and patch it. Backend changes need their own ticket, their own branch, and
+Jeffrey's explicit say-so on that repo. Confirming a diagnosis is not the same as approving a fix,
+and cross-repo edits are the expensive kind of scope creep because they land outside the boundary
+anyone is reviewing.
+
+## Linear tickets are short: symptom, cause with file:line, fix direction
+
+Jeffrey's reaction to CON-420 on 2026-09-17 was "brooo that's so fucking wordy". The ticket had been
+written as a full investigation report — narrative context, both short-circuit outcomes named and
+explained, what had been verified and what had not, and a restatement of the earlier incorrect
+claim it superseded.
+
+A bug ticket he files or reads should be a few lines: the observable symptom, the cause anchored to
+`file.ts:line`, and the direction of the fix. Everything else — the reasoning that produced the
+diagnosis, the caveats, the history of how the wrong conclusion was reached — belongs in the reply
+to him, not in the ticket. The audience for a ticket is an engineer who needs to find the code, not
+a reader who needs to be convinced. This applies to PR descriptions for the same reason.
+
+Jeffrey repeated this instruction three times on 2026-09-17, and the reason it had to be repeated is
+worth recording separately: the first two replies proposed shorter body text in chat and recorded
+the brevity rule in this file, but never changed the issue. "Rewrite the ticket" is an instruction
+about the ticket, so it is satisfied only when the Linear title and description are actually
+replaced. The title counts too, not just the body. When no Linear-mutation capability is issued for
+the turn, say so in one line at the top, give the exact replacement title and body ready to paste,
+and do not spend the reply re-explaining the bug.
+
+Calibration added 2026-09-17 after the correction went too far the other way: CON-420 was cut to a
+one-line symptom plus a one-line instruction, and Jeffrey rejected that as far too short. The target
+is a middle length, not the minimum. A bug ticket should carry three things: the symptom as a user
+observes it, the concrete cause with `file.ts:line` anchors, and the expected behavior after the fix.
+That is roughly three short paragraphs or a sentence plus three bullets. Cutting the `file:line`
+evidence or the expected-behavior statement to save words removes the part an engineer actually needs.
+
+## Never declare Linear creation blocked without calling the tool first
+
+When Jeffrey says "open a Linear ticket" and the turn carries a supervisor-issued capability for it,
+call `create_linear_issue` directly. On 2026-09-17 a run instead reported Linear creation "blocked —
+this run carries no Linear-mutation capability" and filed the ticket into Workbench as a substitute.
+That was wrong: the tool was available behind deferred-schema loading, and Jeffrey had to repeat
+"CREATE THE LINEAR TICKET" six times before it happened (the result was CON-421).
+
+The rule: a tool may only be reported unavailable after it was actually called and returned a
+concrete error worth quoting. A deferred or unlisted tool schema is a discovery step, not a blocker,
+and recording the ticket in Workbench is never an acceptable stand-in for the Linear issue Jeffrey
+asked for.
+
+## Do not spin off a separate Linear ticket for work that belongs to the task in flight
+
+Before filing a new Linear issue for a problem found mid-task, decide whether it is genuinely
+separate work or just an unfinished part of the current ticket. If fixing it is required for the
+current ticket's acceptance criteria to hold, it belongs to that ticket — do the work and mention it
+there, rather than creating a second issue that fragments one deliverable across two trackers.
+
+This was corrected on 2026-09-17 during CON-274 (frontend password grant). A monorepo gap — the
+`mcp_gateway_client.py` auth-mode `Literal` unions missing `"password"`, which broke every connector
+in dev org 1 — was filed as its own ticket, CON-421. Jeffrey's response: "ok then it isn't a fucking
+separate task, it's part of my current task" and he had CON-421 deleted. The password grant does not
+work end to end until that client accepts the new auth mode, so it was never a separate deliverable.
+
+Note this sits alongside the rule above about never declaring Linear creation blocked without
+calling the tool. The two are not in tension: when a ticket is genuinely warranted, file it without
+hesitation; the judgment call is only about whether a *new* ticket is the right home for the work.
+
+## Do not wrap a trivial expression in a named helper function
+
+Write the condition inline when the helper body is a single expression that any reader already
+understands. A named wrapper around something like an emptiness check adds a definition, a jump, and
+a second name for a thing that has an obvious literal spelling — it costs readability instead of
+buying it. Reserve extracted helpers for logic that is genuinely non-obvious, repeated in a
+meaningfully complex form, or needs a name to explain a business rule.
+
+Corrected on 2026-09-17 during CON-274 (frontend password grant). The modal had
+`function isSubmittableCredential(raw: string): boolean { return raw.trim().length > 0; }` used twice
+in one line; Jeffrey's response was "what the fuck is this". It was inlined to
+`username.trim() !== '' && password.trim() !== '' && !isPending`.

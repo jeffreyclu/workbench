@@ -13,9 +13,12 @@ export type AutoReviewScores = {
   /** Decisions the background pass deliberately left unscored, so the queue can
    * say so instead of implying the whole diff was covered. */
   skipped: number;
+  autoReviewed: number;
+  criticalCompleted: number;
+  criticalTotal: number;
 };
 
-const EMPTY: AutoReviewScores = { results: new Map(), running: false, completed: 0, total: 0, skipped: 0 };
+const EMPTY: AutoReviewScores = { results: new Map(), running: false, completed: 0, total: 0, skipped: 0, autoReviewed: 0, criticalCompleted: 0, criticalTotal: 0 };
 
 /**
  * Background risk scores for the decisions in one diff revision.
@@ -81,6 +84,15 @@ export function useAutoReviewScores(scope: { workItemId: string | null; conversa
     for (const [decisionId, result] of live.results) results.set(decisionId, result);
     const completed = Math.max(replay?.completed ?? 0, live.completed);
     const total = Math.max(replay?.total ?? 0, live.total);
-    return { results, completed, total, skipped: replay?.skipped ?? live.skipped, running: total > 0 && completed < total };
+    return {
+      results,
+      completed,
+      total,
+      skipped: replay?.skipped ?? live.skipped,
+      autoReviewed: Math.max(replay?.autoReviewed ?? 0, live.autoReviewed),
+      criticalCompleted: Math.max(replay?.criticalCompleted ?? 0, live.criticalCompleted),
+      criticalTotal: Math.max(replay?.criticalTotal ?? 0, live.criticalTotal),
+      running: total > 0 && completed < total,
+    };
   }, [snapshot.data, live]);
 }

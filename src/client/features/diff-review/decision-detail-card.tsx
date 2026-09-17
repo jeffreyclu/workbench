@@ -14,16 +14,16 @@ import type { ReviewAssistTier } from '../../../shared/contracts.js';
 export type { ReviewAssistAction, ReviewAssistTaskIntent };
 
 /**
- * Assistance is on demand only: nothing here fires until the reviewer clicks
- * one of these buttons, and a failed turn stays visible with its own retry
- * rather than folding into a neutral placeholder.
+ * The Review Director prepares critical assistance before the reviewer opens
+ * this card. These controls also support explicit questions and retries, and a
+ * failed turn stays visible rather than folding into a neutral placeholder.
  *
  * This is popover content now, not a standing column. What a reviewer can read
  * off the code itself — which change this is, its state, its risk signals —
  * lives on the block's gutter marker instead, so the panel only carries what
  * has to be asked for.
  */
-export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, tier = null, hideJudging = false, children }: {
+export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, tier = null, critical = false, hideJudging = false, children }: {
   decision: ReviewDecision;
   taskIntent: ReviewAssistTaskIntent;
   /** Result of the background pass that scores a diff once its agent comes to
@@ -44,6 +44,9 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
    * along on the assist request so the answer is cached against the depth it
    * was asked at. Changes leaves it null and its requests are unchanged. */
   tier?: ReviewAssistTier | null;
+  /** Review Director's critical tier receives every explanation up front and
+   * opens the deterministic heuristic by default. */
+  critical?: boolean;
   /** Drops the heuristic panel and the AI risk score, leaving only what the
    * chunk gutter's simplified popup wants: the change itself, review, ask and
    * AI assist. No scoring, no obligations trace. */
@@ -100,7 +103,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       * allowed to rest on. Collapsed by default, because a reviewer only opens
       * it when the verdict looks wrong — which is exactly when a description
       * of the heuristic would be useless and the trace is not. */}
-    {!hideJudging && <DiffReviewHeuristicPanel decision={decision} decisions={decisions} staleReferences={staleReferences} />}
+    {!hideJudging && <DiffReviewHeuristicPanel decision={decision} decisions={decisions} staleReferences={staleReferences} defaultOpen={critical} />}
     {!hideJudging && <section className="diff-review-ai-risk" aria-labelledby="diff-review-risk-title">
       {/* The score action lives beside the number it produces, not in the assist
         * row: it answers a different question, and its label swaps width once a
@@ -130,6 +133,14 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
                 ? <small className="diff-review-ai-risk-reason is-error" role="alert">Background scoring failed: {autoScoreError} Use Score risk to retry.</small>
                 : <small className="diff-review-ai-risk-reason">Not scored yet.</small>}
       </div>
+    </section>}
+    {!hideJudging && critical && <section className="diff-review-director-analysis" aria-labelledby="diff-review-director-title">
+      <h4 id="diff-review-director-title">Review Director analysis</h4>
+      <dl>
+        <div><dt>Explanation</dt><dd>{cachedAssistAnswers.data?.explain ?? 'Preparing…'}</dd></div>
+        <div><dt>What could break</dt><dd>{cachedAssistAnswers.data?.what_could_break ?? 'Preparing…'}</dd></div>
+        {taskIntent && <div><dt>Task alignment</dt><dd>{cachedAssistAnswers.data?.compare_task_intent ?? 'Preparing…'}</dd></div>}
+      </dl>
     </section>}
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">
       {/* One selector for the whole review surface: the score above and the

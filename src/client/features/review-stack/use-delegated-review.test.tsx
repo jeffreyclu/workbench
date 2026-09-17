@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REVIEW_ASSIST_CONFIDENCE_PREFIX, REVIEW_ASSIST_MISSING_PREFIX, type WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { buildReviewDecisions, type ReviewDecision } from '../../../shared/review-decisions.js';
@@ -52,9 +52,9 @@ describe('delegation policy', () => {
     expect(isDelegatedTier('T3')).toBe(false);
   });
 
-  it('lets a confident T1 answer close its change and never lets T2 close one', () => {
+  it('lets every confident delegated answer close its change', () => {
     expect(delegationOutcome('T1', CONFIDENT).autoReview).toBe(true);
-    expect(delegationOutcome('T2', CONFIDENT).autoReview).toBe(false);
+    expect(delegationOutcome('T2', CONFIDENT).autoReview).toBe(true);
   });
 
   it('keeps an unconfident answer owed and carries what it lacked', () => {
@@ -173,13 +173,26 @@ describe('useDelegatedReview', () => {
     expect([...autoReviewed].sort()).toEqual(all.map((decision) => decision.id).sort());
   });
 
-  it('spends the turn on a T2 change but leaves the verdict to the reviewer', async () => {
+  it('auto-reviews a confident T2 decision because every delegated tier is automated', async () => {
     stubAssist(CONFIDENT);
     const [decision] = decisions();
     const autoReviewed: string[] = [];
     render(<Harness targets={[{ decisionId: decision.id, decision, tier: 'T2' }]} onAutoReview={(target) => autoReviewed.push(target.decisionId)} />);
     await settle();
-    expect(autoReviewed).toEqual([]);
+    expect(autoReviewed).toEqual([decision.id]);
+  });
+
+  it('queues every delegated decision instead of stopping at an arbitrary review-size cap', async () => {
+    const fetchMock = stubAssist(CONFIDENT);
+    const all = decisionsAcross(61);
+    const autoReviewed: string[] = [];
+    render(<Harness
+      targets={all.map((decision) => ({ decisionId: decision.id, decision, tier: 'T1' }))}
+      onAutoReview={(target) => autoReviewed.push(target.decisionId)}
+    />);
+
+    await waitFor(() => expect(autoReviewed).toHaveLength(61));
+    expect(fetchMock).toHaveBeenCalledTimes(61);
   });
 
   it('leaves a change owed when the delegated answer is not confident', async () => {

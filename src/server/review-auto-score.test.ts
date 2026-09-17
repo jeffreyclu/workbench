@@ -56,8 +56,10 @@ describe('background review scoring', () => {
 
     await scheduleReviewAutoScore(repository, { workItemId: 'item-1' }, process.cwd());
 
-    expect(requestReviewAssist).toHaveBeenCalledTimes(2);
+    expect(requestReviewAssist).toHaveBeenCalledTimes(4);
     expect(requestReviewAssist.mock.calls[0][1]).toBe('score_risk');
+    expect(requestReviewAssist.mock.calls.filter((call) => call[1] === 'score_risk')).toHaveLength(2);
+    expect(requestReviewAssist.mock.calls.filter((call) => call[1] === 'explain')).toHaveLength(2);
     // Intent is not part of a risk score's prompt, so it is not part of its request.
     expect(requestReviewAssist.mock.calls[0][3]).toBeNull();
     const streamed = publishRealtimeReviewScore.mock.calls.map(([score]) => score);
@@ -94,9 +96,15 @@ describe('background review scoring', () => {
     const repository = newRepository();
     getWorkspaceDiff.mockResolvedValue(diffWith(1));
     let release: (() => void) | null = null;
-    requestReviewAssist.mockImplementation(() => new Promise<string>((resolve) => {
-      release = () => resolve('SCORE: 10\nsafe');
-    }));
+    let scoreCount = 0;
+    requestReviewAssist.mockImplementation((_db, action) => {
+      if (action === 'explain') return Promise.resolve('Looks safe.\nCONFIDENCE: high');
+      scoreCount += 1;
+      if (scoreCount > 1) return Promise.resolve('SCORE: 10\nsafe');
+      return new Promise<string>((resolve) => {
+        release = () => resolve('SCORE: 10\nsafe');
+      });
+    });
 
     const first = scheduleReviewAutoScore(repository, { workItemId: 'item-4' }, process.cwd());
     await vi.waitFor(() => expect(release).not.toBeNull());
@@ -129,7 +137,7 @@ describe('background review scoring', () => {
 
     await scheduleReviewAutoScore(repository, { workItemId: 'item-5' }, process.cwd());
 
-    expect(requestReviewAssist).toHaveBeenCalledTimes(45);
+    expect(requestReviewAssist).toHaveBeenCalledTimes(90);
     expect(reviewAutoScoreSnapshot({ workItemId: 'item-5' }, 'rev-1')).toMatchObject({ total: 45, skipped: 0 });
   });
 
@@ -152,6 +160,47 @@ describe('background review scoring', () => {
     expect(publishRealtimeReviewScore).toHaveBeenCalledTimes(4);
   });
 
+  it('persists a confident delegated verdict so the queue is already settled when opened', async () => {
+    const repository = newRepository();
+    const item = repository.create({ title: 'Automated review', description: 'Review the change.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
+    getWorkspaceDiff.mockResolvedValue(diffWith(1));
+    requestReviewAssist.mockImplementation((_db, action) => Promise.resolve(action === 'score_risk'
+      ? 'SCORE: 24\nSmall production edit.'
+      : 'The retry path changes.\nCONFIDENCE: high'));
+
+    await scheduleReviewAutoScore(repository, { workItemId: item.id }, process.cwd());
+
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([
+      expect.objectContaining({ state: 'reviewed', note: 'Reviewed automatically by Review Director.' }),
+    ]);
+    expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')).toMatchObject({ autoReviewed: 1 });
+  });
+
+  it('prepares every critical field instead of stopping after the risk score', async () => {
+    const repository = newRepository();
+    const item = repository.create({ title: 'Protect authorization', description: 'Keep denied requests denied.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
+    getWorkspaceDiff.mockResolvedValue({
+      ...diffWith(1),
+      files: [{
+        path: 'src/server/auth.ts', status: 'modified' as const, additions: 1, deletions: 1, isBinary: false,
+        patch: '@@ -1 +1 @@ authorize\n-return deny(request);\n+return authorize(request);',
+      }],
+    });
+    requestReviewAssist.mockImplementation((_db, action) => Promise.resolve(action === 'score_risk' ? 'SCORE: 82\nAuthorization boundary.' : `${action} answer`));
+
+    await scheduleReviewAutoScore(repository, { workItemId: item.id }, process.cwd());
+
+    expect(requestReviewAssist.mock.calls.map((call) => call[1])).toEqual([
+      'score_risk', 'explain', 'what_could_break', 'compare_task_intent',
+    ]);
+    expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')).toMatchObject({
+      criticalCompleted: 1,
+      criticalTotal: 1,
+      autoReviewed: 0,
+    });
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([]);
+  });
+
   it('starts a missing revision asynchronously when a Changes pane observes it', async () => {
     const repository = newRepository();
     const item = repository.create({ title: 'Observed review', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
@@ -163,7 +212,7 @@ describe('background review scoring', () => {
     ensureReviewAutoScore(repository, { workItemId: item.id }, 'rev-1');
 
     await vi.waitFor(() => expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')?.running).toBe(false));
-    expect(requestReviewAssist).toHaveBeenCalledTimes(1);
+    expect(requestReviewAssist).toHaveBeenCalledTimes(2);
   });
 
   it('serves scores already persisted for the current diff without spending a model turn', async () => {

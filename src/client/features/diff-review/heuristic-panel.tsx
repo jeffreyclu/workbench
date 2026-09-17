@@ -87,7 +87,7 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-export const DiffReviewHeuristicPanel = memo(function DiffReviewHeuristicPanel({ decision, decisions = [], staleReferences = null }: {
+export const DiffReviewHeuristicPanel = memo(function DiffReviewHeuristicPanel({ decision, decisions = [], staleReferences = null, defaultOpen = false }: {
   decision: ReviewDecision;
   /** The whole review. Evidence packs are cross-decision by nature — a new
    * function and its test always land in different files, so different
@@ -98,8 +98,11 @@ export const DiffReviewHeuristicPanel = memo(function DiffReviewHeuristicPanel({
    * reason: the panel is fully useful without it and simply cannot raise this
    * one finding until it arrives. */
   staleReferences?: StaleReferenceReport | null;
+  /** Critical decisions arrive expanded because Review Director has already
+   * chosen them for close study; lower-priority decisions stay compact. */
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
 
   const { attention, headline, why, concerns, overflow, clean } = useMemo(() => {
     const explanation = explainChangeType(decision.hunks.map((hunk) => ({

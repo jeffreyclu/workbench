@@ -355,6 +355,23 @@ they escalate. Queue selection controls which critical path the visualizer
 shows; the map helps reason about that selected path but does not replace the
 queue as the review workflow.
 
+### Review Director owns the whole review queue
+
+*Decision from Jeffrey, 2026-09-17.* Code review has one supervisor, named
+**Review Director**, responsible for the complete queue rather than separate
+ad-hoc callers. It creates review decisions, assigns and explains their priority,
+delegates bounded decisions, records confident delegated verdicts, and prepares
+the deepest assistance for critical decisions.
+
+All test-only decisions are lower priority than production decisions and are
+reviewed automatically by a delegated model. They are never blindly marked done:
+low-confidence answers leave them open. Critical decisions remain human-owned and
+must arrive with the deterministic heuristic expanded plus AI risk, a plain-English
+explanation, concrete breakage analysis, and task alignment when a linked task exists.
+The review surface shows Review Director progress and counts so its work is observable.
+Delegation has bounded concurrency but no per-review count ceiling: every delegated
+decision is queued, including test-only changes.
+
 ### Mobile composer closes as a bottom sheet
 
 *Decision from Jeffrey, 2026-08-27.* When expanded on phones, the composer is

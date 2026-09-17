@@ -147,5 +147,8 @@ export type ReviewAutoScoreSnapshot = {
   completed: number;
   total: number;
   skipped: number;
+  autoReviewed: number;
+  criticalCompleted: number;
+  criticalTotal: number;
   entries: Array<{ decisionId: string; ordinal: number; answer: string | null; error: string | null }>;
 };

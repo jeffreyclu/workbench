@@ -767,6 +767,12 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-ai-risk-score[data-band="high"] { --band: #e1a68f; }
 .diff-review-ai-risk-score.is-pending { opacity: .55; }
 .diff-review-ai-risk-reason { color: #a9a89f; font-size: 11px; min-width: 0; }
+.diff-review-director-analysis { display: grid; gap: 8px; padding: 11px 12px; border: 1px solid #596234; border-radius: 7px; background: #1a1d14; }
+.diff-review-director-analysis h4 { margin: 0; color: var(--acid); font: 700 10px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }
+.diff-review-director-analysis dl { display: grid; gap: 9px; margin: 0; }
+.diff-review-director-analysis dl > div { display: grid; gap: 3px; }
+.diff-review-director-analysis dt { color: #85847d; font: 700 9px 'DM Mono'; letter-spacing: .06em; text-transform: uppercase; }
+.diff-review-director-analysis dd { margin: 0; color: #c9c8c1; white-space: pre-wrap; font-size: 12px; line-height: 1.5; }
 .diff-review-ai-assist { display: grid; align-content: start; gap: 8px; padding-top: 14px; border-top: 1px solid #242421; }
 .diff-review-ai-assist-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .diff-review-ai-assist-head h4 { margin: 0; }

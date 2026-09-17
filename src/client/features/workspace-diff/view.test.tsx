@@ -22,9 +22,8 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
   };
 }
 
-/** This surface never scores decisions ambiently; assistance is on demand from
- * the detail card instead. Tests only stub the requests this view actually
- * makes, so a stray `/api/diff-confidence` call would fail as unexpected. */
+/** Review Director work is backgrounded by the source that owns each diff;
+ * tests still reject obsolete `/api/diff-confidence` requests. */
 function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[], onFixRequest?: (prompt: string) => void, scope: WorkspaceDiffScope = { workItemId: 'work-item-1' }) {
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -347,7 +346,7 @@ describe('WorkspaceDiffView decision queue', () => {
     expect(fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith('/workspaces/selection') && (init as RequestInit | undefined)?.method === 'PUT')).toHaveLength(1);
   });
 
-  it('keeps source order when decisions have no relationships, with no ambient AI scoring', async () => {
+  it('puts critical production risk ahead of unrelated source order, with no ambient block scoring', async () => {
     const files: WorkspaceDiffFile[] = [
       { path: 'src/local.ts', editorUrl: 'vscode://file/tmp/workbench/src/local.ts', previousPath: null, status: 'modified', additions: 2, deletions: 2, isBinary: false, patch: '@@ -1 +1 @@ localOne\n-before\n+after\n@@ -10 +10 @@ localTwo\n-old\n+new' },
       { path: 'src/server/auth/routes.ts', previousPath: null, status: 'modified', additions: 3, deletions: 1, isBinary: false, patch: '@@ -20 +20,3 @@ authorizeRequest\n-export function authorizeRequest() {}\n+export async function authorizeRequest() {\n+  await repository.update(session)\n+  throw new Error("denied")' },
@@ -365,16 +364,16 @@ describe('WorkspaceDiffView decision queue', () => {
     renderView(fetchMock, true);
 
     expect(await screen.findByLabelText('3 decisions across 2 files, 0 completed')).toHaveTextContent('3 decisions across 2 files');
-    expect(screen.getByRole('button', { name: /Decision 1.*local/ })).toHaveAttribute('aria-current', 'step');
-    expect(screen.getByText('src/local.ts', { selector: 'code' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Decision 3.*risk signals/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decision 3.*risk signals/ })).toHaveAttribute('aria-current', 'step');
+    expect(screen.getByText('src/server/auth/routes.ts', { selector: 'code' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decision 1.*local/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh changes' })).toHaveClass('workspace-diff-refresh-pending');
 
     const decisionQueue = screen.getByRole('navigation', { name: 'Review decision queue' });
     const decisionButtons = within(decisionQueue).getAllByRole('button');
-    expect(decisionButtons[0]).toHaveTextContent('local');
-    fireEvent.click(within(decisionQueue).getByRole('button', { name: /Decision 3/ }));
-    expect(await screen.findByLabelText('Full diff for src/server/auth/routes.ts')).toBeInTheDocument();
+    expect(decisionButtons[0]).toHaveTextContent('authorize request');
+    fireEvent.click(within(decisionQueue).getByRole('button', { name: /Decision 1/ }));
+    expect(await screen.findByLabelText('Full diff for src/local.ts')).toBeInTheDocument();
   });
 
   it('uses the selected file extension to syntax-highlight review diff lines', async () => {
@@ -677,6 +676,36 @@ describe('WorkspaceDiffView pull-request source', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
 
     await waitFor(() => expect(requests.some((request) => request.startsWith('PUT') && request.includes('/hunk-reviews/batch') && request.includes('"revision":"sha-42"'))).toBe(true));
+  });
+
+  it('runs the complete critical Review Director analysis for a pull-request diff', async () => {
+    const criticalPullRequest = {
+      ...pullRequestDiff(1, null),
+      files: [{
+        path: 'src/server/auth/routes.ts', previousPath: null, status: 'modified' as const, additions: 3, deletions: 1, isBinary: false,
+        patch: '@@ -20 +20,3 @@ authorizeRequest\n-export function authorizeRequest() {}\n+export async function authorizeRequest() {\n+  await repository.update(session)\n+  throw new Error("denied")',
+      }],
+    };
+    const actions: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench' }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.includes('/api/github/pull-request-diff')) return json({ diff: criticalPullRequest });
+      if (url.includes('/api/review-auto-score')) return json({ snapshot: null });
+      if (url.endsWith('/api/review-assist')) {
+        actions.push((JSON.parse(String(init?.body)) as { action: string }).action);
+        return json({ answer: 'prepared' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, null, [pullRequestUrl]);
+
+    await findSelectedDecision('authorize request');
+    await waitFor(() => expect(actions).toEqual(['score_risk', 'explain', 'what_could_break']));
+    expect(screen.getByText('Review Director — 1 of 1 critical decisions fully enriched.')).toBeInTheDocument();
   });
 
   it('restores the selected decision while reopening on the relevant pull request', async () => {

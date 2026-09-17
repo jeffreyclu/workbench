@@ -1,8 +1,10 @@
 import { existsSync } from 'node:fs';
-import { buildReviewDecisions, reviewAssistDecisionPayload, type ReviewDecision } from '../shared/review-decisions.js';
 import type { ReviewChangeType } from '../shared/change-type.js';
-import { publishRealtimeReviewScore } from './realtime.js';
-import { lookupReviewAssist, requestReviewAssist } from './review-assist-ai.js';
+import { reviewAssistDecisionPayload, type ReviewDecision } from '../shared/review-decisions.js';
+import { createReviewDirectorPlan, type ReviewDirectorEntry } from '../shared/review-director.js';
+import { delegationOutcome } from '../shared/review-delegation.js';
+import { publishRealtimeEvent, publishRealtimeReviewScore } from './realtime.js';
+import { lookupReviewAssist, requestReviewAssist, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist-ai.js';
 import type { WorkItemRepository } from './repository.js';
 import { getWorkspaceDiff } from './workspace-diff.js';
 
@@ -18,6 +20,9 @@ export type ReviewAutoScoreSnapshot = {
   /** Decisions past the cap that were deliberately not auto-scored. Reported
    * rather than hidden: silent truncation reads as "everything was scored". */
   skipped: number;
+  autoReviewed: number;
+  criticalCompleted: number;
+  criticalTotal: number;
   entries: ReviewScoreEntry[];
 };
 
@@ -27,24 +32,27 @@ export type ReviewAutoScoreSnapshot = {
 const AUTO_SCORE_CONCURRENCY = 2;
 const AUTO_SCORE_ATTEMPTS = 3;
 
-/** Which decisions the capped background budget is spent on first. When the cap
- * bites it should drop the scores a reviewer can already guess — docs,
- * generated output, test assertions — before the ones they cannot, like a
- * deletion whose remaining references are unknown or a wholesale rewrite. */
+/** Compatibility helper retained for callers and tests. Review Director now
+ * supplies the real queue order; this fallback keeps production semantics
+ * ahead of tests and purely mechanical output. */
 const AUTO_SCORE_PRIORITY: Record<ReviewChangeType, number> = {
-  deletion: 0, replacement: 0,
-  behavior_edit: 1, new_code: 1, refactor_pure: 1,
-  extension: 2, move_rename: 2,
-  config_dep: 3, test_only: 4,
-  docs_comment: 5, generated: 5,
+  deletion: 0,
+  replacement: 0,
+  behavior_edit: 1,
+  new_code: 1,
+  refactor_pure: 1,
+  extension: 2,
+  move_rename: 2,
+  config_dep: 3,
+  test_only: 4,
+  docs_comment: 5,
+  generated: 5,
 };
 
-/** Ordering only, never filtering: every decision past the cap stays available
- * from its own Score risk button and is counted in `skipped`. */
 export function orderDecisionsForAutoScore(decisions: ReviewDecision[]): ReviewDecision[] {
   return [...decisions].sort((left, right) => {
-    const byType = (AUTO_SCORE_PRIORITY[left.changeType] ?? 3) - (AUTO_SCORE_PRIORITY[right.changeType] ?? 3);
-    return byType !== 0 ? byType : left.ordinal - right.ordinal;
+    const byType = AUTO_SCORE_PRIORITY[left.changeType] - AUTO_SCORE_PRIORITY[right.changeType];
+    return byType || left.ordinal - right.ordinal;
   });
 }
 
@@ -55,8 +63,13 @@ type ScoreJob = {
   skipped: number;
   running: boolean;
   completed: number;
+  autoReviewed: number;
+  criticalCompleted: number;
+  criticalTotal: number;
   entries: Map<string, ReviewScoreEntry>;
 };
+
+const AUTOMATED_REVIEW_NOTE = 'Reviewed automatically by Review Director.';
 
 const jobs = new Map<string, ScoreJob>();
 const inFlight = new Map<string, Promise<void>>();
@@ -79,6 +92,43 @@ function resolveScoreWorkspace(repository: WorkItemRepository, scope: ReviewScor
   return fallback && existsSync(fallback) ? fallback : null;
 }
 
+function resolveTaskIntent(repository: WorkItemRepository, scope: ReviewScoreScope): ReviewAssistTaskIntent {
+  const row = 'workItemId' in scope
+    ? repository.database.prepare('SELECT title, description FROM work_items WHERE id = ?').get(scope.workItemId)
+    : repository.database.prepare(`SELECT work_items.title, work_items.description
+        FROM shared_conversations
+        JOIN work_items ON work_items.id = shared_conversations.work_item_id
+        WHERE shared_conversations.id = ?`).get(scope.conversationId);
+  const item = row as { title?: string; description?: string | null } | undefined;
+  return item?.title ? { title: item.title, description: item.description ?? '' } : null;
+}
+
+async function requestWithRetry(
+  repository: WorkItemRepository,
+  action: ReviewAssistAction,
+  entry: ReviewDirectorEntry,
+  decisions: ReviewDecision[],
+  taskIntent: ReviewAssistTaskIntent,
+): Promise<string> {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= AUTO_SCORE_ATTEMPTS; attempt += 1) {
+    try {
+      return await requestReviewAssist(
+        repository.database,
+        action,
+        reviewAssistDecisionPayload(entry.decision, decisions),
+        taskIntent,
+        undefined,
+        entry.tier,
+      );
+    } catch (failure) {
+      lastError = failure instanceof Error ? failure : new Error('Review Director analysis failed.');
+      if (attempt < AUTO_SCORE_ATTEMPTS) await new Promise((resolveRetry) => setTimeout(resolveRetry, attempt * 500));
+    }
+  }
+  throw lastError ?? new Error('Review Director analysis failed.');
+}
+
 async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreScope, fallbackWorkspace: string | null): Promise<void> {
   const key = scopeKey(scope);
   const workspacePath = resolveScoreWorkspace(repository, scope, fallbackWorkspace);
@@ -88,15 +138,23 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
     jobs.delete(key);
     return;
   }
-  const decisions = buildReviewDecisions(diff.files, repository.listDiffHunkReviews(scope, diff.revision));
-  const scoreable = orderDecisionsForAutoScore(decisions);
+  const taskIntent = resolveTaskIntent(repository, scope);
+  const plan = createReviewDirectorPlan(diff.files, repository.listDiffHunkReviews(scope, diff.revision));
+  // T0 is already settled by proof. Spending model turns on it would add cost
+  // without changing the queue or producing information Jeffrey needs.
+  const reviewable = plan.orderedDecisions
+    .map((decision) => plan.byDecisionId.get(decision.id)!)
+    .filter((entry) => !entry.routing.autoSettled);
   const job: ScoreJob = {
     scope,
     revision: diff.revision,
-    total: scoreable.length,
+    total: reviewable.length,
     skipped: 0,
     running: true,
     completed: 0,
+    autoReviewed: 0,
+    criticalCompleted: 0,
+    criticalTotal: reviewable.filter((entry) => entry.critical).length,
     entries: new Map(),
   };
   jobs.set(key, job);
@@ -105,19 +163,41 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
     const scoreNext = async (): Promise<void> => {
       const index = cursor;
       cursor += 1;
-      if (index >= scoreable.length) return;
-      const decision = scoreable[index];
+      if (index >= reviewable.length) return;
+      const entry = reviewable[index];
+      const { decision } = entry;
       let answer: string | null = null;
       let error: string | null = null;
-      for (let attempt = 1; attempt <= AUTO_SCORE_ATTEMPTS; attempt += 1) {
-        try {
-          answer = await requestReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision, decisions), null);
-          error = null;
-          break;
-        } catch (failure) {
-          error = failure instanceof Error ? failure.message : 'Background risk scoring failed.';
-          if (attempt < AUTO_SCORE_ATTEMPTS) await new Promise((resolveRetry) => setTimeout(resolveRetry, attempt * 500));
+      try {
+        answer = await requestWithRetry(repository, 'score_risk', entry, plan.decisions, taskIntent);
+
+        if (entry.delegated && decision.state === null) {
+          const delegatedAnswer = await requestWithRetry(repository, 'explain', entry, plan.decisions, taskIntent);
+          if (entry.autoReview && delegationOutcome(entry.tier, delegatedAnswer).autoReview) {
+            try {
+              repository.upsertDiffHunkReviews(scope, {
+                revision: diff.revision,
+                hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange, contentHash: hunk.contentHash })),
+                state: 'reviewed',
+                note: AUTOMATED_REVIEW_NOTE,
+              });
+              job.autoReviewed += 1;
+              publishRealtimeEvent('workItemId' in scope ? 'work-items' : 'shared');
+            } catch {
+              // The owning task or conversation can be deleted while a model
+              // turn is in flight. Keep the durable analysis; there is no
+              // longer a queue row to attach the automatic verdict to.
+            }
+          }
         }
+
+        if (entry.critical) {
+          const actions = entry.enrichmentActions.filter((action) => action !== 'score_risk' && (action !== 'compare_task_intent' || taskIntent));
+          for (const action of actions) await requestWithRetry(repository, action, entry, plan.decisions, taskIntent);
+          job.criticalCompleted += 1;
+        }
+      } catch (failure) {
+        error = failure instanceof Error ? failure.message : 'Review Director analysis failed.';
       }
       job.completed += 1;
       job.entries.set(decision.id, { decisionId: decision.id, ordinal: decision.ordinal, answer, error });
@@ -126,17 +206,17 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
       });
       await scoreNext();
     };
-    await Promise.all(Array.from({ length: Math.min(AUTO_SCORE_CONCURRENCY, scoreable.length) }, () => scoreNext()));
+    await Promise.all(Array.from({ length: Math.min(AUTO_SCORE_CONCURRENCY, reviewable.length) }, () => scoreNext()));
   } finally {
     job.running = false;
   }
 }
 
 /**
- * Scores every decision in a scope's current diff in the background and streams
- * each result as it settles. Called when an agent run comes to rest, so the
- * reviewer opens Changes to panels that are already populating rather than to a
- * queue that only scores what they happen to dwell on.
+ * Executes the Review Director plan for a scope's current diff in the
+ * background and streams each result as it settles. Called when an agent run
+ * comes to rest, so delegated verdicts and critical analysis are already
+ * populating before the reviewer opens Changes.
  *
  * Answers land in the same durable assist cache the on-demand buttons read, so
  * a decision scored here costs nothing when the reviewer opens it, and a
@@ -186,6 +266,9 @@ export function reviewAutoScoreSnapshot(scope: ReviewScoreScope, revision: strin
     completed: job.completed,
     total: job.total,
     skipped: job.skipped,
+    autoReviewed: job.autoReviewed,
+    criticalCompleted: job.criticalCompleted,
+    criticalTotal: job.criticalTotal,
     entries: [...job.entries.values()],
   };
 }
@@ -209,13 +292,43 @@ async function cachedScoreEntries(repository: WorkItemRepository, scope: ReviewS
   // A moved diff is not this pane's diff: replaying answers keyed to other
   // hunks would attach a score to a decision it was never about.
   if (diff.revision !== revision || diff.changedFiles === 0) return [];
-  const decisions = buildReviewDecisions(diff.files, repository.listDiffHunkReviews(scope, diff.revision));
+  const plan = createReviewDirectorPlan(diff.files, repository.listDiffHunkReviews(scope, diff.revision));
   const entries: ReviewScoreEntry[] = [];
-  for (const decision of decisions) {
-    const answer = lookupReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision, decisions), null);
+  for (const entry of plan.entries) {
+    if (entry.routing.autoSettled) continue;
+    const { decision } = entry;
+    const answer = lookupReviewAssist(repository.database, 'score_risk', reviewAssistDecisionPayload(decision, plan.decisions), null, entry.tier);
     if (answer) entries.push({ decisionId: decision.id, ordinal: decision.ordinal, answer, error: null });
   }
   return entries;
+}
+
+async function cachedDirectorCounts(repository: WorkItemRepository, scope: ReviewScoreScope, revision: string): Promise<{
+  autoReviewed: number;
+  criticalCompleted: number;
+  criticalTotal: number;
+}> {
+  const workspacePath = resolveScoreWorkspace(repository, scope, null);
+  if (!workspacePath) return { autoReviewed: 0, criticalCompleted: 0, criticalTotal: 0 };
+  const diff = await getWorkspaceDiff(workspacePath);
+  if (diff.revision !== revision || diff.changedFiles === 0) return { autoReviewed: 0, criticalCompleted: 0, criticalTotal: 0 };
+  const taskIntent = resolveTaskIntent(repository, scope);
+  const plan = createReviewDirectorPlan(diff.files, repository.listDiffHunkReviews(scope, revision));
+  const critical = plan.entries.filter((entry) => entry.critical);
+  const criticalCompleted = critical.filter((entry) => entry.enrichmentActions
+    .filter((action) => action !== 'compare_task_intent' || taskIntent)
+    .every((action) => lookupReviewAssist(
+      repository.database,
+      action,
+      reviewAssistDecisionPayload(entry.decision, plan.decisions),
+      taskIntent,
+      entry.tier,
+    ))).length;
+  return {
+    autoReviewed: plan.decisions.filter((decision) => decision.note === AUTOMATED_REVIEW_NOTE).length,
+    criticalCompleted,
+    criticalTotal: critical.length,
+  };
 }
 
 /**
@@ -227,8 +340,10 @@ async function cachedScoreEntries(repository: WorkItemRepository, scope: ReviewS
 export async function reviewAutoScoreView(repository: WorkItemRepository, scope: ReviewScoreScope, revision: string): Promise<ReviewAutoScoreSnapshot | null> {
   const live = reviewAutoScoreSnapshot(scope, revision);
   let cached: ReviewScoreEntry[] = [];
+  let counts = { autoReviewed: 0, criticalCompleted: 0, criticalTotal: 0 };
   try {
     cached = await cachedScoreEntries(repository, scope, revision);
+    counts = await cachedDirectorCounts(repository, scope, revision);
   } catch {
     // No repository, or git unavailable. The live job, if any, still replays.
   }
@@ -241,6 +356,9 @@ export async function reviewAutoScoreView(repository: WorkItemRepository, scope:
     completed: live?.completed ?? entries.size,
     total: live?.total ?? entries.size,
     skipped: live?.skipped ?? 0,
+    autoReviewed: Math.max(live?.autoReviewed ?? 0, counts.autoReviewed),
+    criticalCompleted: Math.max(live?.criticalCompleted ?? 0, counts.criticalCompleted),
+    criticalTotal: Math.max(live?.criticalTotal ?? 0, counts.criticalTotal),
     entries: [...entries.values()],
   };
 }

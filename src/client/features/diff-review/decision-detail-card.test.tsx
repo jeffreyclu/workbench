@@ -179,6 +179,35 @@ describe('diff review decision detail', () => {
     vi.unstubAllGlobals();
   });
 
+  it('opens the heuristic and shows every prepared field for a critical decision', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const action = JSON.parse(String(init?.body ?? '{}')).action as string;
+      const answers: Record<string, string> = {
+        score_risk: 'SCORE: 88\nAuthorization boundary.',
+        explain: 'This changes which requests are authorized.',
+        what_could_break: 'Denied requests could be accepted.',
+        compare_task_intent: 'Aligned with the linked task.',
+      };
+      return json({ answer: answers[action] ?? null });
+    }));
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DiffReviewDecisionDetailCard
+          decision={{ ...decision, riskSignals: ['auth'] }}
+          taskIntent={{ title: 'Protect authorization', description: 'Keep denied requests denied.' }}
+          tier="T3"
+          critical
+        ><div /></DiffReviewDecisionDetailCard>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole('button', { name: /Heuristic/ })).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(screen.getByText('This changes which requests are authorized.')).toBeInTheDocument());
+    expect(screen.getByText('Denied requests could be accepted.')).toBeInTheDocument();
+    expect(screen.getByText('Aligned with the linked task.')).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
   it('does not invent a number when the model ignores the score format', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith('/api/review-assist/stream')
       ? sse([{ type: 'done', answer: 'I cannot assess this change.' }])

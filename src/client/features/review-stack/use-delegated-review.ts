@@ -12,10 +12,6 @@ import { delegationOutcome, type DelegationTarget } from './review-delegation.js
  * behind work nobody asked for. */
 const DELEGATION_CONCURRENCY = 2;
 
-/** A ceiling on what one revision may spend unprompted. Past it the surface
- * says how many changes it left alone rather than implying it covered them. */
-const DELEGATION_LIMIT = 60;
-
 export interface DelegatedReviewProgress {
   running: boolean;
   completed: number;
@@ -23,7 +19,8 @@ export interface DelegatedReviewProgress {
   /** Turns that failed. Counted separately so a dead endpoint does not read as
    * a diff full of confidently settled changes. */
   failed: number;
-  /** Delegable changes past the per-revision ceiling. */
+  /** Retained for response compatibility. Review Director does not skip
+   * delegated decisions, so this remains zero. */
   skipped: number;
   /** The changes whose delegated turn is claimed but unanswered — queued or in
    * flight. Per-decision because a running total cannot tell a reviewer whether
@@ -229,13 +226,9 @@ export function useDelegatedReview(input: {
       setProgress(IDLE);
     }
     const keys = attempted.current.keys;
-    const room = DELEGATION_LIMIT - keys.size;
     const outstanding = latest.current.targets.filter((target) => !keys.has(targetKey(target)));
     if (outstanding.length === 0) return;
-    const pending = room > 0 ? outstanding.slice(0, room) : [];
-    const skipped = outstanding.length - pending.length;
-    if (skipped > 0) setProgress((current) => ({ ...current, skipped }));
-    if (pending.length === 0) return;
+    const pending = outstanding;
     // Claimed up front, not as each turn starts: the effect can re-run while
     // this sweep is in flight, and it must find nothing left to claim.
     for (const target of pending) {
