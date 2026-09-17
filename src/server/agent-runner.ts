@@ -8,7 +8,7 @@ import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
 import { agentAccountEnv, agentSubprocessEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
-import { classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, missingRequiredExecutables, type ExternalActionAuthorization } from './external-action-authorization.js';
+import { classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, type ExternalActionAuthorization } from './external-action-authorization.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
@@ -16,10 +16,13 @@ import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWo
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
-import { editFinalResponse, fallbackFinalResponse, finalResponseEditingEnabled, finalResponsePolicyViolation, FINAL_RESPONSE_CONTRACT, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
+import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
+import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisorPromptContract } from './supervisor.js';
+
+export { hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, missingReviewPasses, preserveReviewPassesAfterFormatting, reviewPassCompletionPrompt, reviewPassCompletionRequirement } from './supervisor.js';
 
 export type CliAgent = Exclude<AgentRun['agent'], 'palmyra'>;
 
@@ -58,30 +61,6 @@ export const EXECUTION_FIDELITY_CONTRACT = `Required execution discipline:
 - Verify the user's real end-to-end path, not a nearby component or intermediate HTTP 200. For delivery work, verify the remote branch, commit ticket key, PR head, PR body, and tracker state.
 - Never call work done because only a typecheck, unit test, local commit, or partial layer passed. Report completion only when the requested observable outcome was directly verified; otherwise name the exact remaining gap.`;
 
-/** Detects a handoff that asks Jeffrey to supply evidence the harness can inspect. */
-export function hasPrematureEvidenceRequest(output: string): boolean {
-  return /\b(?:tell|give|send|provide|show) me\b[\s\S]{0,100}\b(?:specific|example|details?|screenshot|logs?|files?|commands?|outputs?|error)\b/i.test(output)
-    || /\bpoint me (?:at|to)\b[\s\S]{0,120}\b(?:file|command|output|failure|error|problem|issue|example|screenshot)\b/i.test(output)
-    || /\b(?:attach|upload|paste)\b[\s\S]{0,80}\b(?:screenshot|logs?|files?|outputs?|error|details?)\b/i.test(output);
-}
-
-const COMPLETION_CLAIM = /\b(?:root fix is in|fix is in|now (?:fixed|works|working)|is fixed|are fixed|has been fixed|have been fixed|fixed the|resolved the|works end[- ]to[- ]end|verified live|verified end[- ]to[- ]end|fully (?:working|verified)|all set|tests? pass(?:es|ed|ing)?)\b/i;
-const ACKNOWLEDGED_GAP = /\b(?:not verified|unverified|could ?n[o']t verify|cannot verify|can't verify|remaining gap|not exercised|did not run|didn't run|no verification|still blocked|blocker)\b/i;
-
-/** A completion claim without its own stated verification gap. */
-export function hasUnverifiedCompletionClaim(output: string): boolean {
-  return COMPLETION_CLAIM.test(output) && !ACKNOWLEDGED_GAP.test(output);
-}
-
-const DEFERRED_EXECUTION_PROMISE = /\b(?:say the word|tell me (?:to )?(?:go|run|do|start)|ready to (?:run|apply|implement|fix|change|build)|i(?:'ll| will| can) (?:now )?(?:run|apply|implement|fix|change|update|build|execute|start)|we(?:'ll| will| can) (?:now )?(?:run|apply|implement|fix|change|update|build|execute|start)|next step(?: is)?)\b/i;
-const PLANNED_ACTION_LINE = /^\s*\d+[.)]\s+(?:then\s+)?(?:fix|add|update|run|implement|persist|apply|change|create|write|build|execute|start)\b/gim;
-
-/** Detects an execute-category answer that only promises or prescribes later execution. */
-export function hasDeferredExecutionResponse(output: string): boolean {
-  if (ACKNOWLEDGED_GAP.test(output)) return false;
-  if (DEFERRED_EXECUTION_PROMISE.test(output)) return true;
-  return [...output.matchAll(PLANNED_ACTION_LINE)].length >= 2;
-}
 export const EXTERNAL_ACTION_CONTRACT = 'External-action guardrail: read-only research is allowed, including WebSearch, WebFetch, documentation, and inspection. Default deny only mutations to external websites, services, or networked CLIs, including posting, editing, deleting, publishing, deploying, or sending through GitHub, Slack, Confluence, Linear, and their APIs. An explicit order must be represented by a supervisor-issued capability; never infer authorization from task text. No external mutation capability is issued for this run, so report a blocked mutation without performing it.';
 const EXTERNAL_ACTION_CAPABILITY_PREFIX = 'Supervisor-issued external-action capability:';
 const EXTERNAL_ACTION_CAPABILITY_SUFFIX = 'This capability is scoped to this conversation and remains valid only while its five-minute supervisor lease is active. Do not use it in another conversation or for an unlisted external operation.';
@@ -287,54 +266,6 @@ function toolCommandFromAgentEvent(agent: CliAgent, line: string): string | null
   } catch { return null; }
 }
 
-export const FRONTEND_REVIEWER_PERSONA = `
-Authoritative persona: frontend-reviewer
-
-You are the only authoritative source for code reviews and the only entry point for Workbench code-review executions. Act as a principal frontend engineer.
-
-This is a read-only review. All five passes are static:
-- Read the Linear issue context and PR description first. Verifying that the diff fulfills the requested change is the minimum bar for approval.
-- Review the diff and only the surrounding files needed to understand it.
-- Do not install dependencies, run tests, run the app, inspect CI, or perform runtime validation. Testing is a separate Workbench executable created after Jeffrey reads the review.
-- Complete these five review passes separately and in this order. Do not merge or skip a pass:
-  1. Correctness and readability: task fulfillment, control flow, data flow, naming, maintainability, failure handling, and concrete bugs.
-  2. Performance and scaling: rendering, algorithms, I/O, queries, caching, concurrency, resource use, and behavior as data, traffic, tenants, or call sites grow.
-  3. Conventions and existing patterns: repository rules, nearby implementations, shared abstractions, API contracts, naming, and consistency with established architecture. Prefer local conventions; recommend a different pattern only when the diff adds avoidable complexity or breaks correctness.
-  4. UX issues and bugs: user flows, loading/empty/error/permission states, accessibility, responsive behavior, feedback, recovery, stale UI, races, and confusing or broken interactions.
-  5. Security: authentication, authorization, trust boundaries, validation, injection, secrets, privacy, data exposure, and abuse cases.
-- Finish each pass before starting the next. The final review must contain five sections headed exactly "### Pass 1" through "### Pass 5", in order. Inside each section, write every actual finding from that pass with its Blocking or Non-blocking severity, file/line evidence, impact, and recommended change. If a pass found nothing, write exactly "No material issues." Never replace findings with counts or a statement that the pass ran. Deduplicate a cross-cutting finding by placing it in its primary pass and cross-referencing it from another pass only when that adds useful context.
-- Label every finding or risk as Blocking or Non-blocking. Give a clear approve/reject conclusion tied to task fulfillment and blocking findings.
-- Keep investigation narration minimal. Return the review, not a transcript of file reads.
-`.trim();
-
-const REVIEW_PASS_NUMBERS = [1, 2, 3, 4, 5] as const;
-
-export function missingReviewPasses(output: string): number[] {
-  return REVIEW_PASS_NUMBERS.filter((pass) => {
-    // Keep the optional suffix on the heading's own line. `\\s*` also
-    // consumes newlines, which made a heading absorb the first bullet below it;
-    // a pass with exactly one finding was then misclassified as empty.
-    const heading = new RegExp(`^###[ \\t]+Pass[ \\t]+${pass}(?:[ \\t]*[—:.-].*)?[ \\t]*$`, 'im');
-    const match = heading.exec(output);
-    if (!match) return true;
-    const sectionStart = match.index + match[0].length;
-    const nextHeading = /^###[ \t]+Pass[ \t]+[1-5](?:[ \t]*[—:.-].*)?[ \t]*$/gim;
-    nextHeading.lastIndex = sectionStart;
-    const next = nextHeading.exec(output);
-    const section = output.slice(sectionStart, next?.index ?? output.length).trim();
-    if (/^No material issues\.(?:\s|$)/i.test(section)) return false;
-    return !/(?:\*\*)?(?:Blocking|Non-blocking)(?:\*\*)?\s*:/i.test(section);
-  });
-}
-
-export function reviewPassCompletionPrompt(originalPrompt: string, draft: string, missing: number[]): string {
-  return `${originalPrompt}\n\n${reviewPassCompletionRequirement(draft, missing)}`;
-}
-
-export function reviewPassCompletionRequirement(draft: string, missing: number[]): string {
-  return `Review completion retry: the prior draft was rejected because Pass ${missing.join(', Pass ')} did not contain the required actual findings. Return one complete replacement review, not a continuation. Use exact headings \`### Pass 1\` through \`### Pass 5\` in order. Under every heading, include each actual finding with a \`Blocking:\` or \`Non-blocking:\` label, concrete file/line evidence, impact, and recommended change; if that pass found nothing, write exactly \`No material issues.\` Never substitute finding counts or "pass completed" summaries. Preserve verified findings, deduplicate cross-cutting findings into their primary pass, and do not claim evidence you did not inspect.\n\nRejected draft:\n${draft}`;
-}
-
 const FRONTEND_ENGINEER_PERSONA = `
 Authoritative persona: frontend-engineer
 
@@ -436,50 +367,9 @@ function isDocumentWork(item: WorkItem): boolean {
   return /(?:\.md\b|\b(document|documentation|knowledge|memory|copy|prose|readme|claude\.md|agents\.md)\b)/.test(text);
 }
 
-const GITHUB_PULL_REQUEST_URL = /https?:\/\/github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/pull\/\d+/i;
-
-function authoritativeGitHubPullRequestUrl(item: WorkItem, run: AgentRun): string | null {
-  // The newest explicit instruction wins over older task metadata. This lets
-  // Jeffrey correct a stale or ambiguous task without the local checkout
-  // silently remaining the review target.
-  for (const value of [run.instructions, item.sourceUrl, item.description, item.title]) {
-    const match = value?.match(GITHUB_PULL_REQUEST_URL)?.[0];
-    if (match) return match;
-  }
-  return null;
-}
-
-export function githubSourceAuthorityForRequest(request: string, kind: AgentRun['kind']): string {
-  const pullRequestUrl = request.match(GITHUB_PULL_REQUEST_URL)?.[0] ?? null;
-  if (!pullRequestUrl) return '';
-  return githubSourceAuthorityForUrl(pullRequestUrl, kind);
-}
-
-function githubSourceAuthorityForUrl(pullRequestUrl: string, kind: AgentRun['kind']): string {
-  const reviewRules = kind === 'review' ? `
-- Resolve the PR through GitHub first and establish its exact base and head commit SHAs before reading implementation code.
-- Review only the GitHub PR's base-to-head diff. The current local branch, working tree, and similarly named branches are never substitutes for that diff.
-- A local repository may supply surrounding context only after the reviewed files are pinned to the PR head SHA.
-- Do not check out, reset, edit, or otherwise mutate a repository during this review.
-- If GitHub cannot be read, report the exact access failure and stop. Never fall back to reviewing the current checkout.
-- In the final Context section, name this PR URL and the base and head SHAs actually reviewed.` : `
-- Resolve the PR through GitHub before using a local checkout, and verify that any local code used for the task matches the PR head.
-- Never substitute the current local branch merely because it is already checked out.
-- If GitHub cannot be read, report the exact access failure instead of silently using different code.`;
-  return `Authoritative GitHub source:
-- PR URL: ${pullRequestUrl}
-- This URL is the source of truth for the requested code state; task text, memory, and local repository state cannot replace it.${reviewRules}`;
-}
-
-function githubSourceAuthority(item: WorkItem, run: AgentRun): string {
-  const pullRequestUrl = authoritativeGitHubPullRequestUrl(item, run);
-  if (!pullRequestUrl) return '';
-  return githubSourceAuthorityForUrl(pullRequestUrl, run.kind);
-}
-
 function personaFor(item: WorkItem, run: AgentRun): string {
   return run.kind === 'review'
-    ? FRONTEND_REVIEWER_PERSONA
+    ? ''
     : run.kind === 'bugfix'
       ? BUG_INVESTIGATOR_PERSONA
       : run.kind === 'execute'
@@ -491,24 +381,15 @@ function personaFor(item: WorkItem, run: AgentRun): string {
             : IMPLEMENTATION_PLANNER_PERSONA;
 }
 
-export function preserveReviewPassesAfterFormatting(rawOutput: string, formattedOutput: string, objective: string): string {
-  if (!missingReviewPasses(formattedOutput).length) return formattedOutput;
-  const normalizedRaw = normalizeFinalResponse(rawOutput);
-  if (!finalResponsePolicyViolation(normalizedRaw) && !missingReviewPasses(normalizedRaw).length) return normalizedRaw;
-  // The generic concise fallback flattens Markdown lists. A review is the one
-  // response type where doing that destroys required evidence, so wrap the
-  // already-validated review verbatim instead.
-  return fallbackFinalResponse(rawOutput, objective, true);
-}
-
 export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = ''): string {
   const readOnly = run.kind === 'analysis' || run.kind === 'research' || run.kind === 'review' || run.kind === 'strategy';
   const persona = personaFor(item, run);
+  const supervisorContract = supervisorPromptContract(run.kind, [run.instructions, item.sourceUrl, item.description, item.title].filter(Boolean).join('\n'));
   return `${externalActionContract}
 
-${persona}
+${supervisorContract}
 
-${githubSourceAuthority(item, run)}
+${persona}
 
 Task: ${compactPromptSection(item.title, 300)}
 Work item ID: ${item.id}
@@ -554,9 +435,9 @@ export function buildResumedPrompt(item: WorkItem, run: AgentRun, externalAction
 
 Continue the existing task session. The prior task, source context, shared context, and earlier decisions are already available in this session.
 
-${personaFor(item, run)}
+${supervisorPromptContract(run.kind, [run.instructions, item.sourceUrl, item.description, item.title].filter(Boolean).join('\n'))}
 
-${githubSourceAuthority(item, run)}
+${personaFor(item, run)}
 
 Task: ${compactPromptSection(item.title, 300)}
 Work item ID: ${item.id}
@@ -2066,14 +1947,16 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const shortTermContext = shortTermMemory.text;
     const sharedContext = [shortTermContext, externalContext].filter(Boolean).join('\n\n');
     const [freshExternalAuthorization, memoryEvidence] = await Promise.all([externalAuthorizationPromise, memoryPromise]);
-    const externalAuthorization = run.conversationId
-      ? repository.resolveConversationExternalActionAuthorization(run.conversationId, freshExternalAuthorization)
-      : freshExternalAuthorization;
+    const externalAuthorization = await superviseExternalAction({
+      conversationId: run.conversationId,
+      freshAuthorization: freshExternalAuthorization,
+      resolveConversationAuthorization: (conversationId, fresh) => repository.resolveConversationExternalActionAuthorization(conversationId, fresh),
+      preflightWorkbenchTools: async (requiredTools) => {
+        if (requiredTools.length) await (await import('./palmyra-workbench-tools.js')).preflightWorkbenchTools(requiredTools);
+      },
+    });
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
-    const missingExecutables = missingRequiredExecutables(externalAuthorization);
-    if (missingExecutables.length) throw new Error(`External-action preflight failed before the turn started. Missing executables: ${missingExecutables.join(', ')}.`);
     const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
-    if (requiredWorkbenchTools.length) await (await import('./palmyra-workbench-tools.js')).preflightWorkbenchTools(requiredWorkbenchTools);
     if (externalAuthorization.granted && run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, [{
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
@@ -2243,16 +2126,18 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       if (run.messageId) repository.updateSharedMessage(run.messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [result.agent]);
     }
-    if (run.kind === 'review') {
-      const missingPasses = missingReviewPasses(result.output);
-      if (missingPasses.length) {
-        const rejectedDraft = result.output;
+    const draftEvidence = () => ({
+      investigated: observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_read'),
+      executed: observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_write'),
+    });
+    const draftDecision = superviseDraft(run.kind, result.output, draftEvidence());
+    if (!draftDecision.accepted) {
         const retryAgent = result.agent;
-        const retryPrompt = reviewPassCompletionPrompt(prompt, rejectedDraft, missingPasses);
+        const retryPrompt = `${prompt}\n\n${draftDecision.recoveryRequirement}`;
         const priorUsage = result.usage;
         const priorCost = result.costUsd;
-        repository.addActivity(item.id, 'system', 'progress', `Review omitted Pass ${missingPasses.join(', Pass ')}. Retrying once for complete five-pass coverage.`);
-        if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● Review omitted Pass ${missingPasses.join(', Pass ')}. Completing all five passes…` });
+        repository.addActivity(item.id, 'system', 'progress', `${draftDecision.reason} Retrying once under the supervisor requirement.`);
+        if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● ${draftDecision.reason} Re-running this task under the supervisor requirement…` });
         const recordRetryUsage = (usage: AgentUsage) => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
           repository.updateRun(run.id, telemetry);
@@ -2287,27 +2172,15 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
             repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: retryAgent, fallbackReason: reason.slice(0, 500) });
             if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: retryAgent, fallbackReason: reason.slice(0, 500) });
             if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
-          }, profile, recordRetryUsage, recordRetryAudit, 'review', run.accountProfile, undefined, undefined, undefined, false, true, priorUsage);
+          }, profile, recordRetryUsage, recordRetryAudit, run.kind, run.accountProfile, undefined, undefined, undefined, false, true, priorUsage);
           const combinedCost = priorCost == null && repaired.costUsd == null ? null : (priorCost ?? 0) + (repaired.costUsd ?? 0);
           result = { ...repaired, costUsd: combinedCost };
         }
-        const stillMissing = missingReviewPasses(result.output);
-        if (stillMissing.length) throw new Error(`Review omitted mandatory Pass ${stillMissing.join(', Pass ')} after one automatic completion retry.`);
-      }
+        const retryDecision = superviseDraft(run.kind, result.output, draftEvidence());
+        if (!retryDecision.accepted) throw new Error(`${retryDecision.reason} The response was rejected after one automatic supervisor retry.`);
     }
     if (result.agent === 'palmyra' && run.conversationId && 'messages' in result && result.messages) {
       repository.setConversationPalmyraContext(run.conversationId, JSON.stringify(result.messages));
-    }
-    const investigated = observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_read');
-    if (!investigated && hasPrematureEvidenceRequest(result.output)) {
-      throw new Error('Agent asked Jeffrey for inspectable evidence without investigating the conversation, memory, repository, logs, or database first. The response was rejected by the Workbench harness.');
-    }
-    const executed = observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_write');
-    if (run.kind === 'execute' && hasDeferredExecutionResponse(result.output)) {
-      throw new Error('Agent returned a plan or promise instead of executing the selected execute task. The response was rejected by the Workbench harness.');
-    }
-    if (!executed && hasUnverifiedCompletionClaim(result.output)) {
-      throw new Error('Agent reported the work complete while this run executed no command and changed no file. The response was rejected by the Workbench harness.');
     }
     const rawOutput = result.output;
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason, costUsd: result.costUsd ?? null };
@@ -2322,17 +2195,14 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         return { title: task.title, description: task.description, workspacePath: typeof task.workspacePath === 'string' ? task.workspacePath : null };
       }) };
     }
-    const editorDraft = normalizeFinalResponse(rawOutput.replace(/<workbench-plan>[\s\S]*?<\/workbench-plan>/g, '').trim() || (executionPlan?.summary ?? rawOutput));
     const verbose = verboseResponseRequested(`${item.title}\n${run.instructions}`);
-    const responseViolation = finalResponsePolicyViolation(editorDraft, verbose);
-    let output = finalResponseEditingEnabled() && responseViolation
-      ? await editFinalResponse(editorDraft, `${item.title}\n${run.instructions}`, { verbose })
-      : editorDraft;
-    if (run.kind === 'review') {
-      output = preserveReviewPassesAfterFormatting(rawOutput, output, `${item.title}\n${run.instructions}`);
-      const finalMissingPasses = missingReviewPasses(output);
-      if (finalMissingPasses.length) throw new Error(`Final review response omitted mandatory Pass ${finalMissingPasses.join(', Pass ')}.`);
-    }
+    const output = await finalizeSupervisedOutput({
+      kind: run.kind,
+      rawOutput,
+      draftOutput: rawOutput.replace(/<workbench-plan>[\s\S]*?<\/workbench-plan>/g, '').trim() || (executionPlan?.summary ?? rawOutput),
+      objective: `${item.title}\n${run.instructions}`,
+      verbose,
+    });
     result = { ...result, output };
     if (sourceWorkspace && workspace && MUTATING_RUN_KINDS.has(run.kind)) {
       // Integration reports; it never decides whether the run finished. This

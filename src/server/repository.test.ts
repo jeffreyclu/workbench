@@ -1523,7 +1523,7 @@ describe('WorkItemRepository', () => {
     const codex = repository.createSharedMessage('codex', '', 'canceled', conversation.id, [], 'none', null, null, request.id, 'review');
     repository.createSharedMessage('claude', '', 'canceled', conversation.id, [], 'none', null, null, request.id, 'review');
 
-    expect(synthesisSource(repository, conversation.id, codex.id)).toEqual(expect.objectContaining({ requestId: request.id, review: true, prompt: expect.stringContaining('### Pass 1') }));
+    expect(synthesisSource(repository, conversation.id, codex.id)).toEqual(expect.objectContaining({ requestId: request.id, kind: 'review', prompt: expect.stringContaining('### Pass 1') }));
 
     const claimed = repository.claimSharedSynthesis(conversation.id, request.id);
     expect(claimed).toEqual(expect.objectContaining({ author: 'system', dispatchGroupId: request.id, status: 'running' }));
@@ -1745,6 +1745,39 @@ describe('WorkItemRepository', () => {
     expect(repository.getSharedMessageById(interjected.id)).toEqual(expect.objectContaining({ status: 'completed' }));
     expect(repository.getSharedMessageById(interjected.id)?.interjectionStreamOffset).toBe(1);
     expect(repository.listAllSharedMessages(conversation.id)).toHaveLength(2);
+  });
+
+  it('persists and exposes an external-action grant issued by a live interjection', async () => {
+    const conversation = repository.createConversation('Authorized live steering');
+    const running = repository.createSharedMessage('codex', 'Still working', 'running', conversation.id);
+    const interjected = repository.createSharedMessage('jeffrey', 'Push the current branch.', 'queued', conversation.id, [], 'codex');
+    let delivered = '';
+    registerActiveReplySteering(running.id, async (body) => {
+      delivered = body;
+      return true;
+    });
+    const granted = {
+      granted: true,
+      operation: 'Push the current branch.',
+      capability: {
+        actionIds: ['push'],
+        command: 'Push the current branch.',
+        requiredExecutables: ['git'],
+        requiredWorkbenchTools: [],
+        source: 'direct_command',
+      },
+    } satisfies ExternalActionAuthorization;
+
+    await expect(interjectQueuedSharedMessage(repository, interjected.id, async () => granted))
+      .resolves.toEqual([expect.objectContaining({ id: running.id })]);
+
+    expect(delivered).toContain('Supervisor-issued external-action capability');
+    expect(delivered).toContain('Push the current branch.');
+    expect(repository.resolveConversationExternalActionAuthorization(conversation.id, { granted: false, operation: null }))
+      .toEqual(expect.objectContaining({ granted: true, capability: expect.objectContaining({ actionIds: ['push'], source: 'conversation_lease' }) }));
+    expect(repository.listAgentStreamEvents(conversation.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ messageId: running.id, kind: 'decision', detail: expect.stringContaining('Supervisor granted push') }),
+    ]));
   });
 
   it('automatically delivers an explicitly interjected message once Codex becomes steering-ready', async () => {

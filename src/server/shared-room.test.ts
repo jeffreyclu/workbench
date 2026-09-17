@@ -533,6 +533,21 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('PR URL: https://github.com/WriterColab/writer-monorepo/pull/16623');
   });
 
+  it.each(['analysis', 'research', 'strategy', 'review', 'bugfix', 'execute'] as const)(
+    'carries the authoritative %s dropdown category through fresh and resumed standalone turns',
+    (kind) => {
+      const request = message(0, 'Text that could be misclassified as a different category.');
+      const grounding = fallbackTurnGrounding([request]);
+      const fresh = buildSharedReplyPrompt('codex', '', '', [request], undefined, 'conversation-id', EXTERNAL_ACTION_CONTRACT, grounding, 'reply-id', '', kind);
+      const resumed = buildResumedSharedReplyPrompt('', 'conversation-id', 'reply-id', EXTERNAL_ACTION_CONTRACT, grounding, '', '', '', kind, request.body);
+
+      expect(fresh).toContain(`Supervisor-selected execution category: ${kind}`);
+      expect(resumed).toContain(`Supervisor-selected execution category: ${kind}`);
+      expect(fresh).toContain('must not be inferred again from the request text');
+      expect(resumed).toContain('must not be inferred again from the request text');
+    },
+  );
+
   it('uses frontend-reviewer when the linked task dropdown is set to review', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

@@ -765,7 +765,34 @@ fi`,
 
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'completed', output: complete }));
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex', 'codex']);
-    expect(repository.listActivity(task.id).some((entry) => entry.body.includes('Retrying once for complete five-pass coverage'))).toBe(true);
+    expect(repository.listActivity(task.id).some((entry) => entry.body.includes('Retrying once under the supervisor requirement'))).toBe(true);
+    database.close();
+  });
+
+  it('retries a deferred execute response once under the same supervisor used by conversations', async () => {
+    const deferred = '## Problem\nThe change is pending.\n\n## Solution\nSay the word and I will implement it.\n\n## Context\nNothing changed.';
+    const recovered = '## Problem\nThe requested command was unavailable.\n\n## Solution\nBlocked: the provider returned command unavailable.\n\n## Context\nNot verified.';
+    const firstEvent = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: deferred } });
+    const secondEvent = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: recovered } });
+    const { directory, log } = fakeAgentDirectory(
+      `count=$(/usr/bin/wc -l < "\${0%/*}/spawns.log")
+if [ "$count" -eq 1 ]; then
+  printf '%s\\n' '${firstEvent}'
+else
+  printf '%s\\n' '${secondEvent}'
+fi`,
+      'exit 1',
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Execute now', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Implement it.');
+
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+
+    expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'completed', output: recovered }));
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex', 'codex']);
+    expect(repository.listActivity(task.id).some((entry) => entry.body.includes('returned a plan or promise'))).toBe(true);
     database.close();
   });
 
