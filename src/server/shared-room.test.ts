@@ -513,6 +513,26 @@ describe('compactConversationHistory', () => {
     expect(prompt).not.toContain('Do not modify Writer or any other repository');
   });
 
+  it('applies the five-pass reviewer contract to an unlinked review conversation', () => {
+    const request = message(0, 'review https://github.com/WriterColab/writer-monorepo/pull/16623');
+    const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', [request], undefined, null, EXTERNAL_ACTION_CONTRACT, undefined, null, '', 'review');
+
+    expect(prompt).toContain('Authoritative persona: frontend-reviewer');
+    expect(prompt).toContain('Complete these five review passes separately and in this order');
+    expect(prompt).toContain('PR URL: https://github.com/WriterColab/writer-monorepo/pull/16623');
+    expect(prompt).toContain('Review only the GitHub PR\'s base-to-head diff');
+  });
+
+  it('reasserts the five-pass reviewer contract in a resumed review session', () => {
+    const prompt = buildResumedSharedReplyPrompt('', 'conversation-id', 'message-id', EXTERNAL_ACTION_CONTRACT, {
+      objective: 'Review the supplied pull request.', acceptanceCriteria: [], exclusions: [], continuation: false, source: 'fallback',
+    }, '', '', '', 'review', 'review https://github.com/WriterColab/writer-monorepo/pull/16623');
+
+    expect(prompt).toContain('Authoritative persona: frontend-reviewer');
+    expect(prompt).toContain('### Pass 1');
+    expect(prompt).toContain('PR URL: https://github.com/WriterColab/writer-monorepo/pull/16623');
+  });
+
   it('uses frontend-reviewer when the linked task dropdown is set to review', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

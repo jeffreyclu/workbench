@@ -131,4 +131,39 @@ describe('shared-room final response supervision', () => {
     expect(body).not.toContain('…');
     database.close();
   });
+
+  it('rejects an incomplete standalone review, retries it once, and preserves all five passes', async () => {
+    const completeReview = [1, 2, 3, 4, 5].map((pass) => (
+      `### Pass ${pass}\n\n${pass === 1 ? 'Blocking: src/button.ts:42 drops the click handler. Preserve the handler.' : 'No material issues.'}`
+    )).join('\n\n');
+    runAgentCommandWithFallback
+      .mockResolvedValueOnce({
+        output: 'The review found one blocking issue, and the other passes were clean.',
+        agent: 'claude',
+        usage: { inputTokens: 10, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: 5 },
+        fallbackFrom: null, fallbackReason: null, sessionId: 'session', peakContextTokens: 10,
+      })
+      .mockResolvedValueOnce({
+        output: completeReview,
+        agent: 'claude',
+        usage: { inputTokens: 20, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: 30 },
+        fallbackFrom: null, fallbackReason: null, sessionId: 'session', peakContextTokens: 20,
+      });
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const conversation = repository.createConversation('Review PR');
+    repository.createSharedMessage('jeffrey', 'review https://github.com/WriterColab/writer-monorepo/pull/16623', 'queued', conversation.id, [], 'claude', 'deep', null, null, 'review');
+
+    const [reply] = dispatchNextSharedTurn(repository, conversation.id);
+    await vi.waitFor(() => expect(repository.getSharedMessageById(reply.id)).toMatchObject({ status: 'completed' }));
+    const body = repository.getSharedMessageById(reply.id)?.body ?? '';
+
+    expect(runAgentCommandWithFallback).toHaveBeenCalledTimes(2);
+    expect(runAgentCommandWithFallback.mock.calls[1]?.[2]).toContain('Review completion retry');
+    expect(body).toContain('### Pass 1');
+    expect(body).toContain('### Pass 5');
+    expect(body).toContain('Blocking: src/button.ts:42');
+    expect(body).not.toContain('Five comment drafts.');
+    database.close();
+  });
 });

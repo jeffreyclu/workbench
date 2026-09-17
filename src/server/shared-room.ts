@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnsupportedCapabilityDenial, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, missingRequiredExecutables, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, FRONTEND_REVIEWER_PERSONA, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, githubSourceAuthorityForRequest, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnsupportedCapabilityDenial, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, missingReviewPasses, missingRequiredExecutables, modelFor, MUTATING_RUN_KINDS, preserveReviewPassesAfterFormatting, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, reviewPassCompletionRequirement, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -1055,7 +1055,12 @@ export function buildSharedReplyPrompt(
   turnGrounding?: TurnGrounding,
   messageId?: string | null,
   memoryContext = '',
+  runKind: AgentRun['kind'] = linked?.run.kind ?? 'analysis',
 ): string {
+  const grounding = turnGrounding ?? fallbackTurnGrounding(thread);
+  const standaloneReviewContract = !linked && runKind === 'review'
+    ? `${FRONTEND_REVIEWER_PERSONA}\n\n${githubSourceAuthorityForRequest(`${grounding.objective}\n${latestHumanMessageForSharedReply(thread)}`, runKind)}`.trim()
+    : '';
   const roleContext = linked
     ? buildPrompt(linked.item, linked.run, sharedContext, externalActionContract)
     : `${externalActionContract ?? EXTERNAL_ACTION_CONTRACT}
@@ -1064,8 +1069,9 @@ You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey 
 
 This conversation is not linked to a project task. Start in Workbench, but treat that directory only as execution context: every local repository and Jeffrey's home directory remain fully accessible. Follow Jeffrey's current request directly, including repository edits and Git branch/worktree operations; linking a task is never required for access.
 
+${standaloneReviewContract}
+
 ${compactSharedBrief(sharedContext, 2_400)}`;
-  const grounding = turnGrounding ?? fallbackTurnGrounding(thread);
   const cascadeBreaker = cascadeBreakerForPrompt(thread);
   return `${roleContext}
 
@@ -1104,7 +1110,12 @@ export function buildResumedSharedReplyPrompt(
   memoryContext = '',
   cascadeBreaker = '',
   shortTermContext = '',
+  runKind: AgentRun['kind'] = 'analysis',
+  currentRequest = '',
 ): string {
+  const reviewContract = runKind === 'review'
+    ? `${FRONTEND_REVIEWER_PERSONA}\n\n${githubSourceAuthorityForRequest(`${turnGrounding.objective}\n${currentRequest}`, runKind)}`.trim()
+    : '';
   return `${externalActionContract}
 
 Continue the existing Workbench conversation in the same provider session.
@@ -1114,6 +1125,8 @@ Repository-access correction: disregard any earlier instruction that called this
 Workbench context handles:
 - Conversation ID: ${localId ?? 'none'}
 - Current reply message ID: ${messageId ?? 'none'}
+
+${reviewContract}
 
 ${turnGroundingForPrompt(turnGrounding)}
 
@@ -1544,13 +1557,14 @@ export async function replyInSharedRoom(
       turnGrounding,
       messageId,
       memoryContext,
+      runKind,
     );
     const palmyraContext = agent === 'palmyra' ? parsePalmyraContext(repository.getConversationPalmyraContext(target.conversationId)) : undefined;
     const resumeProviderId = providerSessionForAuthorization(agent === 'codex'
       ? linkedConversation?.codexThreadId
       : agent === 'claude' ? linkedConversation?.claudeSessionId : palmyraContext?.length ? 'palmyra-context' : null, externalAuthorization);
     const prompt = resumeProviderId
-      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext)
+      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, latestUserMessage)
       : freshPrompt;
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,
@@ -1678,6 +1692,25 @@ export async function replyInSharedRoom(
         recoveryUsed = true;
         return runPalmyraReply(requirement, result.messages, []);
       }
+      if (result.agent === 'claude') {
+        recoveryUsed = true;
+        const full = claudeScopeRecoveryPrompt(`${freshPrompt}\n\n${requirement}`, cwd);
+        return runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(requirement, cwd), (partial) => {
+          if (controller.signal.aborted) return;
+          updateLiveSharedBody(repository, messageId, partial, runId);
+        }, controller.signal, undefined, profile, (usage) => {
+          persistNonTerminalAgentUpdate(() => {
+            const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+            repository.updateSharedMessage(messageId, telemetry);
+            if (runId) repository.updateRun(runId, telemetry);
+          });
+        }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+          kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+        })))), runKind, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
+          registerActiveReplySteering(messageId, steer);
+          void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
+        }, result.sessionId ?? undefined, false, false, result.usage, full);
+      }
       const resumeThreadId = result.agent === 'codex' ? result.codexThreadId : undefined;
       const full = `${freshPrompt}\n\n${requirement}`;
       recoveryUsed = true;
@@ -1778,7 +1811,20 @@ export async function replyInSharedRoom(
       repository.updateSharedMessage(messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
     }
+    if (runKind === 'review') {
+      const missingPasses = missingReviewPasses(result.output);
+      if (missingPasses.length) {
+        repository.updateSharedMessage(messageId, { body: `● Review omitted Pass ${missingPasses.join(', Pass ')}. Completing all five passes…` });
+        const recovered = await recoveryRun(reviewPassCompletionRequirement(result.output, missingPasses));
+        const stillMissing = missingReviewPasses(recovered.output);
+        if (stillMissing.length) throw new Error(`Review omitted mandatory Pass ${stillMissing.join(', Pass ')} after one automatic completion retry.`);
+        result = recovered;
+        repository.updateSharedMessage(messageId, { author: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+        if (runId) repository.updateRun(runId, { agent: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
+      }
+    }
     if (controller.signal.aborted) throw new Error('Agent run canceled.');
+    const rawOutput = result.output;
     if (finalResponseEditingEnabled()) {
       const verbose = verboseResponseRequested(latestUserMessage);
       const normalized = normalizeFinalResponse(result.output);
@@ -1788,6 +1834,11 @@ export async function replyInSharedRoom(
       } else {
         result = { ...result, output: normalized };
       }
+    }
+    if (runKind === 'review') {
+      result = { ...result, output: preserveReviewPassesAfterFormatting(rawOutput, result.output, turnGrounding.objective) };
+      const finalMissingPasses = missingReviewPasses(result.output);
+      if (finalMissingPasses.length) throw new Error(`Final review response omitted mandatory Pass ${finalMissingPasses.join(', Pass ')}.`);
     }
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason, costUsd: result.costUsd ?? null };
     if (hasUntrackedContinuationClaim(result.output)) {
@@ -1952,7 +2003,7 @@ export async function deliverPendingSharedInterjections(
   }
 }
 
-export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): { prompt: string; requestId: string; codex: SharedMessage; claude: SharedMessage; verbose: boolean } | null {
+export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): { prompt: string; requestId: string; codex: SharedMessage; claude: SharedMessage; verbose: boolean; review: boolean } | null {
   const messages = repository.listAllSharedMessages(conversationId);
   const reply = messages.find((message) => message.id === replyId);
   // A timestamp is not an identity. Multiple messages can share a timestamp,
@@ -1975,9 +2026,13 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   // transcripts; feeding them through verbatim turns a one-paragraph handoff
   // into an expensive long-context provider turn.
   const response = (label: string, message: SharedMessage) => `${label} (${message.status}):\n${(message.body || message.error || 'No response was produced.').slice(0, 12_000)}`;
+  const review = request.kind === 'review';
+  const synthesisInstruction = review
+    ? 'Synthesize the two supplied code reviews into one complete five-pass review. Use exact headings `### Pass 1` through `### Pass 5` in order. Under each heading, retain and reconcile every actual finding from that pass with its `Blocking:` or `Non-blocking:` severity, concrete file/line evidence, impact, and recommended change. If neither reviewer found a material issue in a pass, write exactly `No material issues.` Do not replace findings with counts or a statement that a pass ran.'
+    : 'Write a concise synthesis of the two supplied agent responses below.';
   return {
-    requestId: request.id, codex, claude, verbose: verboseResponseRequested(request.body),
-    prompt: `${EXTERNAL_ACTION_CONTRACT}\n\nWrite a concise synthesis of the two supplied agent responses below. You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nRequest: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
+    requestId: request.id, codex, claude, verbose: verboseResponseRequested(request.body), review,
+    prompt: `${EXTERNAL_ACTION_CONTRACT}\n\n${synthesisInstruction} You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nRequest: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
   };
 }
 
@@ -1992,17 +2047,33 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
   const profile: ExecutionProfile = 'economy';
   repository.updateSharedMessage(message.id, { model: modelFor(agent, profile), executionProfile: profile });
   await runSharedBackgroundJob(repository, message.id, async (signal, onProgress) => {
-    const result = await runAgentCommandWithFallback(agent, process.cwd(), source.prompt, onProgress, signal, undefined, profile, (usage) => {
+    const runSynthesis = (prompt: string) => runAgentCommandWithFallback(agent, process.cwd(), prompt, onProgress, signal, undefined, profile, (usage) => {
       repository.updateSharedMessage(message.id, { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens });
     }, undefined, undefined, undefined, undefined, undefined, undefined, false, false);
+    let result = await runSynthesis(source.prompt);
+    if (source.review) {
+      const missingPasses = missingReviewPasses(result.output);
+      if (missingPasses.length) {
+        onProgress(`● Review synthesis omitted Pass ${missingPasses.join(', Pass ')}. Completing all five passes…`);
+        result = await runSynthesis(`${source.prompt}\n\n${reviewPassCompletionRequirement(result.output, missingPasses)}`);
+        const stillMissing = missingReviewPasses(result.output);
+        if (stillMissing.length) throw new Error(`Review synthesis omitted mandatory Pass ${stillMissing.join(', Pass ')} after one automatic completion retry.`);
+      }
+    }
     repository.updateSharedMessage(message.id, {
       model: modelFor(result.agent, profile), inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens,
       fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason,
     });
+    const rawOutput = result.output;
     const normalized = normalizeFinalResponse(result.output);
-    const output = finalResponseEditingEnabled() && finalResponsePolicyViolation(normalized, source.verbose)
+    let output = finalResponseEditingEnabled() && finalResponsePolicyViolation(normalized, source.verbose)
       ? await editFinalResponse(normalized, 'Combine the two agent reports into one accurate answer for Jeffrey.', { verbose: source.verbose })
       : normalized;
+    if (source.review) {
+      output = preserveReviewPassesAfterFormatting(rawOutput, output, 'Combine the two code reviews into one accurate five-pass review for Jeffrey.');
+      const finalMissingPasses = missingReviewPasses(output);
+      if (finalMissingPasses.length) throw new Error(`Final review synthesis omitted mandatory Pass ${finalMissingPasses.join(', Pass ')}.`);
+    }
     return `Synthesis:\n${output}`;
   });
   const completed = repository.getSharedMessageById(message.id);

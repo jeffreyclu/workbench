@@ -1519,11 +1519,11 @@ describe('WorkItemRepository', () => {
 
   it('supervises dual task replies, including two canceled replies, and claims synthesis exactly once', () => {
     const conversation = repository.createConversation('Dual task synthesis');
-    const request = repository.createSharedMessage('system', 'Execute: review the connector PR', 'completed', conversation.id, [], 'both');
+    const request = repository.createSharedMessage('system', 'Execute: review the connector PR', 'completed', conversation.id, [], 'both', null, null, null, 'review');
     const codex = repository.createSharedMessage('codex', '', 'canceled', conversation.id, [], 'none', null, null, request.id, 'review');
     repository.createSharedMessage('claude', '', 'canceled', conversation.id, [], 'none', null, null, request.id, 'review');
 
-    expect(synthesisSource(repository, conversation.id, codex.id)).toEqual(expect.objectContaining({ requestId: request.id }));
+    expect(synthesisSource(repository, conversation.id, codex.id)).toEqual(expect.objectContaining({ requestId: request.id, review: true, prompt: expect.stringContaining('### Pass 1') }));
 
     const claimed = repository.claimSharedSynthesis(conversation.id, request.id);
     expect(claimed).toEqual(expect.objectContaining({ author: 'system', dispatchGroupId: request.id, status: 'running' }));

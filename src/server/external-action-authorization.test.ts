@@ -64,6 +64,8 @@ describe('external action authorization command catalog', () => {
     'we need a rule so agents can push',
     'write linear ticket is another one',
     'the command list should include "open PR"',
+    'review https://github.com/WriterColab/writer-monorepo/pull/16623',
+    'review the PR and give me findings',
   ])('does not mistake discussion, status, negation, or examples for a grant: %s', async (currentMessage) => {
     await expect(classifyExternalActionAuthorization({ currentMessage })).resolves.toEqual({ granted: false, operation: null });
   });

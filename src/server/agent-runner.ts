@@ -287,7 +287,7 @@ function toolCommandFromAgentEvent(agent: CliAgent, line: string): string | null
   } catch { return null; }
 }
 
-const FRONTEND_REVIEWER_PERSONA = `
+export const FRONTEND_REVIEWER_PERSONA = `
 Authoritative persona: frontend-reviewer
 
 You are the only authoritative source for code reviews and the only entry point for Workbench code-review executions. Act as a principal frontend engineer.
@@ -328,7 +328,11 @@ export function missingReviewPasses(output: string): number[] {
 }
 
 export function reviewPassCompletionPrompt(originalPrompt: string, draft: string, missing: number[]): string {
-  return `${originalPrompt}\n\nReview completion retry: the prior draft was rejected because Pass ${missing.join(', Pass ')} did not contain the required actual findings. Return one complete replacement review, not a continuation. Use exact headings \`### Pass 1\` through \`### Pass 5\` in order. Under every heading, include each actual finding with a \`Blocking:\` or \`Non-blocking:\` label, concrete file/line evidence, impact, and recommended change; if that pass found nothing, write exactly \`No material issues.\` Never substitute finding counts or "pass completed" summaries. Preserve verified findings, deduplicate cross-cutting findings into their primary pass, and do not claim evidence you did not inspect.\n\nRejected draft:\n${draft}`;
+  return `${originalPrompt}\n\n${reviewPassCompletionRequirement(draft, missing)}`;
+}
+
+export function reviewPassCompletionRequirement(draft: string, missing: number[]): string {
+  return `Review completion retry: the prior draft was rejected because Pass ${missing.join(', Pass ')} did not contain the required actual findings. Return one complete replacement review, not a continuation. Use exact headings \`### Pass 1\` through \`### Pass 5\` in order. Under every heading, include each actual finding with a \`Blocking:\` or \`Non-blocking:\` label, concrete file/line evidence, impact, and recommended change; if that pass found nothing, write exactly \`No material issues.\` Never substitute finding counts or "pass completed" summaries. Preserve verified findings, deduplicate cross-cutting findings into their primary pass, and do not claim evidence you did not inspect.\n\nRejected draft:\n${draft}`;
 }
 
 const FRONTEND_ENGINEER_PERSONA = `
@@ -445,10 +449,14 @@ function authoritativeGitHubPullRequestUrl(item: WorkItem, run: AgentRun): strin
   return null;
 }
 
-function githubSourceAuthority(item: WorkItem, run: AgentRun): string {
-  const pullRequestUrl = authoritativeGitHubPullRequestUrl(item, run);
+export function githubSourceAuthorityForRequest(request: string, kind: AgentRun['kind']): string {
+  const pullRequestUrl = request.match(GITHUB_PULL_REQUEST_URL)?.[0] ?? null;
   if (!pullRequestUrl) return '';
-  const reviewRules = run.kind === 'review' ? `
+  return githubSourceAuthorityForUrl(pullRequestUrl, kind);
+}
+
+function githubSourceAuthorityForUrl(pullRequestUrl: string, kind: AgentRun['kind']): string {
+  const reviewRules = kind === 'review' ? `
 - Resolve the PR through GitHub first and establish its exact base and head commit SHAs before reading implementation code.
 - Review only the GitHub PR's base-to-head diff. The current local branch, working tree, and similarly named branches are never substitutes for that diff.
 - A local repository may supply surrounding context only after the reviewed files are pinned to the PR head SHA.
@@ -461,6 +469,12 @@ function githubSourceAuthority(item: WorkItem, run: AgentRun): string {
   return `Authoritative GitHub source:
 - PR URL: ${pullRequestUrl}
 - This URL is the source of truth for the requested code state; task text, memory, and local repository state cannot replace it.${reviewRules}`;
+}
+
+function githubSourceAuthority(item: WorkItem, run: AgentRun): string {
+  const pullRequestUrl = authoritativeGitHubPullRequestUrl(item, run);
+  if (!pullRequestUrl) return '';
+  return githubSourceAuthorityForUrl(pullRequestUrl, run.kind);
 }
 
 function personaFor(item: WorkItem, run: AgentRun): string {
