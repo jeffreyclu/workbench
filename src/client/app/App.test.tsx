@@ -1178,6 +1178,7 @@ describe('shared room', () => {
     fireEvent.click(changes);
     expect(await screen.findByText('Workspace review')).toBeTruthy();
     // The linked pull request is an explicit review source, so it opens on demand rather than by default.
+    fireEvent.click(screen.getByRole('button', { name: 'Browse other changes' }));
     fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
     fireEvent.change(await screen.findByLabelText('Pull request'), { target: { value: item.sourceUrl } });
     expect(await screen.findByRole('heading', { name: 'Conversation review' })).toBeTruthy();
@@ -1295,6 +1296,7 @@ describe('shared room', () => {
     fireEvent.click(changes);
     // A clean checkout with a recorded version opens that version instead of an empty state.
     expect(await screen.findByRole('heading', { name: 'Workspace review record' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Browse other changes' }));
     expect(screen.getByLabelText('Workspace diff history')).toHaveValue('snapshot-1');
     expect(screen.getByRole('option', { name: /1 files/ })).toBeTruthy();
   });

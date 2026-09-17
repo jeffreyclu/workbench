@@ -165,7 +165,9 @@ export function isWriterWorkspace(cwd: string): boolean {
 
 export function isWorkbenchWorkspace(cwd: string): boolean {
   const resolved = resolve(cwd);
-  return resolved === resolve(process.cwd()) || resolved.includes('/.workbench/run-worktrees/workbench-');
+  return basename(resolved) === 'workbench'
+    || resolved === resolve(process.cwd())
+    || resolved.includes('/.workbench/run-worktrees/workbench-');
 }
 
 export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountProfile: string, cwd: string): NodeJS.ProcessEnv {
@@ -601,6 +603,11 @@ export function resolveWorkingDirectory(item: WorkItem): string {
   }
 
   const current = process.cwd();
+  // Workbench work belongs to the checkout running this server. Do not rank it
+  // against sibling clones: promotion/preflight/test checkouts often share the
+  // `workbench` name and can otherwise win a tie, sending Changes (and agents)
+  // into an unrelated stale clone.
+  if (isWorkbenchProject(item.projectName)) return resolve(current);
   const referencedDirectories = [...`${item.title}\n${item.description}`.matchAll(/(?:~|\/Users\/[^/\s]+)\/[^\s`'"<>]+/g)]
     .map(([match]) => match.replace(/[),.;:]+$/, '').replace(/^~/, homedir()))
     .filter((path) => existsSync(path))
