@@ -15,6 +15,7 @@ describe('Workbench MCP', () => {
   let repository: WorkItemRepository;
   let client: Client;
   let calls: Array<{ method: string; args: unknown[] }>;
+  let evidenceDirectory: string;
 
   /**
    * The admin port is implemented by `createApp` against real execution and
@@ -58,6 +59,8 @@ describe('Workbench MCP', () => {
   }
 
   beforeEach(async () => {
+    evidenceDirectory = mkdtempSync(join(tmpdir(), 'workbench-evidence-test-'));
+    process.env.DATABASE_PATH = join(evidenceDirectory, 'workbench.db');
     database = openDatabase(':memory:');
     repository = new WorkItemRepository(database);
     calls = [];
@@ -71,6 +74,8 @@ describe('Workbench MCP', () => {
   afterEach(async () => {
     await client.close();
     database.close();
+    delete process.env.DATABASE_PATH;
+    rmSync(evidenceDirectory, { recursive: true, force: true });
   });
 
   async function callData<T>(name: string, args: Record<string, unknown>): Promise<T> {
@@ -404,13 +409,25 @@ describe('Workbench MCP', () => {
   });
 
   it('routes read-only external source calls through Workbench-owned connections', async () => {
-    await callData('search_external_sources', { query: 'MCP reconnect', sources: ['figma', 'atlassian'] });
-    await callData('resolve_external_source', { url: 'https://writerai.atlassian.net/wiki/spaces/ENG/pages/123' });
+    const conversation = repository.createConversation('External evidence');
+    const request = repository.createSharedMessage('jeffrey', 'Search sources', 'completed', conversation.id, [], 'both');
+    const codex = repository.createSharedMessage('codex', '', 'running', conversation.id, [], 'none', null, undefined, request.id);
+    const claude = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'none', null, undefined, request.id);
+    const first = await callData<{ evidence: { id: string }; data: unknown }>('search_external_sources', { query: 'MCP reconnect', sources: ['figma', 'atlassian'], conversationId: conversation.id, messageId: codex.id });
+    const second = await callData<{ evidence: { id: string }; data: unknown }>('search_external_sources', { query: 'MCP reconnect', sources: ['figma', 'atlassian'], conversationId: conversation.id, messageId: claude.id });
+    const followUp = repository.createSharedMessage('jeffrey', 'Use the same evidence.', 'completed', conversation.id, [], 'codex');
+    const followUpReply = repository.createSharedMessage('codex', '', 'running', conversation.id, [], 'none', null, undefined, followUp.id);
+    const third = await callData<{ evidence: { id: string }; data: unknown }>('search_external_sources', { query: 'MCP reconnect', sources: ['figma', 'atlassian'], conversationId: conversation.id, messageId: followUpReply.id });
+    await callData('resolve_external_source', { url: 'https://writerai.atlassian.net/wiki/spaces/ENG/pages/123', conversationId: conversation.id, messageId: codex.id });
 
+    expect(first.evidence.id).toBe(second.evidence.id);
+    expect(first.evidence.id).toBe(third.evidence.id);
     expect(calls.slice(-2)).toEqual([
       { method: 'searchExternalSources', args: ['MCP reconnect', ['figma', 'atlassian']] },
       { method: 'resolveExternalSource', args: ['https://writerai.atlassian.net/wiki/spaces/ENG/pages/123'] },
     ]);
+    expect(repository.listExternalEvidenceSnapshots(conversation.id)).toHaveLength(2);
+    expect(repository.listAgentStreamEvents(conversation.id).filter((event) => event.detail.includes('immutable local evidence'))).toHaveLength(4);
     const tools = await client.listTools();
     for (const name of ['search_external_sources', 'resolve_external_source']) {
       expect(tools.tools.find((tool) => tool.name === name)?.annotations).toEqual(expect.objectContaining({ readOnlyHint: true, openWorldHint: true }));

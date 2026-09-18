@@ -2,15 +2,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SharedMessage } from '../shared/contracts.js';
+import type { GitHubPullRequestDiff, SharedMessage } from '../shared/contracts.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
 import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
+const originalDatabasePath = process.env.DATABASE_PATH;
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
@@ -18,7 +19,51 @@ afterEach(() => {
   process.env.PATH = originalPath;
   if (originalProviderFirstActivityTimeout === undefined) delete process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
   else process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = originalProviderFirstActivityTimeout;
+  if (originalDatabasePath === undefined) delete process.env.DATABASE_PATH;
+  else process.env.DATABASE_PATH = originalDatabasePath;
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+describe('supervisor-owned external evidence', () => {
+  it('fetches one authoritative PR diff, persists it locally, and exposes the same snapshot to Changes', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-external-evidence-'));
+    temporaryDirectories.push(directory);
+    process.env.DATABASE_PATH = join(directory, 'workbench.db');
+    const database = openDatabase(process.env.DATABASE_PATH);
+    const repository = new WorkItemRepository(database);
+    const conversation = repository.createConversation('Review PR');
+    const request = repository.createSharedMessage('jeffrey', 'Review the linked pull request.', 'completed', conversation.id, [], 'both', null, undefined, undefined, 'review');
+    let fetches = 0;
+    const pullRequest: GitHubPullRequestDiff = {
+      url: 'https://github.com/acme/widgets/pull/42', repository: 'acme/widgets', number: 42, title: 'Fix widgets',
+      baseRef: 'main', headRef: 'feature/widgets', headSha: 'a'.repeat(40), revision: 'a'.repeat(40),
+      files: [{ path: 'src/widget.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null, patch: '@@ -1 +1 @@\n-old\n+new', isBinary: false }],
+      changedFiles: 1, additions: 1, deletions: 1, nextPage: null, state: 'open', draft: false,
+      mergeableState: 'clean', reviewDecision: null, reviewDecisionError: null,
+      comments: { available: true, partial: false, total: 0, byPath: {}, comments: [], error: null },
+    };
+    const input = {
+      conversationId: conversation.id, dispatchGroupId: request.id, message: request.body,
+      recentReferences: ['https://github.com/acme/widgets/pull/42'], runKind: 'review' as const, workspacePath: process.cwd(),
+      fetchPullRequest: async () => { fetches += 1; return pullRequest; },
+    };
+    const followUp = repository.createSharedMessage('jeffrey', 'Continue the same review.', 'completed', conversation.id, [], 'both', null, undefined, undefined, 'review');
+    const [first, second] = await Promise.all([
+      prepareSharedExternalEvidence(repository, input),
+      prepareSharedExternalEvidence(repository, { ...input, dispatchGroupId: followUp.id }),
+    ]);
+
+    expect(fetches).toBe(1);
+    expect(first[0]?.snapshot.id).toBe(second[0]?.snapshot.id);
+    expect(JSON.parse(readFileSync(first[0]!.snapshot.payloadPath, 'utf8'))).toEqual(pullRequest);
+    expect(repository.listExternalEvidenceSnapshots(conversation.id)).toHaveLength(1);
+    expect(repository.listWorkspaceDiffSnapshots({ conversationId: conversation.id })[0]).toMatchObject({
+      revision: pullRequest.revision,
+      commitHash: pullRequest.headSha,
+      diff: { workspacePath: process.cwd(), branch: 'main → feature/widgets', files: pullRequest.files },
+    });
+    database.close();
+  });
 });
 
 async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
@@ -434,6 +479,8 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Commit and push the finished fix.');
     expect(prompt).toContain('Current repository: /tmp/project');
     expect(prompt).toContain('Supervisor-issued external-action capability');
+    expect(prompt).toContain("supervisor-owned evidence path");
+    expect(prompt).toContain('Never use provider web search, curl, gh, git fetch/pull');
     expect(prompt.startsWith('Supervisor-issued external-action capability')).toBe(true);
     expect(prompt).toContain('Current reply message ID: message-id');
     expect(prompt).toContain('Short-term active context: Staff promotion draft is in progress.');
@@ -503,6 +550,8 @@ describe('compactConversationHistory', () => {
     expect(prompt).toContain('Retrieved durable context: Jeffrey works at Writer.');
     expect(prompt).toContain('start_managed_command');
     expect(prompt).toContain('continue from its saved log instead of starting from zero');
+    expect(prompt).toContain("every read from GitHub, a pasted URL, a connected source, or observability must go through Workbench's supervisor-owned evidence path");
+    expect(prompt).toContain('Never use provider web search, curl, gh, git fetch/pull');
   });
 
   it('keeps every repository accessible from an unlinked conversation', () => {

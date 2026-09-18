@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ExternalEvidenceSnapshot } from '../shared/contracts.js';
 
 import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SessionFeedback, type SessionFeedbackRating, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput, type DiffBlockReview, type UpsertDiffBlockReviewInput, type CreateStandaloneReviewInput, type StandaloneReview } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
@@ -1018,6 +1019,44 @@ export class WorkItemRepository {
       JOIN shared_messages AS messages ON messages.id = events.message_id
       WHERE messages.conversation_id = ? ORDER BY events.created_at ASC, events.rowid ASC`).all(conversationId) as Array<Record<string, string | null>>)
       .map((row) => ({ id: row.id!, messageId: row.message_id!, runId: row.run_id, kind: row.kind as AgentStreamEvent['kind'], detail: row.detail!, createdAt: row.created_at! }));
+  }
+
+  getExternalEvidenceSnapshot(dispatchGroupId: string, requestKey: string): ExternalEvidenceSnapshot | null {
+    const row = this.database.prepare(`SELECT id, conversation_id, dispatch_group_id, kind, request_key, source, payload_path, payload_hash, captured_at
+      FROM external_evidence_snapshots WHERE dispatch_group_id = ? AND request_key = ?`).get(dispatchGroupId, requestKey) as Record<string, string> | undefined;
+    return row ? {
+      id: row.id, conversationId: row.conversation_id, dispatchGroupId: row.dispatch_group_id,
+      kind: row.kind, requestKey: row.request_key, source: row.source,
+      payloadPath: row.payload_path, payloadHash: row.payload_hash, capturedAt: row.captured_at,
+    } : null;
+  }
+
+  getConversationExternalEvidenceSnapshot(conversationId: string, requestKey: string): ExternalEvidenceSnapshot | null {
+    const row = this.database.prepare(`SELECT id, conversation_id, dispatch_group_id, kind, request_key, source, payload_path, payload_hash, captured_at
+      FROM external_evidence_snapshots WHERE conversation_id = ? AND request_key = ? ORDER BY captured_at DESC LIMIT 1`).get(conversationId, requestKey) as Record<string, string> | undefined;
+    return row ? {
+      id: row.id, conversationId: row.conversation_id, dispatchGroupId: row.dispatch_group_id,
+      kind: row.kind, requestKey: row.request_key, source: row.source,
+      payloadPath: row.payload_path, payloadHash: row.payload_hash, capturedAt: row.captured_at,
+    } : null;
+  }
+
+  createExternalEvidenceSnapshot(input: Omit<ExternalEvidenceSnapshot, 'id' | 'capturedAt'>): ExternalEvidenceSnapshot {
+    const id = randomUUID();
+    const capturedAt = new Date().toISOString();
+    this.database.prepare(`INSERT OR IGNORE INTO external_evidence_snapshots
+      (id, conversation_id, dispatch_group_id, kind, request_key, source, payload_path, payload_hash, captured_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, input.conversationId, input.dispatchGroupId, input.kind, input.requestKey, input.source, input.payloadPath, input.payloadHash, capturedAt);
+    return this.getExternalEvidenceSnapshot(input.dispatchGroupId, input.requestKey)!;
+  }
+
+  listExternalEvidenceSnapshots(conversationId: string): ExternalEvidenceSnapshot[] {
+    return (this.database.prepare(`SELECT id, conversation_id, dispatch_group_id, kind, request_key, source, payload_path, payload_hash, captured_at
+      FROM external_evidence_snapshots WHERE conversation_id = ? ORDER BY captured_at DESC`).all(conversationId) as Array<Record<string, string>>).map((row) => ({
+      id: row.id, conversationId: row.conversation_id, dispatchGroupId: row.dispatch_group_id,
+      kind: row.kind, requestKey: row.request_key, source: row.source,
+      payloadPath: row.payload_path, payloadHash: row.payload_hash, capturedAt: row.captured_at,
+    }));
   }
 
   getSessionFeedback(conversationId?: string | null, workItemId?: string | null): SessionFeedback | null {

@@ -1566,3 +1566,23 @@ interruption. Workbench stops the entire tracked process group on request and
 retains the log afterward. This exception is for finite work only; dev servers,
 watchers, and other indefinite processes still require their repository's
 tracked lifecycle launcher.
+
+### External evidence is supervisor-owned conversation truth (2026-09-18)
+
+*Decision from Jeffrey.* Agents must not independently fetch the same pull
+request, URL, connected-source search, or telemetry query. Before fan-out, the
+conversation supervisor resolves external evidence once, writes the exact raw
+result to an immutable local file beside the database, records its SHA-256 and
+manifest in the database, and hands the same file to Claude, Codex, and Palmyra.
+Exact requests reuse that evidence throughout the conversation; a changed URL
+or query creates a new snapshot.
+
+Code-review pull requests are fetched completely, including every file page,
+before either reviewer starts. The resulting diff is also recorded in the
+conversation's diff history and opens by default in Changes, even when the
+selected checkout contains unrelated local edits. Agent-initiated source and
+observability reads must include their current conversation and reply handles,
+so Workbench can deduplicate the read and show the evidence decision in both
+agents' decision graphs. Authentication, model inference, health checks, and
+external mutations are transport/control operations rather than shareable
+evidence and are not cached as evidence.

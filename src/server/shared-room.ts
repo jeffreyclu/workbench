@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, type AgentRun, type SharedMessage, type WorkItem } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, SUPERVISOR_EVIDENCE_REASON_PREFIX, defaultAccountProfileForTask, type AgentRun, type GitHubPullRequestDiff, type SharedMessage, type WorkItem, type WorkspaceDiff } from '../shared/contracts.js';
 import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
@@ -22,6 +22,9 @@ import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
 import { preflightWorkbenchTools } from './palmyra-workbench-tools.js';
 import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
 import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisorPromptContract, supervisorSynthesisContract } from './supervisor.js';
+import { brokerExternalEvidence, evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
+import { getGitHubPullRequestDiff, parseGitHubPullRequestUrl } from './github-pull-request-diff.js';
+import { repositoryIdentity } from './workspace-diff.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -35,6 +38,76 @@ type ActiveReplySteering = AgentInputSteering;
 const activeReplySteering = new Map<string, ActiveReplySteering>();
 const INTERJECTION_POLL_MS = 1_000;
 export const isSharedReplyActive = (id: string) => activeReplies.has(id);
+
+type SharedReplyEvidence = Promise<ExternalEvidence<unknown>[]>;
+
+function pullRequestUrls(value: string): string[] {
+  return [...new Set((value.match(/https?:\/\/github\.com\/[^\s<>)]+\/pull\/\d+(?:\/files)?/gi) ?? [])
+    .map((url) => url.replace(/[.,;:!?]+$/, ''))
+    .filter((url) => parseGitHubPullRequestUrl(url)))];
+}
+
+function pullRequestWorkspaceDiff(pullRequest: GitHubPullRequestDiff, workspacePath: string): WorkspaceDiff {
+  return {
+    workspacePath,
+    branch: `${pullRequest.baseRef} → ${pullRequest.headRef}`,
+    revision: pullRequest.revision,
+    files: pullRequest.files,
+    changedFiles: pullRequest.changedFiles,
+    additions: pullRequest.additions,
+    deletions: pullRequest.deletions,
+    publish: { branch: null, hasOrigin: false, ahead: 0, hasChanges: false, reason: `${SUPERVISOR_EVIDENCE_REASON_PREFIX}${pullRequest.url}.` },
+  };
+}
+
+async function completePullRequestDiff(url: string, token?: string): Promise<GitHubPullRequestDiff> {
+  const first = await getGitHubPullRequestDiff(url, { token });
+  const files = [...first.files];
+  let nextPage = first.nextPage;
+  while (nextPage) {
+    const page = await getGitHubPullRequestDiff(url, { token, page: nextPage });
+    files.push(...page.files);
+    nextPage = page.nextPage;
+  }
+  return { ...first, files, nextPage: null };
+}
+
+export async function prepareSharedExternalEvidence(
+  repository: WorkItemRepository,
+  input: { conversationId: string; dispatchGroupId: string; message: string; recentReferences: string[]; runKind: AgentRun['kind']; workspacePath: string; fetchPullRequest?: (url: string) => Promise<GitHubPullRequestDiff> },
+): Promise<ExternalEvidence<unknown>[]> {
+  const evidence: ExternalEvidence<unknown>[] = [];
+  // A URL in the current instruction is authoritative. Only fall back to the
+  // task/conversation references when this turn does not name its own PR.
+  const currentUrls = pullRequestUrls(input.message);
+  const urls = currentUrls.length ? currentUrls : pullRequestUrls(input.recentReferences.join('\n'));
+  for (const url of urls) {
+    const item = await brokerExternalEvidence(repository, {
+      conversationId: input.conversationId, dispatchGroupId: input.dispatchGroupId,
+      kind: 'github_pull_request_diff', source: url, request: { url },
+    }, () => input.fetchPullRequest ? input.fetchPullRequest(url) : completePullRequestDiff(url, repository.getSourceSettings('github')?.token ?? process.env.GITHUB_TOKEN));
+    const pullRequest = item.payload as GitHubPullRequestDiff;
+    const identity = await repositoryIdentity(input.workspacePath);
+    repository.captureWorkspaceDiffSnapshot({ conversationId: input.conversationId }, pullRequestWorkspaceDiff(pullRequest, input.workspacePath), {
+      commitHash: pullRequest.headSha,
+      repositoryIdentity: identity,
+    });
+    evidence.push(item);
+  }
+
+  const requestText = [input.message, ...input.recentReferences].join('\n');
+  const asksForConnectedSource = /\b(?:slack|linear|atlassian|confluence|jira|figma|grafana|github)\b|https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(requestText);
+  // A review PR is already represented by the complete canonical diff above.
+  // Do not make a second GitHub issue-style resolution call for the same URL.
+  const needsConnectionContext = asksForConnectedSource && !(input.runKind === 'review' && urls.length > 0 && !/\b(?:slack|linear|atlassian|confluence|jira|figma|grafana)\b/i.test(requestText));
+  if (needsConnectionContext) {
+    evidence.push(await brokerExternalEvidence(repository, {
+      conversationId: input.conversationId, dispatchGroupId: input.dispatchGroupId,
+      kind: 'connected_source_context', source: 'Workbench connected sources', request: { text: requestText },
+    }, () => contextForPrompt(repository, requestText)));
+  }
+  return evidence;
+}
 
 /** Associates a running reply with its provider's live input channel. */
 export function registerActiveReplySteering(messageId: string, steer: ActiveReplySteering): void {
@@ -1092,6 +1165,8 @@ ${memoryContext}
 
 ${connectionContext}
 
+External evidence policy: every read from GitHub, a pasted URL, a connected source, or observability must go through Workbench's supervisor-owned evidence path. Use the local snapshot above when present. For additional reads, call the matching Workbench MCP evidence tool with the Conversation ID and Current reply message ID above. Never use provider web search, curl, gh, git fetch/pull, or a provider-specific connector to create a competing copy of external evidence.
+
 Reference-only conversation transcript:
 ${compactConversationHistory(thread)}
 
@@ -1133,6 +1208,8 @@ ${cascadeBreaker}
 
 Short-term memory from active conversations:
 ${compactSharedBrief(shortTermContext, 2_400)}
+
+External evidence policy: every read from GitHub, a pasted URL, a connected source, or observability must go through Workbench's supervisor-owned evidence path. Use the local snapshot below when present. For additional reads, call the matching Workbench MCP evidence tool with the Conversation ID and Current reply message ID above. Never use provider web search, curl, gh, git fetch/pull, or a provider-specific connector to create a competing copy of external evidence.
 
 ${memoryContext}
 
@@ -1264,6 +1341,24 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     repository.addActivity(linkedItem.id, 'jeffrey', 'chat_started', `To ${agents.join(' and ')}${attachmentText}: ${queued.message.body.trim() || '(attachment-only message)'}`);
   }
   const accountProfile = accountProfileForSharedReply(linkedItem, queued.message.accountProfile);
+  const selectedWorkspace = repository.database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversationId) as { workspace_path: string } | undefined;
+  const evidenceWorkspace = resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
+  const recentSourceReferences = [
+    ...retrievalThread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body),
+    linkedItem?.sourceUrl ?? '',
+    ...(linkedItem ? repository.listReferences(linkedItem.id).map((reference) => reference.url) : []),
+  ].filter(Boolean);
+  // External evidence is a supervisor prerequisite, exactly like grounding,
+  // authorization and memory. Start it once before provider fan-out and hand
+  // the same promise (and therefore the same immutable bytes) to every reply.
+  const evidence: SharedReplyEvidence = process.env.VITEST ? Promise.resolve([]) : prepareSharedExternalEvidence(repository, {
+    conversationId,
+    dispatchGroupId: queued.message.id,
+    message: currentMessage,
+    recentReferences: recentSourceReferences,
+    runKind: taskKind,
+    workspacePath: evidenceWorkspace,
+  });
   // Task-linked replies become running only after they own their durable run
   // and, for edits, the selected repository. A busy repository is a queue,
   // not a hung provider turn.
@@ -1276,7 +1371,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     const run = linkedItem && !linkedItem.archivedAt && linkedItem.status !== 'done' && linkedItem.status !== 'canceled'
       ? repository.createRun(linkedItem.id, taskKind, queued.dispatchTarget, agent, fallbackGrounding.objective, conversationId, reply.id, 'manual', accountProfile)
       : null;
-    void replyInSharedRoom(repository, agent, reply.id, run?.id, grounding, authorization, undefined, memory);
+    void replyInSharedRoom(repository, agent, reply.id, run?.id, grounding, authorization, undefined, memory, evidence);
   }
   return replies;
 }
@@ -1364,6 +1459,7 @@ export async function replyInSharedRoom(
   authorizationSnapshot?: Promise<ExternalActionAuthorization>,
   _cacheCheckpoint?: string,
   memorySnapshot?: SharedReplyMemory,
+  evidenceSnapshot?: SharedReplyEvidence,
 ): Promise<void> {
   const target = repository.getSharedMessageById(messageId);
   if (!target) return;
@@ -1443,13 +1539,16 @@ export async function replyInSharedRoom(
     const latestUserMessage = latestHumanMessageForSharedReply(thread);
     const precedingUserMessage = precedingHumanMessageForSharedReply(thread);
     const precedingAgentResponse = [...thread].reverse().find((message) => message.author === 'claude' || message.author === 'codex' || message.author === 'palmyra')?.body ?? '';
-    const recentSourceReferences = thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body);
-    const connectionContext = await connectionContextForPrompt(repository, [latestUserMessage, ...recentSourceReferences].join('\n'));
     const linkedRun = runId ? repository.getRun(runId) : null;
     const linkedConversation = repository.getConversation(target.conversationId);
     const linkedItem = linkedRun
       ? repository.get(linkedRun.workItemId)
       : linkedConversation?.workItemId ? repository.get(linkedConversation.workItemId) : null;
+    const recentSourceReferences = [
+      ...thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body),
+      linkedItem?.sourceUrl ?? '',
+      ...(linkedItem ? repository.listReferences(linkedItem.id).map((reference) => reference.url) : []),
+    ].filter(Boolean);
     const selectedWorkspace = repository.database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(target.conversationId) as { workspace_path: string } | undefined;
     const sourceCwd = resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
     const cwd = linkedRun
@@ -1460,6 +1559,20 @@ export async function replyInSharedRoom(
     if (runId) repository.updateRun(runId, { resolvedWorkspace: cwd });
     if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Conversation workspace resolved to ${cwd}${selectedWorkspace ? ' from Repo Explorer.' : '.'}`);
     const runKind = linkedRun?.kind ?? target.kind ?? 'analysis';
+    const externalEvidence = await (evidenceSnapshot ?? (process.env.VITEST ? Promise.resolve([]) : prepareSharedExternalEvidence(repository, {
+      conversationId: target.conversationId,
+      dispatchGroupId: target.dispatchGroupId ?? messageId,
+      message: latestUserMessage,
+      recentReferences: recentSourceReferences,
+      runKind,
+      workspacePath: sourceCwd,
+    })));
+    const connectedContext = externalEvidence.find((entry) => entry.snapshot.kind === 'connected_source_context')?.payload;
+    const connectionContext = [typeof connectedContext === 'string' ? connectedContext : '', evidencePromptBlock(externalEvidence)].filter(Boolean).join('\n\n');
+    for (const entry of externalEvidence) repository.addAgentStreamEvents(messageId, runId ?? null, [{
+      kind: 'decision',
+      detail: `Supervisor supplied ${entry.snapshot.kind} from one immutable local snapshot (${entry.snapshot.id}); ${entry.reused ? 'reused' : 'fetched once'} for dispatch ${entry.snapshot.dispatchGroupId}.`,
+    }]);
     const profile = agent === 'palmyra'
       ? 'standard' as const
       : target.executionProfile && target.executionProfile !== 'routing' && target.executionProfile !== 'palmyra-x5' && target.executionProfile !== 'palmyra-x6'

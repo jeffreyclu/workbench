@@ -3,7 +3,7 @@ import { ClipboardCheck, ExternalLink, FileDiff, FolderSearch, GitBranch, GitCom
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
-import type { AgentRunReviewHandoff, DiffHunkReviewState, WorkspaceDiffFile } from '../../../shared/contracts.js';
+import { SUPERVISOR_EVIDENCE_REASON_PREFIX, type AgentRunReviewHandoff, type DiffHunkReviewState, type WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { createReviewDirectorPlan, nextReviewDirectorDecisionId } from '../../../shared/review-director.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
@@ -139,8 +139,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   const diff = query.data?.diff;
   const snapshots = snapshotsQuery.data?.snapshots ?? [];
+  const supervisorSnapshot = snapshots.find((snapshot) => snapshot.diff.publish.reason?.startsWith(SUPERVISOR_EVIDENCE_REASON_PREFIX)) ?? null;
   const selectedSnapshot = selectedSnapshotId === null && diff?.changedFiles === 0
-    ? snapshots.find((snapshot) => snapshot.diff.changedFiles > 0) ?? null
+    ? supervisorSnapshot ?? snapshots.find((snapshot) => snapshot.diff.changedFiles > 0) ?? null
     : snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null;
 
   // Pull requests are review sources in the same decision queue as local
@@ -229,6 +230,14 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // loaded would decide the opening source from an empty timeline.
     if (hasChosenSource.current || query.isPending || snapshotsQuery.isPending) return;
     hasChosenSource.current = true;
+    // A supervisor-fetched review snapshot is the exact evidence handed to
+    // every agent. It outranks unrelated dirty files in the selected checkout
+    // so Jeffrey, Claude and Codex open on one source of truth.
+    if (supervisorSnapshot) {
+      setSelectedSnapshotId(supervisorSnapshot.id);
+      setReviewSource('history');
+      return;
+    }
     // Open on a linked pull request only when the local checkout has nothing
     // to review, so a reviewer working through a PR is never pulled out of it.
     if (!hasLocalReviewableChanges && availablePullRequests.length > 0) {
@@ -239,7 +248,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // A clean checkout opens on its latest immutable record. Keep the source
     // control truthful instead of making a history record look like live work.
     if (reviewSource === 'workspace' && diff?.changedFiles === 0 && snapshots.length > 0) setReviewSource('history');
-  }, [query.isPending, snapshotsQuery.isPending, hasLocalReviewableChanges, availablePullRequests, reviewSource, diff?.changedFiles, snapshots.length]);
+  }, [query.isPending, snapshotsQuery.isPending, hasLocalReviewableChanges, availablePullRequests, reviewSource, diff?.changedFiles, snapshots.length, supervisorSnapshot]);
   // The repository picker's whole job is to reach the other half of a change.
   // A checkout whose work is committed has no working-tree diff and no records
   // captured here, so landing on Workspace showed an empty pane and looked

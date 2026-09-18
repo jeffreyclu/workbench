@@ -26,6 +26,7 @@ import { DEFAULT_DURABLE_MEMORY_SOURCES, isPersonalLongTermMemoryRequest, select
 import { inspectManagedCommand, listManagedCommands, startManagedCommand, stopManagedCommand } from './managed-command.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
+import { brokerExternalEvidence } from './external-evidence.js';
 
 const actorSchema = z.enum(['codex', 'claude', 'palmyra']).describe('Which assistant is acting. This is attribution, not permission: all three agents hold identical, complete Workbench admin rights. Jeffrey and system are excluded only so the log never misreports who acted.');
 const stackSchema = z.enum(['attention', 'workbench', 'archive']);
@@ -99,6 +100,35 @@ async function runTool(name: string, operation: () => unknown | Promise<unknown>
     }));
     return failure('INTERNAL_ERROR', 'Workbench could not complete the tool call.');
   }
+}
+
+const evidenceContextShape = {
+  conversationId: z.string().uuid().describe('Workbench conversation that owns this evidence.'),
+  messageId: z.string().uuid().describe('Current reply message ID from the Workbench context handles.'),
+};
+
+async function runEvidenceRead<T>(
+  repository: WorkItemRepository,
+  context: { conversationId: string; messageId: string },
+  kind: string,
+  source: string,
+  request: unknown,
+  fetcher: () => Promise<T>,
+) {
+  const message = repository.getSharedMessageById(context.messageId);
+  if (!message || message.conversationId !== context.conversationId) throw new ToolFailure('INVALID_ARGUMENT', 'Evidence context does not match the active Workbench reply.');
+  const evidence = await brokerExternalEvidence(repository, {
+    conversationId: context.conversationId,
+    dispatchGroupId: message.dispatchGroupId ?? message.id,
+    kind,
+    source,
+    request,
+  }, fetcher);
+  repository.addAgentStreamEvents(message.id, null, [{
+    kind: 'decision',
+    detail: `Supervisor ${evidence.reused ? 'reused' : 'captured'} ${kind} as immutable local evidence ${evidence.snapshot.id}.`,
+  }]);
+  return { evidence: evidence.snapshot, data: evidence.payload };
 }
 
 /**
@@ -803,23 +833,24 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
 
   server.registerTool('search_external_sources', {
     title: 'Search Workbench external sources',
-    description: 'Searches the selected external sources through Workbench-owned connections. Credentials remain server-side. This tool is read-only and cannot mutate an external provider.',
-    inputSchema: searchSourcesSchema.shape,
+    description: 'Searches through the supervisor-owned evidence broker. Pass the current Workbench conversation and reply handles; the exact result is stored locally and reused by every agent in the conversation. Credentials remain server-side. Read-only.',
+    inputSchema: { ...searchSourcesSchema.shape, ...evidenceContextShape },
     annotations: externalReadOnlyAnnotations,
-  }, async ({ query, sources }) => runTool('search_external_sources', () => admin.searchExternalSources(query, sources)));
+  }, async ({ query, sources, conversationId, messageId }) => runTool('search_external_sources', () => runEvidenceRead(repository, { conversationId, messageId }, 'external_source_search', sources.join(','), { query, sources }, () => admin.searchExternalSources(query, sources))));
 
   server.registerTool('connector_failure_summary', {
     title: 'Summarize connector failures in production',
-    description: 'Step 1 of the connector troubleshooting playbook: decides whether a reported connector problem is isolated or systemic, and which failure class it belongs to. Runs the six breakdowns from the gateway failure-taxonomy dashboard (result mix, failure reason, top failing connectors, not_authenticated vs invalid_credentials, OAuth token failures, upstream status codes) against Prometheus in one call. `connector` filters the `app` label, so pass the exact catalog id such as SALESFORCE or SF_DATA_CLOUD. If you do not know the cluster, list them with connector_observability_query using `count by (cluster) (mcp_gateway_tool_calls_total)`. Read-only.',
+    description: 'Step 1 of the connector troubleshooting playbook, captured through the supervisor-owned evidence broker and reused across agents. Pass the current Workbench conversation and reply handles. Runs the six failure-taxonomy breakdowns against Prometheus. `connector` filters the `app` label. Read-only.',
     inputSchema: {
       cluster: z.string().trim().min(1).max(200).describe('Cluster label, matched as a regex. Example: dev-deer.'),
       connector: z.string().trim().max(200).nullable().default(null).describe('Optional `app` label regex, e.g. SALESFORCE.'),
       windowMinutes: z.number().int().min(5).max(10_080).default(60),
       start: z.string().trim().max(64).nullable().default(null).describe('RFC3339 start. Overrides windowMinutes.'),
       end: z.string().trim().max(64).nullable().default(null).describe('RFC3339 end. Defaults to now.'),
+      ...evidenceContextShape,
     },
     annotations: externalReadOnlyAnnotations,
-  }, async (input) => runTool('connector_failure_summary', async () => unwrap(await admin.connectorFailureSummary(input))));
+  }, async ({ conversationId, messageId, ...input }) => runTool('connector_failure_summary', () => runEvidenceRead(repository, { conversationId, messageId }, 'connector_failure_summary', 'Grafana Prometheus', input, async () => unwrap(await admin.connectorFailureSummary(input)))));
 
   server.registerTool('connector_logs', {
     title: 'Read connector tool-call logs',
@@ -834,9 +865,10 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       end: z.string().trim().max(64).nullable().default(null),
       limit: z.number().int().min(1).max(200).default(50),
       direction: z.enum(['forward', 'backward']).default('backward'),
+      ...evidenceContextShape,
     },
     annotations: externalReadOnlyAnnotations,
-  }, async (input) => runTool('connector_logs', async () => unwrap(await admin.connectorLogs(input))));
+  }, async ({ conversationId, messageId, ...input }) => runTool('connector_logs', () => runEvidenceRead(repository, { conversationId, messageId }, 'connector_logs', 'Grafana Loki', input, async () => unwrap(await admin.connectorLogs(input)))));
 
   server.registerTool('connector_observability_query', {
     title: 'Run a raw connector telemetry query',
@@ -848,16 +880,17 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       start: z.string().trim().max(64).nullable().default(null),
       end: z.string().trim().max(64).nullable().default(null),
       limit: z.number().int().min(1).max(200).default(50).describe('Log line cap; ignored for metrics.'),
+      ...evidenceContextShape,
     },
     annotations: externalReadOnlyAnnotations,
-  }, async (input) => runTool('connector_observability_query', async () => unwrap(await admin.connectorObservabilityQuery(input))));
+  }, async ({ conversationId, messageId, ...input }) => runTool('connector_observability_query', () => runEvidenceRead(repository, { conversationId, messageId }, 'connector_observability_query', 'Grafana', input, async () => unwrap(await admin.connectorObservabilityQuery(input)))));
 
   server.registerTool('resolve_external_source', {
     title: 'Resolve an external source URL',
-    description: 'Resolves one supported external URL through Workbench-owned connections and returns a normalized task draft. Credentials remain server-side and no provider state is changed.',
-    inputSchema: resolveSourceUrlSchema.shape,
+    description: 'Resolves one supported external URL through the supervisor-owned evidence broker. Pass the current Workbench conversation and reply handles; the result is stored locally and reused across agents. Credentials remain server-side and no provider state is changed.',
+    inputSchema: { ...resolveSourceUrlSchema.shape, ...evidenceContextShape },
     annotations: externalReadOnlyAnnotations,
-  }, async ({ url }) => runTool('resolve_external_source', () => admin.resolveExternalSource(url)));
+  }, async ({ url, conversationId, messageId }) => runTool('resolve_external_source', () => runEvidenceRead(repository, { conversationId, messageId }, 'external_source_url', url, { url }, () => admin.resolveExternalSource(url))));
 
   server.registerTool('set_figma_discovery_scope', {
     title: 'Set Figma discovery scope',

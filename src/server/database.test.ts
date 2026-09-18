@@ -93,6 +93,7 @@ const EXPECTED_MIGRATIONS = [
   '077_shared_conversation_palmyra_context',
   '078_knowledge_graph',
   '079_conversation_external_action_grants',
+  '080_external_evidence_snapshots',
 ];
 
 describe('openDatabase', () => {
@@ -883,6 +884,22 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'conversation_external_action_grants'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_conversation_external_action_grants_expiry'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '079_conversation_external_action_grants'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds supervisor-owned external evidence manifests when upgrading from migration 079', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE external_evidence_snapshots;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '080_external_evidence_snapshots'").run();
+    expect(current.prepare("SELECT id FROM schema_migrations WHERE id = '079_conversation_external_action_grants'").get()).toBeTruthy();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'external_evidence_snapshots'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_external_evidence_conversation_captured'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '080_external_evidence_snapshots'").get()).toBeTruthy();
     upgraded.close();
   });
 

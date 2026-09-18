@@ -579,6 +579,25 @@ export interface WorkspaceDiffSnapshot {
   repositoryIdentity: string | null;
 }
 
+/** Stable marker for a review diff captured from the supervisor's external
+ * evidence broker rather than from the mutable local working tree. */
+export const SUPERVISOR_EVIDENCE_REASON_PREFIX = 'Supervisor-owned snapshot of ';
+
+/** Immutable result of one supervisor-owned external evidence read. The raw
+ * response lives on local disk; this is the durable manifest shared by every
+ * agent dispatched for the same human turn. */
+export interface ExternalEvidenceSnapshot {
+  id: string;
+  conversationId: string;
+  dispatchGroupId: string;
+  kind: string;
+  requestKey: string;
+  source: string;
+  payloadPath: string;
+  payloadHash: string;
+  capturedAt: string;
+}
+
 export type DiffHunkReviewState = 'reviewed' | 'needs_changes' | 'commented';
 
 /** Persistent review state for one hunk of one file at a given diff revision. */

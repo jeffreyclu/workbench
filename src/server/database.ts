@@ -2357,6 +2357,30 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // External reads are evidence, not provider-session state. One immutable
+    // manifest per human turn and canonical request lets every delegated agent
+    // consume the same bytes without refetching or choosing a competing source.
+    id: '080_external_evidence_snapshots',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE external_evidence_snapshots (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+          dispatch_group_id TEXT NOT NULL REFERENCES shared_messages(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL,
+          request_key TEXT NOT NULL,
+          source TEXT NOT NULL,
+          payload_path TEXT NOT NULL,
+          payload_hash TEXT NOT NULL,
+          captured_at TEXT NOT NULL,
+          UNIQUE(dispatch_group_id, request_key)
+        );
+        CREATE INDEX idx_external_evidence_conversation_captured
+          ON external_evidence_snapshots(conversation_id, captured_at DESC);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

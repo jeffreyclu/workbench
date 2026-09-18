@@ -50,6 +50,29 @@ afterEach(() => {
 });
 
 describe('WorkspaceDiffView decision queue', () => {
+  it('opens the supervisor-owned review snapshot even when the checkout has unrelated local changes', async () => {
+    const localFile: WorkspaceDiffFile = { path: 'src/unrelated-local.ts', previousPath: null, status: 'modified', additions: 1, deletions: 0, isBinary: false, patch: '@@ -1 +1 @@ localOnly\n+local' };
+    const reviewFile: WorkspaceDiffFile = { path: 'src/authoritative-pr.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ reviewTarget\n-old\n+new' };
+    const canonical = {
+      ...workspaceDiff([reviewFile], 'pr-head-sha'),
+      branch: 'main → review-branch',
+      publish: { branch: null, hasOrigin: false, ahead: 0, hasChanges: false, reason: 'Supervisor-owned snapshot of https://github.com/acme/widgets/pull/42.' },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true, relevant: true }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [{ id: 'canonical-pr', revision: canonical.revision, capturedAt: '2026-09-18T12:00:00.000Z', originatingAgentRunId: null, commitHash: 'a'.repeat(40), repositoryIdentity: 'repo', diff: canonical }] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([localFile], 'local-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, null, undefined, undefined, { conversationId: 'conversation-1' });
+
+    await findSelectedDecision('Changes behavior in src/authoritative-pr.ts.');
+    expect(screen.getByRole('button', { name: 'main → review-branch · saved · 1 file' })).toHaveAttribute('aria-current', 'true');
+    expect(screen.queryByLabelText('Full diff for src/unrelated-local.ts')).not.toBeInTheDocument();
+  });
+
   it('shows every conversation repository and branch diff before the unrelated repository catalog', async () => {
     const frontend = '/tmp/frontend';
     const backend = '/tmp/backend';
