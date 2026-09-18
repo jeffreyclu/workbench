@@ -91,6 +91,12 @@ function PendingHarness({ targets, onPending }: { targets: DelegationTarget[]; o
   return null;
 }
 
+function EscalationHarness({ targets, onEscalations }: { targets: DelegationTarget[]; onEscalations: (escalations: ReadonlyMap<string, string>) => void }) {
+  const progress = useDelegatedReview({ targets, siblings: [], taskIntent: null, revision: 'rev-1', enabled: true });
+  onEscalations(progress.escalations);
+  return null;
+}
+
 describe('useDelegatedReview', () => {
   // A running count told a reviewer that some sweep was working; it never told
   // them whether the change they were looking at was the one still waiting.
@@ -202,5 +208,14 @@ describe('useDelegatedReview', () => {
     render(<Harness targets={[{ decisionId: decision.id, decision, tier: 'T1' }]} onAutoReview={(target) => autoReviewed.push(target.decisionId)} />);
     await settle();
     expect(autoReviewed).toEqual([]);
+  });
+
+  it('hands an unconfident delegated answer to the reviewer with the missing evidence named', async () => {
+    stubAssist(UNCONFIDENT);
+    const [decision] = decisions();
+    const seen: ReadonlyMap<string, string>[] = [];
+    render(<EscalationHarness targets={[{ decisionId: decision.id, decision, tier: 'T1' }]} onEscalations={(escalations) => seen.push(escalations)} />);
+
+    await waitFor(() => expect(seen.at(-1)?.get(decision.id)).toContain('call sites outside this diff'));
   });
 });

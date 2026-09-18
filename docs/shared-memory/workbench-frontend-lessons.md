@@ -2,10 +2,10 @@
 
 ### Attention-stack badge numerals use optical centering
 
-*Correction from Jeffrey, 2026-09-16.* Center the visible numeral ink in each task-stack header
-badge, not only its CSS line box. `place-items: center`, `line-height`, and a fixed transform are all
-font- and glyph-specific guesses. Keep the badge itself unchanged and use the rendered font's
-`actualBoundingBox*` metrics to center each number on both axes. Scope that measured renderer to task
+*Correction from Jeffrey, 2026-09-18.* Attention-stack counts must be centered structurally in the
+DOM/CSS; canvas painting, pixel transforms, and fixed nudges are not acceptable. Give the task-stack
+badge a genuinely square flex circle, remove inherited header letter-spacing from its numeral, and
+trim the numeral's cap-to-baseline text box before flex centering it. Scope this structure to task
 stack headers so conversation headers and other count pills do not change.
 
 ### Compact desktop navigation icons share one center axis

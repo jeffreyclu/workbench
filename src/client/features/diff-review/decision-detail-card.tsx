@@ -1,4 +1,5 @@
 import { memo, useState, type ReactNode } from 'react';
+import { TriangleAlert } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
 import { changeTypeLabel } from './logic.js';
@@ -24,7 +25,7 @@ export type { ReviewAssistAction, ReviewAssistTaskIntent };
  * lives on the block's gutter marker instead, so the panel only carries what
  * has to be asked for.
  */
-export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, tier = null, critical = false, hideJudging = false, children }: {
+export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, tier = null, critical = false, escalation = null, hideJudging = false, children }: {
   decision: ReviewDecision;
   taskIntent: ReviewAssistTaskIntent;
   /** Result of the background pass that scores a diff once its agent comes to
@@ -48,6 +49,8 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   /** Review Director's critical tier receives every explanation up front and
    * opens the deterministic heuristic by default. */
   critical?: boolean;
+  /** Why the completed delegated pass handed this decision to the reviewer. */
+  escalation?: string | null;
   /** Drops the heuristic panel and the AI risk score, leaving only what the
    * chunk gutter's simplified popup wants: the change itself, review, ask and
    * AI assist. No scoring, no obligations trace. */
@@ -98,6 +101,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
         <h3 id={titleId}>{decision.behavior}</h3>
       </div>
     </header>
+    {escalation && <p className="diff-review-delegation-escalation" role="alert"><TriangleAlert size={14} aria-hidden="true" /><span><strong>Delegated review needs you.</strong> {escalation}</span></p>}
     {/* The deterministic layer sits above the AI panel because it constrains
       * it: the change type selects the obligations the assist prompt carries,
       * and the evidence packs are what any coverage or call-site claim is

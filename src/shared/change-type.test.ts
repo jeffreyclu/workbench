@@ -108,6 +108,9 @@ describe('classifyChangeType', () => {
 
   it('classifies by path before reading a single line, so a lockfile is never scored as logic', () => {
     expect(classifyChangeType([hunk('pnpm-lock.yaml', ['+  resolution: {integrity: sha512-abc}'])]).primary).toBe('generated');
+    expect(classifyChangeType([hunk('bun.lock', ['+lockfileVersion = 1'])]).primary).toBe('generated');
+    expect(classifyChangeType([hunk('Cargo.lock', ['+version = 4'])]).primary).toBe('generated');
+    expect(classifyChangeType([hunk('packages.lock.json', ['+{}'])]).primary).toBe('generated');
     expect(classifyChangeType([hunk('docs/product-model.md', ['+A new paragraph.'])]).primary).toBe('docs_comment');
     expect(classifyChangeType([hunk('package.json', ['+    "vitest": "^3.2.4",'])]).primary).toBe('config_dep');
     expect(classifyChangeType([hunk('src/retry.test.ts', ['+expect(retry(2)).toBe(2);'])]).primary).toBe('test_only');

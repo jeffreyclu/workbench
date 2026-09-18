@@ -378,6 +378,22 @@ The review surface shows Review Director progress and counts so its work is obse
 Delegation has bounded concurrency but no per-review count ceiling: every delegated
 decision is queued, including test-only changes.
 
+While Review Director is running, every decision claimed by its delegated sweep
+stays at the back of the decision queue. Human-owned decisions retain their risk
+order at the front; claimed decisions retain their own order at the back. An
+answered or failed delegation stops being claimed and returns to the queue state
+earned by its result.
+
+Dependency lockfiles are generated bookkeeping, not hunk-level review work.
+`pnpm-lock.yaml`, npm and Yarn lockfiles, and equivalent ecosystem lockfiles
+produce one decision per file regardless of hunk count. Review Director places
+that decision at the back and delegates it automatically.
+
+A delegated answer that reports low confidence is an explicit handoff, not a
+silent non-verdict. Review Director moves it back into the human-owned queue,
+marks it as needing review, and shows the evidence or context the delegated
+model said was missing.
+
 *Presentation and latency correction from Jeffrey, 2026-09-17.* A critical
 decision's AI risk, explanation, breakage analysis, and task alignment are
 produced in one bounded structured model turn, then stored in their existing

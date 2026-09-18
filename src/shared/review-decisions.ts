@@ -8,7 +8,7 @@ import {
   type WorkspaceDiffFile,
 } from './contracts.js';
 import { buildCoverageEvidence, buildReferenceEvidence, type CoverageEvidence, type ReferenceEvidence } from './coverage-evidence.js';
-import { classifyChangeType, type ReviewChangeType } from './change-type.js';
+import { classifyChangeType, isDependencyLockfilePath, type ReviewChangeType } from './change-type.js';
 
 /** Decision derivation is shared, not client-only: the server's background
  * scorer must produce byte-identical decision payloads, because the AI answer
@@ -326,6 +326,10 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
     subjectFileCounts.set(candidate.subject, paths);
   }
   const groupKeys = candidates.map((candidate) => {
+    // A generated lockfile is one review concern. Git may split it into
+    // hundreds of hunks, but none of those fragments is independently useful
+    // to a reviewer or deserves its own queue position/model turn.
+    if (isDependencyLockfilePath(candidate.hunk.filePath)) return `lockfile:${candidate.hunk.filePath}`;
     const spansFiles = candidate.subject && (subjectFileCounts.get(candidate.subject)?.size ?? 0) > 1;
     return spansFiles ? `subject:${candidate.subject}` : `hunk:${candidate.hunk.id}`;
   });
@@ -351,20 +355,24 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
 
   return [...groups.values()].map((group, index) => {
     const hunks = group.map((candidate) => candidate.hunk);
+    const lockfilePath = group.every((candidate) => candidate.hunk.filePath === group[0].hunk.filePath)
+      && isDependencyLockfilePath(group[0].hunk.filePath)
+      ? group[0].hunk.filePath
+      : null;
     // An import block carries no subject and no behavior worth naming, so a
     // group it merely accompanies is described by the code hunk instead.
     const primary = group.find((candidate) => !candidate.importOnly) ?? group[0];
     const filePaths = [...new Set(hunks.map((hunk) => hunk.filePath))];
-    const riskSignals = REVIEW_RISK_SIGNALS.filter((signal) => group.some((candidate) => candidate.riskSignals.includes(signal)));
+    const riskSignals = lockfilePath ? [] : REVIEW_RISK_SIGNALS.filter((signal) => group.some((candidate) => candidate.riskSignals.includes(signal)));
     if (filePaths.length > 1) riskSignals.push('cross_file');
     const changeType = classifyChangeType(group.map((candidate) => ({
       filePath: candidate.hunk.filePath, fileStatus: candidate.fileStatus, lines: candidate.hunk.lines,
     })));
     return {
       ordinal: index + 1,
-      id: group.length > 1 ? `decision:${primary.subject}:${hunks.map((hunk) => hunk.id).sort().join('|')}` : hunks[0].id,
-      subject: primary.subject,
-      behavior: behaviorSummary(primary.subject, hunks, group.map((candidate) => candidate.fileStatus)),
+      id: lockfilePath ? `decision:lockfile:${lockfilePath}` : group.length > 1 ? `decision:${primary.subject}:${hunks.map((hunk) => hunk.id).sort().join('|')}` : hunks[0].id,
+      subject: lockfilePath ? null : primary.subject,
+      behavior: lockfilePath ? `Updates generated dependency lockfile ${lockfilePath}.` : behaviorSummary(primary.subject, hunks, group.map((candidate) => candidate.fileStatus)),
       hunks, filePaths,
       additions: hunks.reduce((total, hunk) => total + hunk.additions, 0),
       deletions: hunks.reduce((total, hunk) => total + hunk.deletions, 0),

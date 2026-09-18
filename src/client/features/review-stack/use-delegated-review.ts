@@ -26,11 +26,16 @@ export interface DelegatedReviewProgress {
    * flight. Per-decision because a running total cannot tell a reviewer whether
    * *this* change is still owed an answer or was never delegated at all. */
   pending: ReadonlySet<string>;
+  /** Delegated answers that explicitly said the evidence was insufficient,
+   * keyed by decision so the queue can hand the question to the reviewer with
+   * the missing context named instead of merely leaving the chip pending. */
+  escalations: ReadonlyMap<string, string>;
 }
 
 const NO_PENDING: ReadonlySet<string> = new Set();
+const NO_ESCALATIONS: ReadonlyMap<string, string> = new Map();
 
-const IDLE: DelegatedReviewProgress = { running: false, completed: 0, total: 0, failed: 0, skipped: 0, pending: NO_PENDING };
+const IDLE: DelegatedReviewProgress = { running: false, completed: 0, total: 0, failed: 0, skipped: 0, pending: NO_PENDING, escalations: NO_ESCALATIONS };
 
 /**
  * One revision's delegated turns, and the workers spending them.
@@ -179,9 +184,15 @@ export function useDelegatedReview(input: {
         // it. Owing the change again costs a cache hit, not another turn.
         if (run.cancelled) { abandon(target); break; }
         if (answer) latest.current.onAnswer?.(target.decisionId, answer);
-        if (delegationOutcome(target.tier, answer).autoReview) latest.current.onAutoReview?.(target);
+        const outcome = delegationOutcome(target.tier, answer);
+        if (outcome.autoReview) latest.current.onAutoReview?.(target);
         settlePending(pendingCounts.current, target.decisionId);
-        setProgress((current) => ({ ...current, completed: current.completed + 1, pending: pendingSnapshot(pendingCounts.current) }));
+        setProgress((current) => {
+          const escalations = new Map(current.escalations);
+          if (outcome.escalation) escalations.set(target.decisionId, outcome.escalation);
+          else escalations.delete(target.decisionId);
+          return { ...current, completed: current.completed + 1, pending: pendingSnapshot(pendingCounts.current), escalations };
+        });
       } catch {
         if (run.cancelled) { abandon(target); break; }
         // A failed turn leaves the change owed. It is not retried within the

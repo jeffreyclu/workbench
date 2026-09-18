@@ -267,11 +267,11 @@ describe('routing', () => {
     expect(routeReviewBlock(decision, blockObligations(decision), { effect: 'declaration', score: 0, hazards: [] }).autoSettled).toBe(true);
   });
 
-  it('never auto-settles generated output into invisibility', () => {
+  it('groups dependency locks into delegated work instead of auto-settling or showing them to the reviewer', () => {
     const decision = decisionFor(file('package-lock.json', '@@ -1,2 +1,2 @@\n-  "version": "1.0.0",\n+  "version": "1.0.1",'));
     const routing = routeReviewBlock(decision, blockObligations(decision));
-    expect(routing.tier).toBe('T0');
-    expect(routing.reason).toMatch(/Generated/);
+    expect(routing).toMatchObject({ tier: 'T1', autoSettled: false });
+    expect(routing.reason).toMatch(/lockfile.*delegated last/i);
   });
 });
 

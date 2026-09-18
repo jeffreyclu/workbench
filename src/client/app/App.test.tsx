@@ -175,7 +175,10 @@ describe('primary navigation', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open pinned: 1 pinned task waiting for you.' }));
 
     await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' })));
-    expect(document.querySelector('.stack-header-pinned')?.textContent).toContain('Pinned for you');
+    const pinnedHeader = document.querySelector('.stack-header-pinned');
+    expect(pinnedHeader?.textContent).toContain('Pinned for you');
+    expect(pinnedHeader?.querySelector('.optically-centered-count > .optically-centered-number')).toHaveTextContent('1');
+    expect(pinnedHeader?.querySelector('canvas')).toBeNull();
     if (scrollToDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollTo', scrollToDescriptor);
     else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
   });

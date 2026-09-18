@@ -69,4 +69,24 @@ describe('review decision titles', () => {
     expect(decision.behavior).toBe('Extends the use connect connector flow.');
     expect(decision.behavior).not.toContain('access checks');
   });
+
+  it('collapses every hunk in a dependency lockfile into one generated decision', () => {
+    const decisions = buildReviewDecisions([{
+      path: 'pnpm-lock.yaml', previousPath: null, status: 'modified', additions: 3, deletions: 3, isBinary: false,
+      patch: [
+        '@@ -10 +10 @@ importers:', '-  react: 18.0.0', '+  react: 19.0.0',
+        '@@ -200 +200 @@ packages:', '-  react@18.0.0:', '+  react@19.0.0:',
+        '@@ -900 +900 @@ snapshots:', '-  react@18.0.0: {}', '+  react@19.0.0: {}',
+      ].join('\n'),
+    }], []);
+
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({
+      id: 'decision:lockfile:pnpm-lock.yaml',
+      behavior: 'Updates generated dependency lockfile pnpm-lock.yaml.',
+      changeType: 'generated',
+      riskSignals: [],
+    });
+    expect(decisions[0].hunks).toHaveLength(3);
+  });
 });

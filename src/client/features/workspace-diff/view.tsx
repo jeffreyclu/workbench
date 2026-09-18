@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
 import { SUPERVISOR_EVIDENCE_REASON_PREFIX, type AgentRunReviewHandoff, type DiffHunkReviewState, type WorkspaceDiffFile } from '../../../shared/contracts.js';
-import { createReviewDirectorPlan, nextReviewDirectorDecisionId } from '../../../shared/review-director.js';
+import { createReviewDirectorPlan, deferDelegatedReviewDecisions, nextReviewDirectorDecisionId } from '../../../shared/review-director.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
@@ -474,9 +474,21 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       void recordDecisionState(target.decision, 'reviewed').catch(() => {});
     },
   });
+  // A claimed decision belongs to the Director until its delegated turn
+  // answers. Keep every one of those claims behind the work that still needs
+  // Jeffrey, while preserving the risk order inside both halves of the queue.
+  // Failed turns leave `pending` and immediately return to human priority.
+  const queueDecisions = useMemo(
+    () => deferDelegatedReviewDecisions(orderedDecisions, delegation.pending),
+    [delegation.pending, orderedDecisions],
+  );
+  const activeEscalations = useMemo(() => {
+    const pendingIds = new Set(decisions.filter((decision) => decision.state === null).map((decision) => decision.id));
+    return new Map([...delegation.escalations].filter(([decisionId]) => pendingIds.has(decisionId)));
+  }, [decisions, delegation.escalations]);
 
   const saveDecision = useCallback((decision: ReviewDecision, state: DiffHunkReviewState) => {
-    const nextId = nextReviewDirectorDecisionId(reviewPlan, decision.id);
+    const nextId = nextReviewDirectorDecisionId(reviewPlan, decision.id, delegation.pending);
     const failedAnchor = detailAnchor;
     upsertHunkReview.reset();
     if (nextId !== decision.id) setCameFromDecisionId(decision.id);
@@ -488,19 +500,19 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       setSelectedDecisionId(decision.id);
       setDetailAnchor(failedAnchor);
     });
-  }, [detailAnchor, recordDecisionState, reviewPlan, upsertHunkReview]);
+  }, [delegation.pending, detailAnchor, recordDecisionState, reviewPlan, upsertHunkReview]);
 
   // Moving on without answering. The decision keeps its pending state, so the
   // queue, the counts and the map all still owe it — the only thing that
   // changes is which change the reviewer is reading.
   const skipDecision = useCallback((decision: ReviewDecision) => {
-    const nextId = nextReviewDirectorDecisionId(reviewPlan, decision.id);
+    const nextId = nextReviewDirectorDecisionId(reviewPlan, decision.id, delegation.pending);
     setDetailAnchor(null);
     if (!nextId || nextId === decision.id) return;
     setCameFromDecisionId(decision.id);
     setSelectedDecisionId(nextId);
     setSelectionTick((tick) => tick + 1);
-  }, [reviewPlan]);
+  }, [delegation.pending, reviewPlan]);
 
   // Handing the change back to the agent. The verdict is deliberately not
   // recorded: what happens to this change depends on the answer, and the
@@ -537,7 +549,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // b13bf425-4047-4b22-b7c3-85317d6819fe LEGACY-AFFECTING: Shortcuts call
   // the same selection and verdict paths as the existing Changes controls.
   useWorkspaceDiffKeyboardNavigation({
-    decisions: orderedDecisions,
+    decisions: queueDecisions,
     filePaths: changedFilePaths,
     activeId: selectedDecision?.id ?? null,
     activeFilePath: selectedFile?.path ?? null,
@@ -809,8 +821,9 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                     : `${delegation.completed} of ${delegation.total} decisions delegated.`}
                   {delegation.failed > 0 && ` ${delegation.failed} could not be answered and are still owed.`}
                 </p>}
+                {activeEscalations.size > 0 && <p className="review-director-escalation-status" role="alert">{activeEscalations.size} delegated {activeEscalations.size === 1 ? 'decision needs' : 'decisions need'} your review.</p>}
                 {selectedDecision && <>
-                  <DiffReviewDecisionQueue decisions={orderedDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} delegating={delegation.pending} />
+                  <DiffReviewDecisionQueue decisions={queueDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} delegating={delegation.pending} escalations={activeEscalations} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
                     {readingMode === 'file' && selectedFile
@@ -829,7 +842,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={detailAnchor.simple ? undefined : <>
                       <DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />
                     </>} onClose={() => setDetailAnchor(null)}>
-                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null} critical={reviewPlan.criticalDecisionIds.has(popoverDecision.id)} hideJudging={detailAnchor.simple}>
+                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null} critical={reviewPlan.criticalDecisionIds.has(popoverDecision.id)} escalation={activeEscalations.get(popoverDecision.id)} hideJudging={detailAnchor.simple}>
                         <DiffReviewActions key={popoverDecision.id} saving={false} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => saveDecision(popoverDecision, state)} onFix={onFixRequest ? () => requestFix(popoverDecision) : undefined} onSkip={() => skipDecision(popoverDecision)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}

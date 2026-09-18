@@ -909,3 +909,21 @@ connector list rather than skipping that row.
 The generalizable test is whether a file sits on the feature's own path or on a neighbouring surface
 the feature was pushed into. "Backend file" and "Python file" are not the boundary; "not the thing
 Jeffrey asked to build" is.
+
+## A PR description is roughly 100–150 words, not a design doc (2026-09-18)
+
+On CON-274 / PR #16623 Jeffrey said "the PR desc is still way too fucking long" — the second time in
+the same task, after a first pass had already trimmed it to about 560 words. The same complaint
+appears in older tasks ("it's way too long", "why the actual fuck are you taking so long to update a
+PR desc"), so this is a standing preference rather than a reaction to one body.
+
+The shape that was accepted is about 110 words: the ticket link, one sentence on the observable
+behaviour change, one short paragraph on the cause and the fix with the concrete symbol or endpoint
+named, and three numbered test steps. Everything else — the "changes since review" log, per-file
+rationale, notes-for-reviewers, the list of test files, alternative designs considered — goes in the
+reply to Jeffrey or the review thread, not the body. Reviewers read the diff; the description exists
+to tell them what to look for.
+
+Two failure modes to avoid: padding the body with every decision made during review so it reads as a
+changelog, and treating a previous trim as sufficient. When he says it is still too long, cut by a
+factor, not by a few sentences.

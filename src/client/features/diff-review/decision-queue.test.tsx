@@ -53,21 +53,31 @@ describe('diff review decision queue', () => {
     expect(buttons[2]).toHaveAccessibleName(/Needs changes/);
   });
 
-  it('says which unsettled decision is waiting on a delegated review rather than on the reviewer', () => {
+  it('puts delegated decisions at the back and says they are waiting on the supervisor', () => {
     render(<DiffReviewDecisionQueue decisions={decisions} selectedId={decisions[0].id} onSelect={vi.fn()} delegating={new Set([decisions[0].id])} />);
 
-    // The spinner is the glance-level cue; the accessible name carries the same
-    // fact for anyone who cannot see it turn.
+    // The claimed decision started first in Director priority. While its turn
+    // is running it renders after every unclaimed decision, including settled
+    // history, so it cannot interrupt the human queue.
     const buttons = screen.getAllByRole('button');
-    expect(buttons[0]).toHaveAccessibleName(/awaiting delegated review/);
-    expect(buttons[0].className).toContain('delegating');
+    expect(buttons.map((button) => button.querySelector('b')?.textContent)).toEqual(['2', '3', '4', '1']);
+    expect(buttons[3]).toHaveAccessibleName(/awaiting delegated review/);
+    expect(buttons[3].className).toContain('delegating');
     // A settled decision is never owed a turn, so it must not be marked as one.
-    expect(buttons[1]).not.toHaveAccessibleName(/awaiting delegated review/);
+    expect(buttons[0]).not.toHaveAccessibleName(/awaiting delegated review/);
   });
 
   it('reports how much of the queue is already reviewed', () => {
     render(<DiffReviewDecisionQueue decisions={decisions} selectedId={decisions[0].id} onSelect={vi.fn()} />);
 
     expect(screen.getByText('3 of 4 reviewed')).toBeInTheDocument();
+  });
+
+  it('marks a completed delegation that explicitly asks for human review', () => {
+    render(<DiffReviewDecisionQueue decisions={decisions} selectedId={decisions[0].id} onSelect={vi.fn()} escalations={new Map([[decisions[0].id, 'Call sites outside this diff were unavailable.']])} />);
+
+    const decisionButton = screen.getAllByRole('button')[0];
+    expect(decisionButton.className).toContain('escalated');
+    expect(decisionButton).toHaveAccessibleName(/delegated review needs human review.*call sites outside this diff/i);
   });
 });

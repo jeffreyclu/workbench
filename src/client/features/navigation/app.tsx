@@ -58,7 +58,6 @@ import { FollowUpArchiveDialog } from '../../components/dialogs/follow-up-archiv
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../lib/formatters';
 import { clearLastOpenedItem, clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../lib/preferences';
 import { QueueExplanationList } from '../../components/queue-explanations';
-import { OpticallyCenteredNumber } from '../../components/optically-centered-number';
 import { ProjectColorDot } from '../../components/project/project-color';
 import { InlineProjectEditor } from '../../components/project/project-field';
 import { useValuePulse } from '../../hooks/use-value-pulse';
@@ -90,7 +89,7 @@ function isEditableTarget(target: EventTarget | null) {
 function PulseCount({ value, as: Tag = 'strong', centerGlyph = false }: { value: number; as?: 'strong' | 'span'; centerGlyph?: boolean }) {
   const pulse = useValuePulse(value);
   const className = [pulse, centerGlyph ? 'optically-centered-count' : ''].filter(Boolean).join(' ');
-  return <Tag className={className}>{centerGlyph ? <OpticallyCenteredNumber value={value} /> : value}</Tag>;
+  return <Tag className={className}>{centerGlyph ? <span className="optically-centered-number">{value}</span> : value}</Tag>;
 }
 
 export function App() {

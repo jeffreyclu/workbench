@@ -1,4 +1,5 @@
 import { LOGIC_HAZARD_REASONS, LOGIC_HAZARD_WEIGHT, isLogicHazard, type LogicHazardName } from './contracts.js';
+import { isDependencyLockfilePath } from './change-type.js';
 import type { ReviewDecision } from './review-decisions.js';
 import { heaviestObligation, type ReviewObligation } from './review-obligations.js';
 
@@ -127,10 +128,14 @@ export function isPureRelocation(decision: Pick<ReviewDecision, 'hunks'>): boole
   return normalise(added) === normalise(removed);
 }
 
-const GENERATED_PATH = /(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.snap|\.min\.(?:js|css)|^dist\/|\/dist\/|^build\/|\/build\/|\.generated\.)/;
+const GENERATED_PATH = /(?:\.snap|\.min\.(?:js|css)|^dist\/|\/dist\/|^build\/|\/build\/|\.generated\.)/;
+
+export function isDependencyLockfileDecision(decision: Pick<ReviewDecision, 'filePaths'>): boolean {
+  return decision.filePaths.length === 1 && isDependencyLockfilePath(decision.filePaths[0]);
+}
 
 export function isGeneratedOutput(decision: Pick<ReviewDecision, 'filePaths'>): boolean {
-  return decision.filePaths.length > 0 && decision.filePaths.every((path) => GENERATED_PATH.test(path));
+  return decision.filePaths.length > 0 && decision.filePaths.every((path) => isDependencyLockfilePath(path) || GENERATED_PATH.test(path));
 }
 
 /** The checks a `proof` obligation claims already exist.
@@ -192,6 +197,7 @@ export function routeReviewBlock(
   /** Retained for rolling compatibility; routing is now fully per-decision. */
   _context: ReviewRoutingContext = { reviewIsTestOnly: false },
 ): ReviewRouting {
+  if (isDependencyLockfileDecision(decision)) return { tier: 'T1', reason: 'Generated dependency lockfile — grouped and delegated last.', autoSettled: false };
   if (isGeneratedOutput(decision)) return { tier: 'T0', reason: 'Generated output — review its source, not this.', autoSettled: true };
   if (isFormattingOnlyChange(decision)) return { tier: 'T0', reason: 'Whitespace only — the code is byte-identical.', autoSettled: true };
   if (isImportOnlyChange(decision)) return { tier: 'T0', reason: 'Imports only — the compiler proves this one.', autoSettled: true };

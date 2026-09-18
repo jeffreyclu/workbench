@@ -31,7 +31,16 @@ export interface ChangeTypeClassification {
 // Kept deliberately literal rather than clever: a path predicate that guesses
 // wrong sends the whole decision down the wrong obligation set, which is worse
 // than falling through to the residual type.
-const GENERATED_PATH = /(?:^|\/)(?:dist|build|out|coverage|vendor|node_modules)\/|(?:^|\/)(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$|\.(?:generated|min)\.\w+$|(?:^|\/)__snapshots__\/|\.snap$/;
+/** Dependency-manager output is one review concern per file, regardless of
+ * ecosystem. Keep this predicate shared: classification, decision grouping,
+ * routing and queue priority must not each maintain a slightly different list. */
+const DEPENDENCY_LOCKFILE_PATH = /(?:^|\/)(?:package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.ya?ml|yarn\.lock|bun\.lockb?|deno\.lock|composer\.lock|cargo\.lock|gemfile\.lock|pipfile\.lock|poetry\.lock|uv\.lock|mix\.lock|podfile\.lock|cartfile\.resolved|package\.resolved|packages\.lock\.json|go\.sum|flake\.lock|pubspec\.lock|gradle\.lockfile|\.terraform\.lock\.hcl|[^/]+\.lock)$/i;
+
+export function isDependencyLockfilePath(path: string): boolean {
+  return DEPENDENCY_LOCKFILE_PATH.test(path);
+}
+
+const GENERATED_PATH = /(?:^|\/)(?:dist|build|out|coverage|vendor|node_modules)\/|\.(?:generated|min)\.\w+$|(?:^|\/)__snapshots__\/|\.snap$/;
 const DOCS_PATH = /\.(?:md|mdx|rst|txt)$|(?:^|\/)docs?\//i;
 const CONFIG_PATH = /(?:^|\/)(?:package\.json|tsconfig[\w.]*\.json|Dockerfile|Makefile|\.env[\w.]*)$|(?:^|\/)\.github\/|\.(?:ya?ml|toml|ini)$|\.config\.[cm]?[jt]sx?$|(?:^|\/)\.[\w.]+rc(?:\.\w+)?$/;
 /** The same set the assist system prompt names, so the classifier and the model
@@ -229,7 +238,7 @@ function explainProduction(hunks: ChangeTypeHunk[]): { rules: ChangeTypeRule[]; 
  * is a projection of this, so the trace a reviewer reads is by construction the
  * trace that produced the verdict. */
 export function explainChangeType(hunks: ChangeTypeHunk[]): ChangeTypeExplanation {
-  const isGenerated = (hunk: ChangeTypeHunk) => GENERATED_PATH.test(hunk.filePath);
+  const isGenerated = (hunk: ChangeTypeHunk) => isDependencyLockfilePath(hunk.filePath) || GENERATED_PATH.test(hunk.filePath);
   const isTest = (hunk: ChangeTypeHunk) => TEST_PATH.test(hunk.filePath);
   const isDocs = (hunk: ChangeTypeHunk) => DOCS_PATH.test(hunk.filePath);
   const isConfig = (hunk: ChangeTypeHunk) => CONFIG_PATH.test(hunk.filePath);

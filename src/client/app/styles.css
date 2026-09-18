@@ -161,15 +161,14 @@ nav { display: grid; gap: 3px; }
 .page-state { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; color: var(--muted); font-size: 10px; }
 .stack-header { display: flex; align-items: center; justify-content: space-between; height: 38px; padding: 0 12px; border-radius: 7px; font: 600 9px 'DM Mono'; letter-spacing: .1em; text-transform: uppercase; }
 .stack-header strong { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0 6px; border-radius: 99px; font-size: 8px; line-height: 1; }
-.queue-rows .stack-header strong.optically-centered-count { position: relative; }
-.optically-centered-number-sizer { color: transparent; user-select: none; }
-.optically-centered-number-canvas { position: absolute; inset: 0; pointer-events: none; }
+.queue-rows .stack-header strong.optically-centered-count { display: flex; align-items: center; justify-content: center; width: 22px; min-width: 22px; height: 22px; padding: 0; border-radius: 50%; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.optically-centered-number { display: block; line-height: normal; text-box: trim-both cap alphabetic; }
 .stack-header-progress { color: #e6c75f; background: #2b2618; border: 1px solid #504522; }
-.stack-header-progress strong { --stack-count-ink: #17140b; color: #17140b; background: #e6c75f; }
+.stack-header-progress strong { color: #17140b; background: #e6c75f; }
 .stack-header-attention { color: #aeb8dc; background: #1a1d28; border: 1px solid #30384f; }
-.stack-header-attention strong { --stack-count-ink: #11131a; color: #11131a; background: #9cace2; }
+.stack-header-attention strong { color: #11131a; background: #9cace2; }
 .stack-header-pinned { color: #e9c55c; background: #332a13; border: 1px solid #635020; }
-.stack-header-pinned strong { --stack-count-ink: #1d1707; color: #1d1707; background: #e9c55c; }
+.stack-header-pinned strong { color: #1d1707; background: #e9c55c; }
 .task-group-progress .queue-item { background: #191712; border-color: #2f2a1b; }
 .task-group-progress .queue-item { overflow: hidden; }
 .task-group-progress .queue-item::after { content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none; background: linear-gradient(105deg, transparent 20%, #f0cf5a0a 36%, #ffe98a2b 48%, #f0cf5a0a 60%, transparent 76%); transform: translateX(-120%); animation: task-shimmer 1.8s ease-in-out infinite; }
@@ -725,6 +724,11 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-decision-queue button svg { color: var(--state-tone); }
 .diff-review-decision-queue button.delegating { border-bottom: 2px solid #8c6f2c; }
 .diff-review-decision-queue button svg.diff-review-queue-delegating { color: #e6c75f; }
+.diff-review-decision-queue button.escalated { border-bottom: 2px solid #d98768; }
+.diff-review-decision-queue button svg.diff-review-queue-escalated { color: #e1a68f; }
+.diff-review-delegation-escalation, .review-director-escalation-status { display: flex; align-items: flex-start; gap: 7px; color: #e1a68f; }
+.diff-review-delegation-escalation { margin: 0 0 14px; padding: 9px 11px; border: 1px solid #704838; border-radius: 7px; background: #211713; line-height: 1.45; }
+.diff-review-delegation-escalation svg { flex: 0 0 auto; margin-top: 3px; }
 /* Risk is a dot here and a number in the popover: at chip size the count is
    noise, but "this one has signals" still has to survive the compaction. */
 .diff-review-queue-risk-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #d6bd76; }

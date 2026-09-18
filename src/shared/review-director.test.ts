@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkspaceDiffFile } from './contracts.js';
-import { createReviewDirectorPlan, REVIEW_DIRECTOR_CRITICAL_ACTIONS } from './review-director.js';
+import { createReviewDirectorPlan, deferDelegatedReviewDecisions, nextReviewDirectorDecisionId, REVIEW_DIRECTOR_CRITICAL_ACTIONS } from './review-director.js';
 
 function file(path: string, patch: string): WorkspaceDiffFile {
   return {
@@ -36,5 +36,42 @@ describe('Review Director', () => {
     expect(critical).toMatchObject({ tier: 'T3', critical: true, delegated: false, autoReview: false });
     expect(critical.enrichmentActions).toEqual(REVIEW_DIRECTOR_CRITICAL_ACTIONS);
     expect(plan.criticalDecisionIds.has(critical.decision.id)).toBe(true);
+  });
+
+  it('puts every decision claimed by delegation behind human-owned work without disturbing either priority order', () => {
+    const plan = createReviewDirectorPlan([
+      file('src/first.ts', '@@ -1 +1 @@ first\n-before\n+after'),
+      file('src/second.ts', '@@ -1 +1 @@ second\n-before\n+after'),
+      file('src/third.ts', '@@ -1 +1 @@ third\n-before\n+after'),
+      file('src/fourth.ts', '@@ -1 +1 @@ fourth\n-before\n+after'),
+    ], []);
+    const [first, second, third, fourth] = plan.orderedDecisions;
+    const claimed = new Set([first.id, third.id]);
+
+    expect(deferDelegatedReviewDecisions(plan.orderedDecisions, claimed).map((decision) => decision.id))
+      .toEqual([second.id, fourth.id, first.id, third.id]);
+  });
+
+  it('auto-advances through human-owned decisions before work claimed by delegation', () => {
+    const plan = createReviewDirectorPlan([
+      file('src/first.ts', '@@ -1 +1 @@ first\n-before\n+after'),
+      file('src/second.ts', '@@ -1 +1 @@ second\n-before\n+after'),
+      file('src/third.ts', '@@ -1 +1 @@ third\n-before\n+after'),
+    ], []);
+    const [first, second, third] = plan.orderedDecisions;
+
+    expect(nextReviewDirectorDecisionId(plan, second.id, new Set([first.id]))).toBe(third.id);
+  });
+
+  it('makes a many-hunk lockfile one last-place delegated decision', () => {
+    const plan = createReviewDirectorPlan([
+      file('pnpm-lock.yaml', '@@ -10 +10 @@ importers:\n-old-a\n+new-a\n@@ -100 +100 @@ packages:\n-old-b\n+new-b'),
+      file('src/feature.ts', '@@ -1 +1 @@ feature\n-before\n+after'),
+    ], []);
+    const lockfile = plan.entries.find((entry) => entry.decision.filePaths[0] === 'pnpm-lock.yaml');
+
+    expect(lockfile).toMatchObject({ tier: 'T1', delegated: true, autoReview: true });
+    expect(lockfile?.decision.hunks).toHaveLength(2);
+    expect(plan.orderedDecisions.at(-1)?.id).toBe(lockfile?.decision.id);
   });
 });

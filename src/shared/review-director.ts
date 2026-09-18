@@ -1,6 +1,7 @@
 import { buildChangeMap, type ChangeMap } from './change-map.js';
 import type { DiffHunkReview, WorkspaceDiffFile } from './contracts.js';
 import { buildReviewDecisions, type ReviewDecision } from './review-decisions.js';
+import { isDependencyLockfilePath } from './change-type.js';
 import { isDelegatedTier, delegationAutoReviews, type DelegationTarget } from './review-delegation.js';
 import { blockObligations } from './review-obligations.js';
 import { routeReviewBlock, tierRank, type ReviewRouting, type ReviewTier } from './review-routing.js';
@@ -78,6 +79,11 @@ export function createReviewDirectorPlan(files: WorkspaceDiffFile[], reviews: Di
     const settled = Number(left.routing.autoSettled) - Number(right.routing.autoSettled);
     if (settled !== 0) return settled;
 
+    // Lockfiles are generated dependency bookkeeping: one delegated decision
+    // per file, always after source and tests rather than mixed into either.
+    const lockfilePriority = Number(left.decision.filePaths.every(isDependencyLockfilePath)) - Number(right.decision.filePaths.every(isDependencyLockfilePath));
+    if (lockfilePriority !== 0) return lockfilePriority;
+
     // Tests are reviewed automatically after production code, even when their
     // generic delegated tier matches a production decision's tier.
     const testPriority = Number(left.decision.changeType === 'test_only') - Number(right.decision.changeType === 'test_only');
@@ -108,14 +114,36 @@ export function createReviewDirectorPlan(files: WorkspaceDiffFile[], reviews: Di
   };
 }
 
+/**
+ * Keep decisions claimed by the running delegated sweep behind work that still
+ * needs the reviewer. This is a stable partition: the Director's risk order is
+ * preserved inside both groups, and a failed/answered turn returns to its
+ * normal priority as soon as it is no longer claimed.
+ */
+export function deferDelegatedReviewDecisions(
+  decisions: readonly ReviewDecision[],
+  pendingDelegation: ReadonlySet<string>,
+): ReviewDecision[] {
+  if (pendingDelegation.size === 0) return [...decisions];
+  return [
+    ...decisions.filter((decision) => !pendingDelegation.has(decision.id)),
+    ...decisions.filter((decision) => pendingDelegation.has(decision.id)),
+  ];
+}
+
 /** Advance in the Director's priority order, skipping proof-settled work. */
-export function nextReviewDirectorDecisionId(plan: ReviewDirectorPlan, currentId: string): string | null {
+export function nextReviewDirectorDecisionId(
+  plan: ReviewDirectorPlan,
+  currentId: string,
+  pendingDelegation: ReadonlySet<string> = new Set(),
+): string | null {
+  const orderedDecisions = deferDelegatedReviewDecisions(plan.orderedDecisions, pendingDelegation);
   const pending = plan.entries
     .filter((entry) => entry.decision.state === null && !entry.routing.autoSettled)
-    .sort((left, right) => plan.orderedDecisions.indexOf(left.decision) - plan.orderedDecisions.indexOf(right.decision));
+    .sort((left, right) => orderedDecisions.indexOf(left.decision) - orderedDecisions.indexOf(right.decision));
   const currentIndex = pending.findIndex((entry) => entry.decision.id === currentId);
   const next = pending[currentIndex + 1] ?? pending.find((entry) => entry.decision.id !== currentId);
   return next?.decision.id
-    ?? plan.orderedDecisions.find((decision) => decision.id !== currentId)?.id
+    ?? orderedDecisions.find((decision) => decision.id !== currentId)?.id
     ?? null;
 }
