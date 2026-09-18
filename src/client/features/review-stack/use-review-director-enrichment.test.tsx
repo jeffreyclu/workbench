@@ -35,30 +35,30 @@ afterEach(() => {
 
 describe('useReviewDirectorEnrichment', () => {
   it('prepares every critical field for a diff source the server cannot reconstruct', async () => {
-    const actions: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      actions.push((JSON.parse(String(init?.body)) as { action: string }).action);
-      return new Response(JSON.stringify({ answer: 'prepared' }), { headers: { 'Content-Type': 'application/json' } });
+    const requests: Array<{ url: string; taskIntent: unknown }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), taskIntent: (JSON.parse(String(init?.body)) as { taskIntent: unknown }).taskIntent });
+      return new Response(JSON.stringify({ answers: { score_risk: 'prepared', explain: 'prepared', what_could_break: 'prepared', compare_task_intent: 'prepared' } }), { headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>);
 
     await waitFor(() => expect(screen.getByText('1/1/0')).toBeInTheDocument());
-    expect(actions).toEqual(['score_risk', 'explain', 'what_could_break', 'compare_task_intent']);
+    expect(requests).toEqual([{ url: '/api/review-assist/critical', taskIntent: { title: 'Protect authorization', description: 'Keep unauthorized callers out.' } }]);
   });
 
   it('does not invent task alignment when no task is linked', async () => {
-    const actions: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      actions.push((JSON.parse(String(init?.body)) as { action: string }).action);
-      return new Response(JSON.stringify({ answer: 'prepared' }), { headers: { 'Content-Type': 'application/json' } });
+    const requests: Array<{ url: string; taskIntent: unknown }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), taskIntent: (JSON.parse(String(init?.body)) as { taskIntent: unknown }).taskIntent });
+      return new Response(JSON.stringify({ answers: { score_risk: 'prepared', explain: 'prepared', what_could_break: 'prepared' } }), { headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     render(<QueryClientProvider client={client}><Harness withTask={false} /></QueryClientProvider>);
 
     await waitFor(() => expect(screen.getByText('1/1/0')).toBeInTheDocument());
-    expect(actions).toEqual(['score_risk', 'explain', 'what_could_break']);
+    expect(requests).toEqual([{ url: '/api/review-assist/critical', taskIntent: null }]);
   });
 });

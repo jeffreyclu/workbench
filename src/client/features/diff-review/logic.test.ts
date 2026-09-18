@@ -41,7 +41,7 @@ describe('diff review queue logic', () => {
     expect(decision).toMatchObject({
       id: 'src/server/auth/routes.ts::@@ -10 +10,3 @@ function authorizeRequest()',
       subject: 'authorizeRequest',
-      behavior: 'Changes authorize request access checks.',
+      behavior: 'Updates the authorize request flow.',
       filePaths: ['src/server/auth/routes.ts'],
       additions: 3,
       deletions: 1,
@@ -67,7 +67,7 @@ describe('diff review queue logic', () => {
 
     expect(decisions).toHaveLength(1);
     expect(decisions[0]).toMatchObject({
-      behavior: 'Changes authorize request access checks across 2 files.',
+      behavior: 'Updates the authorize request flow across 2 files.',
       filePaths: ['src/server/auth/routes.ts', 'src/server/auth/routes.test.ts'],
       state: null,
     });

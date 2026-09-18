@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { reviewAssistRequestSchema, REVIEW_ASSIST_MAX_HUNKS, REVIEW_ASSIST_MAX_LINES_PER_HUNK, REVIEW_ASSIST_MAX_LINE_LENGTH } from './contracts.js';
-import { reviewAssistDecisionPayload, type ReviewDecision, type ReviewDecisionHunk } from './review-decisions.js';
+import { buildReviewDecisions, reviewAssistDecisionPayload, type ReviewDecision, type ReviewDecisionHunk } from './review-decisions.js';
 
 function hunk(index: number, lines: string[]): ReviewDecisionHunk {
   return {
@@ -54,5 +54,19 @@ describe('reviewAssistDecisionPayload', () => {
 
     expect(parsed.decision.hunks[0].lines).toHaveLength(REVIEW_ASSIST_MAX_LINES_PER_HUNK);
     expect(parsed.decision.hunks[0].lines.some((line) => line.includes('diff lines omitted'))).toBe(true);
+  });
+});
+
+describe('review decision titles', () => {
+  it('describes the changed code flow instead of gluing risk signals into a nonsensical title', () => {
+    const [decision] = buildReviewDecisions([{
+      path: 'src/connect.ts', previousPath: null, status: 'modified', additions: 2, deletions: 0, isBinary: false,
+      patch: '@@ -10,2 +10,4 @@ function useConnectConnector()\n+if (needsUserPasswordCredential(config)) {\n+  openPasswordModal();\n',
+    }], []);
+
+    expect(decision.subject).toBe('useConnectConnector');
+    expect(decision.riskSignals).toContain('auth');
+    expect(decision.behavior).toBe('Extends the use connect connector flow.');
+    expect(decision.behavior).not.toContain('access checks');
   });
 });

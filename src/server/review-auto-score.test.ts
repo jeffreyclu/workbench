@@ -6,12 +6,14 @@ import type { ReviewChangeType } from '../shared/change-type.js';
 
 const getWorkspaceDiff = vi.fn();
 const requestReviewAssist = vi.fn();
+const requestCriticalReviewAssist = vi.fn();
 const lookupReviewAssist = vi.fn();
 const publishRealtimeReviewScore = vi.fn();
 
 vi.mock('./workspace-diff.js', () => ({ getWorkspaceDiff: (path: string) => getWorkspaceDiff(path) }));
 vi.mock('./review-assist-ai.js', () => ({
   requestReviewAssist: (...args: unknown[]) => requestReviewAssist(...args),
+  requestCriticalReviewAssist: (...args: unknown[]) => requestCriticalReviewAssist(...args),
   lookupReviewAssist: (...args: unknown[]) => lookupReviewAssist(...args),
 }));
 vi.mock('./realtime.js', () => ({
@@ -44,6 +46,13 @@ describe('background review scoring', () => {
     resetReviewAutoScore();
     getWorkspaceDiff.mockReset();
     requestReviewAssist.mockReset();
+    requestCriticalReviewAssist.mockReset();
+    requestCriticalReviewAssist.mockResolvedValue({
+      score_risk: 'SCORE: 82\nAuthorization boundary.',
+      explain: 'Changes authorization behavior.',
+      what_could_break: '- Denied requests could pass.',
+      compare_task_intent: 'Aligned.',
+    });
     lookupReviewAssist.mockReset();
     lookupReviewAssist.mockReturnValue(null);
     publishRealtimeReviewScore.mockReset();
@@ -186,13 +195,10 @@ describe('background review scoring', () => {
         patch: '@@ -1 +1 @@ authorize\n-return deny(request);\n+return authorize(request);',
       }],
     });
-    requestReviewAssist.mockImplementation((_db, action) => Promise.resolve(action === 'score_risk' ? 'SCORE: 82\nAuthorization boundary.' : `${action} answer`));
-
     await scheduleReviewAutoScore(repository, { workItemId: item.id }, process.cwd());
 
-    expect(requestReviewAssist.mock.calls.map((call) => call[1])).toEqual([
-      'score_risk', 'explain', 'what_could_break', 'compare_task_intent',
-    ]);
+    expect(requestCriticalReviewAssist).toHaveBeenCalledTimes(1);
+    expect(requestReviewAssist).not.toHaveBeenCalled();
     expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')).toMatchObject({
       criticalCompleted: 1,
       criticalTotal: 1,

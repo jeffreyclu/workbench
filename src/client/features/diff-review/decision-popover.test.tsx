@@ -117,25 +117,27 @@ describe('decision popover', () => {
     </DecisionPopover>);
     const panel = screen.getByRole('dialog');
     expect(panel).toBeVisible();
-    expect(panel).toHaveStyle({ visibility: 'visible', left: `${(window.innerWidth - 336) / 2}px` });
+    expect(panel).toHaveStyle({ visibility: 'visible', left: `${(window.innerWidth - 640) / 2}px` });
   });
 
   it('pins the related-changes diagram to the right of the decision panel', () => {
-    render(<Harness aside={<p>Diagram</p>} />);
-    press(marker());
-    const dialog = screen.getByRole('dialog');
-    const [panelBody, aside] = [dialog.querySelector('.decision-popover-panel'), dialog.querySelector('.decision-popover-aside')];
-    expect(panelBody).toBeInTheDocument();
-    expect(aside).toHaveTextContent('Diagram');
-    if (!panelBody || !aside) throw new Error('Expected the decision panel and related-changes diagram.');
-    // Right of the panel, not below it: the pair lays out in a row, so DOM
-    // order is what puts the diagram on the reading side of the decision.
-    expect(panelBody.compareDocumentPosition(aside) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // The panel and its diagram are measured as one unit, so the popover
-    // reserves both widths and the pair flips together at the viewport edge.
-    expect(dialog).toHaveClass('with-aside');
-    expect(dialog).toHaveStyle({ width: '652px' });
-    expect(dialog).not.toHaveClass('stacked');
+    const originalWidth = window.innerWidth;
+    try {
+      Object.defineProperty(window, 'innerWidth', { value: 1440, configurable: true });
+      render(<Harness aside={<p>Diagram</p>} />);
+      press(marker());
+      const dialog = screen.getByRole('dialog');
+      const [panelBody, aside] = [dialog.querySelector('.decision-popover-panel'), dialog.querySelector('.decision-popover-aside')];
+      expect(panelBody).toBeInTheDocument();
+      expect(aside).toHaveTextContent('Diagram');
+      if (!panelBody || !aside) throw new Error('Expected the decision panel and related-changes diagram.');
+      expect(panelBody.compareDocumentPosition(aside) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(dialog).toHaveClass('with-aside');
+      expect(dialog).toHaveStyle({ width: '1152px' });
+      expect(dialog).not.toHaveClass('stacked');
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true });
+    }
   });
 
   it('stacks the diagram under the decision when the viewport is too narrow for a row', () => {
@@ -145,10 +147,10 @@ describe('decision popover', () => {
       render(<Harness aside={<p>Diagram</p>} />);
       press(marker());
       const dialog = screen.getByRole('dialog');
-      // Stacked, and clamped to the phone: 652px of columns would have run off
+      // Stacked, and clamped to the phone: 1152px of columns would have run off
       // the screen and taken the diagram with it.
       expect(dialog).toHaveClass('stacked');
-      expect(dialog).toHaveStyle({ width: '336px' });
+      expect(dialog).toHaveStyle({ width: '366px' });
       expect(dialog.querySelector('.decision-popover-aside')).toHaveTextContent('Diagram');
     } finally {
       Object.defineProperty(window, 'innerWidth', { value: wide, configurable: true });

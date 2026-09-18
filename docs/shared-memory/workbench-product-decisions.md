@@ -306,6 +306,12 @@ Decision discs are nested by source ownership: decisions from one file share a
 file ring, file rings sit inside their folder ring, and folder rings sit inside
 their package ring. Single-decision files retain a ring for a stable hierarchy.
 
+*Zoom correction from Jeffrey, 2026-09-18.* Zoom and pan are reviewer state and
+must survive background scoring, verdict, and other data refreshes while the
+graph geometry is unchanged. At close zoom, do not draw a relationship whose
+two endpoint nodes are both outside the viewport: a clipped chord with neither
+origin nor destination visible is meaningless line clutter, not context.
+
 Review verdicts are optimistic: the queue, counts, and selected decision update
 in the click frame while the database write completes behind them. Saving a
 verdict must not rescan repositories or refetch rows the write already returned;
@@ -371,6 +377,16 @@ explanation, concrete breakage analysis, and task alignment when a linked task e
 The review surface shows Review Director progress and counts so its work is observable.
 Delegation has bounded concurrency but no per-review count ceiling: every delegated
 decision is queued, including test-only changes.
+
+*Presentation and latency correction from Jeffrey, 2026-09-17.* A critical
+decision's AI risk, explanation, breakage analysis, and task alignment are
+produced in one bounded structured model turn, then stored in their existing
+separate fields. The result is deliberately concise and rendered through the
+read-only Lexical surface so lists and paragraphs remain readable. The decision
+popover uses nearly the full available viewport and gives the relationship map
+room beside the analysis. Decision titles describe the concrete code flow being
+added, removed, extended, or updated; risk signals remain separate metadata and
+must never be spliced into the title as if they were the changed behavior.
 
 ### Mobile composer closes as a bottom sheet
 

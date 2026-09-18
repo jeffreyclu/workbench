@@ -33,7 +33,7 @@ import { summarizeWorkItemChanges } from '../activity-log.js';
 import { resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { generateFastAiTaskDraft } from '../fast-task-draft-ai.js';
 import { assessDiffBlocks, lookupDiffConfidenceBlocks } from '../diff-confidence-ai.js';
-import { lookupReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
+import { lookupReviewAssist, requestCriticalReviewAssist, requestReviewAssist } from '../review-assist-ai.js';
 import { ensureReviewAutoScore, reviewAutoScoreView } from '../review-auto-score.js';
 import { findStaleReferences } from '../stale-references.js';
 import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceCommits, listWorkspaceRefCommits, listWorkspaceRefs, repositoryIdentity, snapshotsForRepository } from '../workspace-diff.js';
@@ -105,6 +105,12 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     try {
       const { action, decision, taskIntent, tier, provider, accountProfile } = reviewAssistRequestSchema.parse(request.body);
       response.json({ answer: await requestReviewAssist(database, action, decision, taskIntent, undefined, tier, provider ?? null, accountProfile ?? undefined) });
+    } catch (error) { next(error); }
+  });
+  router.post('/api/review-assist/critical', async (request, response, next) => {
+    try {
+      const { decision, taskIntent, provider, accountProfile } = reviewAssistRequestSchema.omit({ action: true }).parse(request.body);
+      response.json({ answers: await requestCriticalReviewAssist(database, decision, taskIntent, provider ?? null, accountProfile ?? undefined) });
     } catch (error) { next(error); }
   });
   // Streams the answer token by token over SSE. The full turn still takes a

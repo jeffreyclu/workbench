@@ -195,3 +195,33 @@ export function MarkdownComposer({ conversationId, value, onChange, onSubmit, on
     <MarkdownEditor value={value} onChange={onChange} onSubmit={onSubmit} onFocus={onFocus} onBlur={onBlur} placeholder={placeholder} ariaLabel={ariaLabel} autoFocus={autoFocus} className={className} disabled={disabled} />
   </LexicalComposer>;
 }
+
+/** Read-only Lexical rendering for persisted Markdown. This is intentionally
+ * not a disabled composer: it carries no history, shortcuts, synchronization,
+ * or toolbar work, and exists only to turn structured model output into the
+ * same headings, lists, links, quotes, and code the editor understands. */
+export function MarkdownViewer({ id, value, ariaLabel, className }: {
+  id: string;
+  value: string;
+  ariaLabel: string;
+  className?: string;
+}) {
+  const initialConfig = useMemo(() => ({
+    namespace: `workbench-markdown-viewer-${id}`,
+    nodes: [HeadingNode, QuoteNode, CodeNode, ListNode, ListItemNode, LinkNode],
+    editable: false,
+    onError: (error: Error) => { throw error; },
+    editorState: () => { if (value) $convertFromMarkdownString(value, TRANSFORMERS); },
+  }), [id, value]);
+
+  return <LexicalComposer key={`${id}:${value}`} initialConfig={initialConfig}>
+    <div className={['markdown-viewer', className].filter(Boolean).join(' ')}>
+      <RichTextPlugin
+        contentEditable={<ContentEditable className="markdown-viewer-content" aria-label={ariaLabel} />}
+        placeholder={null}
+        ErrorBoundary={LexicalErrorBoundary}
+      />
+      <ListPlugin />
+    </div>
+  </LexicalComposer>;
+}

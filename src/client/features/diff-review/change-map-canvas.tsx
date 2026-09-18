@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { Crosshair, Minus, Plus } from 'lucide-react';
 import { changeEdgeLabel, type ChangeMapNode, changeEdgeContinuity } from '../../../shared/change-map.js';
 import { CODE_CATEGORY_LABELS, type CodeCategory } from './change-map-taxonomy.js';
@@ -87,6 +87,18 @@ function fitCamera(layout: ChangeMapLayout, view: Viewport): Camera {
   };
 }
 
+/** Background scoring and review verdicts recreate the layout object even
+ * when the drawing has not moved. Camera state belongs to the geometry, not
+ * that object identity: only a genuinely different drawing should refit. */
+function cameraIdentity(layout: ChangeMapLayout): string {
+  return [
+    layout.width,
+    layout.height,
+    ...layout.nodes.map((node) => `${node.id}:${node.x}:${node.y}:${node.radius}`),
+    ...layout.edges.map((edge) => `${edge.id}:${edge.path}`),
+  ].join('|');
+}
+
 function truncate(value: string, limit: number): string {
   return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
 }
@@ -171,19 +183,22 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
    * and the keys. They are refs so those handlers do not have to be rebuilt —
    * and rebound — every time the camera moves. */
   const measured = useRef<Viewport | null>(null);
+  const fallbackViewHeight = useRef(viewHeight);
+  fallbackViewHeight.current = viewHeight;
   const world = useRef(layout);
   world.current = layout;
   const [camera, setCamera] = useState<Camera>(() => fitCamera(layout, { width: VIEW_WIDTH, height: viewHeight }));
   const [panning, setPanning] = useState(false);
 
-  const viewportNow = useCallback((): Viewport => measured.current ?? { width: VIEW_WIDTH, height: viewHeight }, [viewHeight]);
+  const viewportNow = useCallback((): Viewport => measured.current ?? { width: VIEW_WIDTH, height: fallbackViewHeight.current }, []);
+  const geometryIdentity = useMemo(() => cameraIdentity(layout), [layout]);
 
   // A different subgraph is a different world, so the camera goes back to
   // showing all of it. Without this, focusing a change leaves the reviewer
   // looking at empty space where the previous drawing used to be.
   useLayoutEffect(() => {
-    setCamera(fitCamera(layout, viewportNow()));
-  }, [layout, viewHeight, viewportNow]);
+    setCamera(fitCamera(world.current, viewportNow()));
+  }, [geometryIdentity, viewportNow]);
 
   // The window onto the world is the element's own pixel box divided by the
   // zoom, so the `viewBox` and the element always have the same shape. When
@@ -342,7 +357,20 @@ export const ChangeMapCanvas = memo(function ChangeMapCanvas({ layout, selectedI
 
   // Lines that answer the current selection are painted last, so they sit on
   // top of the ones the reviewer is not asking about rather than under them.
-  const orderedEdges = [...layout.edges].sort((left, right) =>
+  const visibleNodeIds = new Set(layout.nodes.filter((node) => (
+    node.x + node.radius >= camera.x
+    && node.x - node.radius <= camera.x + worldWidth
+    && node.y + node.radius >= camera.y
+    && node.y - node.radius <= camera.y + worldHeight
+  )).map((node) => node.id));
+  // At close zoom, a relationship whose two nodes are both off screen is only
+  // a slash through the viewport with no readable origin or destination. SVG
+  // clipping keeps the slash but loses its meaning, which is the line pile-up
+  // reviewers were seeing. Keep every relationship while either endpoint is
+  // visible; cull only the context-free chords crossing between off-screen
+  // nodes.
+  const visibleEdges = layout.edges.filter((edge) => visibleNodeIds.has(edge.fromId) || visibleNodeIds.has(edge.toId));
+  const orderedEdges = [...visibleEdges].sort((left, right) =>
     Number(left.fromId === relationshipFocusId || left.toId === relationshipFocusId) - Number(right.fromId === relationshipFocusId || right.toId === relationshipFocusId));
 
   // Big discs are drawn first so a small one is never lost underneath one that

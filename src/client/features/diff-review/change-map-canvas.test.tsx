@@ -360,6 +360,61 @@ describe('change map canvas', () => {
     }
   });
 
+  it('does not draw context-free lines between two off-screen nodes at close zoom', () => {
+    const laid = layOut(800, 560);
+    try {
+      const crossingMap: ChangeMap = {
+        nodes: [
+          node('left', 1, { filePath: 'src/client/left.ts' }),
+          node('right', 2, { filePath: 'src/server/right.ts' }),
+        ],
+        edges: [edge('left', 'right')],
+        omittedEdges: 0,
+      };
+      const { container } = draw({ layout: layoutChangeMap(crossingMap) });
+      expect(container.querySelectorAll('.change-map-edge-line')).toHaveLength(1);
+
+      // Zooming about the centre eventually puts both endpoint discs outside
+      // the viewport while their long chord still crosses it. That orphaned
+      // chord is the visual pile-up this guard removes.
+      for (let step = 0; step < 8; step += 1) fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+
+      expect(container.querySelectorAll('.change-map-edge-line')).toHaveLength(0);
+    } finally {
+      laid.restore();
+    }
+  });
+
+  it('keeps the camera when background review state recreates the same geometry', () => {
+    const laid = layOut(800, 560);
+    try {
+      const initialLayout = layoutChangeMap(map);
+      const props = {
+        selectedId: null,
+        selectedEdgeId: null,
+        onSelect: () => {},
+        onSelectEdge: () => {},
+      };
+      const { container, rerender } = render(<ChangeMapCanvas layout={initialLayout} {...props} />);
+      const surface = container.querySelector('.change-map-surface')!;
+      const viewBox = () => surface.getAttribute('viewBox');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+      fireEvent.keyDown(screen.getByRole('group', { name: 'Change map diagram' }), { key: 'ArrowRight' });
+      const changedCamera = viewBox();
+
+      const backgroundUpdate: ChangeMap = {
+        ...map,
+        nodes: map.nodes.map((item, index) => ({ ...item, state: index === 0 ? 'reviewed' as const : item.state })),
+      };
+      rerender(<ChangeMapCanvas layout={layoutChangeMap(backgroundUpdate)} {...props} />);
+
+      expect(viewBox()).toBe(changedCamera);
+    } finally {
+      laid.restore();
+    }
+  });
+
   it('will not let a drag lose the drawing off the edge of the pane', () => {
     const laid = layOut(800, 560);
     try {

@@ -687,7 +687,7 @@ describe('WorkspaceDiffView pull-request source', () => {
       }],
     };
     const actions: string[] = [];
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench' }] });
       if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
@@ -695,16 +695,16 @@ describe('WorkspaceDiffView pull-request source', () => {
       if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
       if (url.includes('/api/github/pull-request-diff')) return json({ diff: criticalPullRequest });
       if (url.includes('/api/review-auto-score')) return json({ snapshot: null });
-      if (url.endsWith('/api/review-assist')) {
-        actions.push((JSON.parse(String(init?.body)) as { action: string }).action);
-        return json({ answer: 'prepared' });
+      if (url.endsWith('/api/review-assist/critical')) {
+        actions.push('critical_review');
+        return json({ answers: { score_risk: 'SCORE: 80\nAuthorization boundary.', explain: 'Prepared.', what_could_break: '- Denied requests could pass.' } });
       }
       throw new Error(`Unexpected request: ${url}`);
     });
     renderView(fetchMock, false, null, [pullRequestUrl]);
 
     await findSelectedDecision('authorize request');
-    await waitFor(() => expect(actions).toEqual(['score_risk', 'explain', 'what_could_break']));
+    await waitFor(() => expect(actions).toEqual(['critical_review']));
     expect(screen.getByText('Review Director — 1 of 1 critical decisions fully enriched.')).toBeInTheDocument();
   });
 

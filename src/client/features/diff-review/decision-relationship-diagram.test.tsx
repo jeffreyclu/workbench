@@ -62,6 +62,8 @@ describe('decision relationship diagram', () => {
 
 describe('decision panel with its diagram attached', () => {
   it('places the diagram immediately to the right of the panel and measures the pair as one', () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { value: 1440, configurable: true });
     const anchor = document.createElement('button');
     document.body.append(anchor);
 
@@ -77,14 +79,15 @@ describe('decision panel with its diagram attached', () => {
 
     const popover = screen.getByRole('dialog');
     expect(popover).toHaveClass('with-aside');
-    // 336 panel + 10 gap + 306 diagram: the pair is placed and flipped together.
-    expect(popover.style.width).toBe('652px');
+    // 640 panel + 12 gap + 500 diagram: the pair is placed and flipped together.
+    expect(popover.style.width).toBe('1152px');
 
     const [panel, aside] = Array.from(popover.children);
     expect(panel).toHaveClass('decision-popover-panel');
     expect(panel).toContainElement(screen.getByText('Decision detail'));
     expect(aside).toHaveClass('decision-popover-aside');
     expect(aside).toContainElement(screen.getByRole('group', { name: 'Related changes diagram' }));
+    Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true });
   });
 
   it('leaves a panel without a diagram exactly as it was', () => {
@@ -97,7 +100,7 @@ describe('decision panel with its diagram attached', () => {
 
     const popover = screen.getByRole('dialog');
     expect(popover).not.toHaveClass('with-aside');
-    expect(popover.style.width).toBe('336px');
+    expect(popover.style.width).toBe('640px');
     expect(popover.querySelector('.decision-popover-panel')).toBeNull();
   });
 });

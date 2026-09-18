@@ -565,7 +565,7 @@ describe('tier spend', () => {
     // The tier changes what is spent, not just what the prompt asks for: a
     // pooled haiku answer under a T3 key is the failure this guards.
     const args = spawnedArgs(spawn);
-    expect(args.some((argv) => argv.includes('--model opus') && argv.includes('--effort high'))).toBe(true);
+    expect(args.some((argv) => argv.includes('--model sonnet') && argv.includes('--effort medium'))).toBe(true);
     // And it is not primed first — a session used once and retired would pay
     // for a throwaway turn to save nothing.
     expect(firstWrites.some((write) => write.includes('Depth: study'))).toBe(true);
@@ -594,6 +594,35 @@ describe('tier spend', () => {
     await requestReviewAssist(database, 'explain', decision, null, (text) => { streamed += text; }, 'T3');
 
     expect(streamed).toBe('Studied it.');
+  });
+
+  it('populates every critical field with one concise structured turn', async () => {
+    vi.resetModules();
+    const firstWrites: string[] = [];
+    const spawn = mockAnyTurnWorker(JSON.stringify({
+      score: 67,
+      risk_reason: 'Touches shared retry behavior.',
+      explanation: `Adds a bounded retry around synchronization. ${Array(60).fill('detail').join(' ')}`,
+      breakages: [`Repeated writes could duplicate data. ${Array(25).fill('detail').join(' ')}`, 'Permanent failures could take longer to surface.'],
+      task_alignment: `Aligned with the retry task. ${Array(35).fill('detail').join(' ')}`,
+    }), [], firstWrites);
+    vi.doMock('node:child_process', () => ({ spawn }));
+    const { lookupReviewAssist, requestCriticalReviewAssist } = await import('./review-assist-ai.js');
+    const database = openDatabase(':memory:');
+    const intent = { title: 'Retry synchronization', description: 'Retry transient sync failures.' };
+
+    const answers = await requestCriticalReviewAssist(database, decision, intent);
+
+    expect(answers.score_risk).toBe('SCORE: 67\nTouches shared retry behavior.');
+    expect(answers.what_could_break).toContain('- Repeated writes could duplicate data.');
+    expect(answers.compare_task_intent).toContain('Aligned with the retry task.');
+    expect(answers.explain.split(/\s+/)).toHaveLength(55);
+    expect(answers.what_could_break.split('\n')[0].split(/\s+/)).toHaveLength(21);
+    expect(answers.compare_task_intent?.split(/\s+/)).toHaveLength(30);
+    const reviewPrompts = firstWrites.filter((write) => write.includes('return JSON only'));
+    expect(reviewPrompts).toHaveLength(1);
+    expect(lookupReviewAssist(database, 'explain', decision, intent, 'T3')).toContain('bounded retry');
+    expect(spawnedArgs(spawn).some((argv) => argv.includes('--model sonnet') && argv.includes('--effort medium'))).toBe(true);
   });
 
   it('leaves an untiered Changes question on the cheap turn it has always paid for', async () => {

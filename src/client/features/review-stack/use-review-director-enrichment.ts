@@ -56,19 +56,10 @@ export function useReviewDirectorEnrichment(input: {
 
         let failed = false;
         const payload = reviewAssistDecisionPayload(entry.decision, input.decisions);
-        const actions = entry.enrichmentActions.filter((action) => action !== 'compare_task_intent' || input.taskIntent);
         try {
-          for (const action of actions) {
-            if (cancelled) return;
-            await sourceClient.requestReviewAssist({
-              action,
-              decision: payload,
-              taskIntent: input.taskIntent,
-              tier: entry.tier,
-              provider,
-            });
-            await queryClient.invalidateQueries({ queryKey: ['review-assist-cache', entry.decision.id] });
-          }
+          await sourceClient.requestCriticalReviewAssist({ decision: payload, taskIntent: input.taskIntent, provider });
+          if (cancelled) return;
+          await queryClient.invalidateQueries({ queryKey: ['review-assist-cache', entry.decision.id] });
         } catch {
           failed = true;
         }

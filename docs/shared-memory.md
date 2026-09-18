@@ -887,3 +887,25 @@ Corrected on 2026-09-17 during CON-274 (frontend password grant). The modal had
 `function isSubmittableCredential(raw: string): boolean { return raw.trim().length > 0; }` used twice
 in one line; Jeffrey's response was "what the fuck is this". It was inlined to
 `username.trim() !== '' && password.trim() !== '' && !isPending`.
+
+## A scope-narrowing order does not authorize deleting load-bearing code
+
+When Jeffrey narrows a diff — "no non-connector-gateway changes", "remove all of it" — he is
+excluding changes that *spread* the feature into surfaces he did not ask for. He is not asking to
+delete code the feature needs to run. Before reverting any file under such an order, establish what
+that file's change actually does: if removing it breaks a contract, a validation boundary, or the
+happy path, it belongs in the diff and the right move is to keep it and say why it is in scope.
+
+Corrected on 2026-09-18 during CON-274 (frontend password grant). An earlier turn read "NO V1 OR
+LEGACY SHIT AT ALL. REMOVE ALL OF IT" as covering
+`backend/mcp_gateway/mcp_gateway_client.py`, and reverted it along with the genuinely out-of-scope
+legacy-table and shared-`utils.ts` edits. Jeffrey's response: "what the fuck??? this is absolutely
+necessary or it breaks the connector registry validation????" He was right. That file is the
+monorepo's *Connector Gateway* client, not a legacy surface: `CgConnectionOrgProfile.auth_mode` is a
+strict Pydantic `Literal` and `CgV1TeamConnectionsResponse.model_validate()` parses a whole page at
+once, so one org profile with `authMode: "password"` raises `ValidationError` for the entire
+connector list rather than skipping that row.
+
+The generalizable test is whether a file sits on the feature's own path or on a neighbouring surface
+the feature was pushed into. "Backend file" and "Python file" are not the boundary; "not the thing
+Jeffrey asked to build" is.

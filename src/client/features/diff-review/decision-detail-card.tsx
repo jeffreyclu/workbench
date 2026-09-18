@@ -10,6 +10,7 @@ import { ACTION_LABELS, EXPLAIN_ACTIONS, useCachedReviewAssistAnswers, type Revi
 import { AiProviderSelect } from '../../components/ai-provider-select.js';
 import { useAiProvider } from '../../hooks/ai-provider.js';
 import type { ReviewAssistTier } from '../../../shared/contracts.js';
+import { MarkdownViewer } from '../../components/markdown/markdown-composer.js';
 
 export type { ReviewAssistAction, ReviewAssistTaskIntent };
 
@@ -137,9 +138,15 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     {!hideJudging && critical && <section className="diff-review-director-analysis" aria-labelledby="diff-review-director-title">
       <h4 id="diff-review-director-title">Review Director analysis</h4>
       <dl>
-        <div><dt>Explanation</dt><dd>{cachedAssistAnswers.data?.explain ?? 'Preparing…'}</dd></div>
-        <div><dt>What could break</dt><dd>{cachedAssistAnswers.data?.what_could_break ?? 'Preparing…'}</dd></div>
-        {taskIntent && <div><dt>Task alignment</dt><dd>{cachedAssistAnswers.data?.compare_task_intent ?? 'Preparing…'}</dd></div>}
+        <div><dt>Explanation</dt><dd>{cachedAssistAnswers.data?.explain
+          ? <MarkdownViewer id={`${decision.id}-explanation`} value={cachedAssistAnswers.data.explain} ariaLabel="Review Director explanation" />
+          : 'Preparing…'}</dd></div>
+        <div><dt>What could break</dt><dd>{cachedAssistAnswers.data?.what_could_break
+          ? <MarkdownViewer id={`${decision.id}-breakage`} value={cachedAssistAnswers.data.what_could_break} ariaLabel="Review Director breakage analysis" />
+          : 'Preparing…'}</dd></div>
+        {taskIntent && <div><dt>Task alignment</dt><dd>{cachedAssistAnswers.data?.compare_task_intent
+          ? <MarkdownViewer id={`${decision.id}-alignment`} value={cachedAssistAnswers.data.compare_task_intent} ariaLabel="Review Director task alignment" />
+          : 'Preparing…'}</dd></div>}
       </dl>
     </section>}
     <section className="diff-review-ai-assist" aria-labelledby="diff-review-ai-assist-title">

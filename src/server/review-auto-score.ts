@@ -4,7 +4,7 @@ import { reviewAssistDecisionPayload, type ReviewDecision } from '../shared/revi
 import { createReviewDirectorPlan, type ReviewDirectorEntry } from '../shared/review-director.js';
 import { delegationOutcome } from '../shared/review-delegation.js';
 import { publishRealtimeEvent, publishRealtimeReviewScore } from './realtime.js';
-import { lookupReviewAssist, requestReviewAssist, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist-ai.js';
+import { lookupReviewAssist, requestCriticalReviewAssist, requestReviewAssist, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist-ai.js';
 import type { WorkItemRepository } from './repository.js';
 import { getWorkspaceDiff } from './workspace-diff.js';
 
@@ -169,7 +169,28 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
       let answer: string | null = null;
       let error: string | null = null;
       try {
-        answer = await requestWithRetry(repository, 'score_risk', entry, plan.decisions, taskIntent);
+        if (entry.critical) {
+          let criticalFailure: Error | null = null;
+          for (let attempt = 1; attempt <= AUTO_SCORE_ATTEMPTS; attempt += 1) {
+            try {
+              const answers = await requestCriticalReviewAssist(
+                repository.database,
+                reviewAssistDecisionPayload(entry.decision, plan.decisions),
+                taskIntent,
+              );
+              answer = answers.score_risk;
+              criticalFailure = null;
+              break;
+            } catch (failure) {
+              criticalFailure = failure instanceof Error ? failure : new Error('Review Director analysis failed.');
+              if (attempt < AUTO_SCORE_ATTEMPTS) await new Promise((resolveRetry) => setTimeout(resolveRetry, attempt * 500));
+            }
+          }
+          if (criticalFailure) throw criticalFailure;
+          job.criticalCompleted += 1;
+        } else {
+          answer = await requestWithRetry(repository, 'score_risk', entry, plan.decisions, taskIntent);
+        }
 
         if (entry.delegated && decision.state === null) {
           const delegatedAnswer = await requestWithRetry(repository, 'explain', entry, plan.decisions, taskIntent);
@@ -191,11 +212,6 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
           }
         }
 
-        if (entry.critical) {
-          const actions = entry.enrichmentActions.filter((action) => action !== 'score_risk' && (action !== 'compare_task_intent' || taskIntent));
-          for (const action of actions) await requestWithRetry(repository, action, entry, plan.decisions, taskIntent);
-          job.criticalCompleted += 1;
-        }
       } catch (failure) {
         error = failure instanceof Error ? failure.message : 'Review Director analysis failed.';
       }

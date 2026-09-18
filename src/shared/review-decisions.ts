@@ -221,24 +221,23 @@ function aggregateNote(hunks: ReviewDecisionHunk[]): string | null {
   return hunks.filter((hunk) => hunk.note).map((hunk) => `${hunk.filePath} (${hunk.location}): ${hunk.note}`).join('\n\n');
 }
 
-function behaviorSummary(subject: string | null, hunks: ReviewDecisionHunk[], statuses: WorkspaceDiffFile['status'][], signals: ReviewRiskSignal[]): string {
+function behaviorSummary(subject: string | null, hunks: ReviewDecisionHunk[], statuses: WorkspaceDiffFile['status'][]): string {
   const subjectLabel = subject ? humanizeIdentifier(subject) : null;
   const additions = hunks.reduce((total, hunk) => total + hunk.additions, 0);
   const deletions = hunks.reduce((total, hunk) => total + hunk.deletions, 0);
-  const verb = statuses.every((status) => status === 'added') || deletions === 0 ? 'Adds'
+  const verb = statuses.every((status) => status === 'added') ? 'Adds'
     : statuses.every((status) => status === 'removed') || additions === 0 ? 'Removes'
-      : 'Changes';
+      : deletions === 0 ? 'Extends'
+        : 'Updates';
   if (!subjectLabel) {
-    if (hunks.length === 1) return `${verb} behavior in ${hunks[0].filePath}.`;
-    return `${verb} related behavior across ${new Set(hunks.map((hunk) => hunk.filePath)).size} files.`;
+    const fallbackVerb = statuses.every((status) => status === 'added') || deletions === 0 ? 'Adds'
+      : statuses.every((status) => status === 'removed') || additions === 0 ? 'Removes'
+        : 'Changes';
+    if (hunks.length === 1) return `${fallbackVerb} behavior in ${hunks[0].filePath}.`;
+    return `${fallbackVerb} related behavior across ${new Set(hunks.map((hunk) => hunk.filePath)).size} files.`;
   }
-  const effect = signals.includes('auth') ? `${subjectLabel} access checks`
-    : signals.includes('persistence') ? `how ${subjectLabel} stores or retrieves data`
-      : signals.includes('error_path') ? `how ${subjectLabel} handles failures`
-        : signals.includes('public_api') ? `the public ${subjectLabel} contract`
-          : subjectLabel;
   const fileCount = new Set(hunks.map((hunk) => hunk.filePath)).size;
-  return `${verb} ${effect}${fileCount > 1 ? ` across ${fileCount} files` : ''}.`;
+  return `${verb} the ${subjectLabel} flow${fileCount > 1 ? ` across ${fileCount} files` : ''}.`;
 }
 
 /** FNV-1a over a change's lines. Not a security hash — it exists so a recorded
@@ -365,7 +364,7 @@ export function buildReviewDecisions(files: WorkspaceDiffFile[], reviews: DiffHu
       ordinal: index + 1,
       id: group.length > 1 ? `decision:${primary.subject}:${hunks.map((hunk) => hunk.id).sort().join('|')}` : hunks[0].id,
       subject: primary.subject,
-      behavior: behaviorSummary(primary.subject, hunks, group.map((candidate) => candidate.fileStatus), riskSignals),
+      behavior: behaviorSummary(primary.subject, hunks, group.map((candidate) => candidate.fileStatus)),
       hunks, filePaths,
       additions: hunks.reduce((total, hunk) => total + hunk.additions, 0),
       deletions: hunks.reduce((total, hunk) => total + hunk.deletions, 0),

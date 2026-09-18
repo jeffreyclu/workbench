@@ -185,7 +185,7 @@ describe('diff review decision detail', () => {
       const answers: Record<string, string> = {
         score_risk: 'SCORE: 88\nAuthorization boundary.',
         explain: 'This changes which requests are authorized.',
-        what_could_break: 'Denied requests could be accepted.',
+        what_could_break: '- Denied requests could be accepted.\n- Existing sessions could be rejected.',
         compare_task_intent: 'Aligned with the linked task.',
       };
       return json({ answer: answers[action] ?? null });
@@ -204,6 +204,7 @@ describe('diff review decision detail', () => {
     expect(screen.getByRole('button', { name: /Heuristic/ })).toHaveAttribute('aria-expanded', 'true');
     await waitFor(() => expect(screen.getByText('This changes which requests are authorized.')).toBeInTheDocument());
     expect(screen.getByText('Denied requests could be accepted.')).toBeInTheDocument();
+    expect(screen.getByRole('list')).toHaveTextContent('Existing sessions could be rejected.');
     expect(screen.getByText('Aligned with the linked task.')).toBeInTheDocument();
     vi.unstubAllGlobals();
   });

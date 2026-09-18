@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-const POPOVER_WIDTH = 336;
-const ASIDE_WIDTH = 306;
-const ASIDE_GAP = 10;
+const POPOVER_WIDTH = 640;
+const ASIDE_WIDTH = 500;
+const ASIDE_GAP = 12;
 const VIEWPORT_MARGIN = 12;
 /** Below this the panel, the aside and the viewport margins cannot sit in a
  * row, so the pair stacks instead of being squeezed to an unreadable width or
@@ -54,7 +54,8 @@ export function DecisionPopover({ anchor, anchorId, anchorAttribute = 'data-deci
   /** Measured on every placement rather than fixed at mount, so rotating a
    * phone crosses the breakpoint without the panel having to close and reopen.
    * Narrow viewports stack the diagram under the decision and clamp the panel
-   * to the screen; wide ones reserve both columns as before. */
+   * to the screen; wide ones give the analysis enough room to read instead of
+   * squeezing the entire review into two tooltip-sized columns. */
   const measure = () => {
     const stacked = hasAside && window.innerWidth < stackBreakpoint(ASIDE_WIDTH);
     const columns = hasAside && !stacked ? POPOVER_WIDTH + ASIDE_GAP + ASIDE_WIDTH : POPOVER_WIDTH;

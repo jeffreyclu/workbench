@@ -72,7 +72,7 @@ const CHANGES_AGENT_SYSTEM_PROMPT = [
  * handed the whole queue back to the reviewer with extra steps. Those answers
  * are cached judgements made against the wrong question and must not survive
  * the fix. */
-const ASSIST_PROMPT_VERSION = 8;
+const ASSIST_PROMPT_VERSION = 9;
 
 // Answer length is the dominant latency term once the session is primed:
 // measured on this machine a warm turn spends ~0.9s on session overhead and the
@@ -164,7 +164,7 @@ const TIER_SPEND: Record<ReviewAssistTier, AssistSpend> = {
   T0: DEFAULT_SPEND,
   T1: DEFAULT_SPEND,
   T2: { model: 'sonnet', effort: 'medium', timeoutMs: 90_000 },
-  T3: { model: 'opus', effort: 'high', timeoutMs: 180_000 },
+  T3: { model: 'sonnet', effort: 'medium', timeoutMs: 60_000 },
 };
 
 /** An untiered request is a Changes question, which has always been the cheap
@@ -351,6 +351,7 @@ const POOL_TARGET = 2;
 const idlePool: AssistWorker[] = [];
 const liveWorkers = new Set<AssistWorker>();
 const inFlightRequests = new Map<string, Promise<string>>();
+const inFlightCriticalReviews = new Map<string, Promise<CriticalReviewAnswers>>();
 
 function writeTurn(worker: AssistWorker, prompt: string): void {
   worker.child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } })}\n`);
@@ -612,6 +613,107 @@ export async function requestReviewAssist(
   try { return await request; }
   finally {
     if (inFlightRequests.get(hash) === request) inFlightRequests.delete(hash);
+  }
+}
+
+export type CriticalReviewAnswers = {
+  score_risk: string;
+  explain: string;
+  what_could_break: string;
+  compare_task_intent?: string;
+};
+
+function criticalReviewPrompt(decision: ReviewAssistDecision, taskIntent: ReviewAssistTaskIntent): string {
+  // Reuse the complete evidence/context pack, but replace the per-action
+  // instruction. Critical review used to send that same large pack through
+  // four sequential deep turns; one structured pass is both faster and more
+  // internally consistent.
+  const context = buildPrompt('explain', decision, taskIntent, null).split('\n\n').slice(1).join('\n\n');
+  const changeType = isReviewChangeType(decision.changeType) ? decision.changeType : 'behavior_edit';
+  return [
+    'Instruction: perform one concise critical review and return JSON only, with no markdown fence or extra keys.',
+    'Use exactly this shape: {"score": 0, "risk_reason": "15 words maximum", "explanation": "two short sentences maximum", "breakages": ["short concrete risk"], "task_alignment": "one short sentence or empty string"}.',
+    'Return at most three breakages. Do not restate the diff. Do not add background, caveats, a conclusion, headings, or a confidence trailer.',
+    `The score is 0-100. The defensible range for this change type is ${CHANGE_TYPE_RISK_BANDS[changeType]}; leave it only for a concrete reason.`,
+    taskIntent
+      ? `Task title: ${taskIntent.title}\nTask description: ${taskIntent.description}`
+      : 'No task is linked. Return an empty task_alignment string.',
+    context,
+    parityContractApplies('what_could_break', changeType) ? PARITY_DIRECTIVE : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+function boundWords(value: string, maximum: number): string {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= maximum) return words.join(' ');
+  return `${words.slice(0, maximum).join(' ')}…`;
+}
+
+function parseCriticalReview(raw: string, taskIntent: ReviewAssistTaskIntent): CriticalReviewAnswers {
+  const objectText = raw.match(/\{[\s\S]*\}/)?.[0];
+  if (!objectText) throw new Error('AI critical review returned unreadable analysis.');
+  let parsed: unknown;
+  try { parsed = JSON.parse(objectText); }
+  catch { throw new Error('AI critical review returned invalid JSON.'); }
+  if (!parsed || typeof parsed !== 'object') throw new Error('AI critical review returned no analysis.');
+  const value = parsed as Record<string, unknown>;
+  const score = typeof value.score === 'number' && Number.isFinite(value.score)
+    ? Math.max(0, Math.min(100, Math.round(value.score)))
+    : null;
+  const riskReason = typeof value.risk_reason === 'string' ? boundWords(value.risk_reason, 15) : '';
+  const explanation = typeof value.explanation === 'string' ? boundWords(value.explanation, 55) : '';
+  const breakages = Array.isArray(value.breakages)
+    ? value.breakages.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())).slice(0, 3).map((entry) => boundWords(entry, 20))
+    : [];
+  const alignment = typeof value.task_alignment === 'string' ? boundWords(value.task_alignment, 30) : '';
+  if (score === null || !riskReason || !explanation) throw new Error('AI critical review omitted required analysis.');
+  return {
+    score_risk: `SCORE: ${score}\n${riskReason}`,
+    explain: explanation,
+    what_could_break: breakages.length > 0 ? breakages.map((entry) => `- ${entry}`).join('\n') : 'No concrete breakage is visible in this diff.',
+    ...(taskIntent ? { compare_task_intent: alignment || 'Task alignment is not clear from the supplied change.' } : {}),
+  };
+}
+
+/** One model turn populates every critical field. Individual answers are still
+ * written under their existing cache keys, so the panel and explicit action
+ * buttons need no second source of truth. */
+export async function requestCriticalReviewAssist(
+  database: WorkbenchDatabase,
+  decision: ReviewAssistDecision,
+  taskIntent: ReviewAssistTaskIntent,
+  provider: AiProviderChoice | null = null,
+  accountProfile?: string,
+): Promise<CriticalReviewAnswers> {
+  const resolvedProvider = resolveAiProvider(provider, accountProfile);
+  const actions: ReviewAssistAction[] = ['score_risk', 'explain', 'what_could_break', ...(taskIntent ? ['compare_task_intent' as const] : [])];
+  const hashes = new Map(actions.map((action) => [action, hashRequest(action, decision, taskIntent, 'T3', resolvedProvider)]));
+  const cached = Object.fromEntries(actions.map((action) => [action, readCached(database, hashes.get(action)!)]));
+  if (actions.every((action) => Boolean(cached[action]))) return cached as CriticalReviewAnswers;
+
+  const batchHash = createHash('sha256').update([...hashes.values()].join(':')).digest('hex');
+  const existing = inFlightCriticalReviews.get(batchHash);
+  if (existing) return existing;
+  const request = (async () => {
+    const prompt = criticalReviewPrompt(decision, taskIntent);
+    const spend = spendFor('T3');
+    const turn = resolvedProvider === 'palmyra'
+      ? await runPalmyraTurn(prompt, spend)
+      : { answer: await runClaudeTurn(prompt, spend), provider: 'claude' as const };
+    const parsed = parseCriticalReview(turn.answer, taskIntent);
+    const audited = Object.fromEntries(Object.entries(parsed).map(([action, answer]) => [
+      action,
+      withAnswerAudits(action as ReviewAssistAction, decision, answer),
+    ])) as CriticalReviewAnswers;
+    if (turn.provider === resolvedProvider) {
+      for (const action of actions) writeCached(database, hashes.get(action)!, audited[action]!);
+    }
+    return audited;
+  })();
+  inFlightCriticalReviews.set(batchHash, request);
+  try { return await request; }
+  finally {
+    if (inFlightCriticalReviews.get(batchHash) === request) inFlightCriticalReviews.delete(batchHash);
   }
 }
 

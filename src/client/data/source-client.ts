@@ -73,6 +73,11 @@ export const sourceClient = {
     tier?: ReviewAssistTier | null;
     provider?: AiProviderChoice;
   }) => request<{ answer: string }>('/api/review-assist', { method: 'POST', body: JSON.stringify(input) }),
+  requestCriticalReviewAssist: (input: {
+    decision: { behavior: string; state: string; hunks: Array<{ filePath: string; location: string; lines: string[] }> };
+    taskIntent: { title: string; description: string } | null;
+    provider?: AiProviderChoice;
+  }) => request<{ answers: Partial<Record<ReviewAssistActionName, string>> }>('/api/review-assist/critical', { method: 'POST', body: JSON.stringify(input) }),
   // Streams the answer as the model writes it. The reviewer sees the first
   // words about a second after clicking instead of waiting for the whole turn;
   // the resolved value is still the complete, server-persisted answer.
