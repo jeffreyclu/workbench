@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { appendMcpQualityRun, readMcpQualityHistory } from './mcp-quality-history.js';
+import { appendMcpQualityRun, defaultMcpQualityHistoryPath, readMcpQualityHistory } from './mcp-quality-history.js';
 
 const directories: string[] = [];
 
@@ -11,6 +11,10 @@ afterEach(() => {
 });
 
 describe('MCP quality history', () => {
+  it('reads shared runtime data from the stable Workbench root', () => {
+    expect(defaultMcpQualityHistoryPath()).toBe(join(process.cwd(), 'data', 'mcpjam', 'history.jsonl'));
+  });
+
   it('returns an empty state before the first check', () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-mcp-history-'));
     directories.push(directory);

@@ -1,12 +1,12 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { McpQualityHistory, McpQualityRun } from '../shared/contracts.js';
 
 export type { McpQualityHistory, McpQualityRun } from '../shared/contracts.js';
 
 export function defaultMcpQualityHistoryPath(): string {
   return process.env.MCP_QUALITY_HISTORY_PATH?.trim()
-    || join(resolve(new URL('../..', import.meta.url).pathname), 'data', 'mcpjam', 'history.jsonl');
+    || join(process.cwd(), 'data', 'mcpjam', 'history.jsonl');
 }
 
 function isMcpQualityRun(value: unknown): value is McpQualityRun {
