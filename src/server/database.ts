@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { estimateCostUsd } from './model-pricing.js';
 import { contentHashOfLines, splitPatchHunks } from '../shared/review-decisions.js';
 import { repositoryIdentitySync } from './workspace-diff.js';
+import { attachAuditDatabase } from './audit-database.js';
 
 /**
  * Attribute existing history records to the repository they were captured in.
@@ -2381,6 +2382,20 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Operational audit records now live in workbench-audit.db and are no
+    // longer retrieval candidates. The legacy table remains temporarily for
+    // rollback compatibility, but this release stops reading and writing it.
+    // The dedicated conversation index also lets the message endpoint seek
+    // directly into one conversation instead of scanning the global timeline.
+    id: '081_audit_store_and_conversation_reads',
+    apply(database) {
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_shared_messages_conversation_created
+          ON shared_messages(conversation_id, created_at DESC);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
@@ -2426,6 +2441,7 @@ export function openDatabase(path = process.env.DATABASE_PATH ?? './data/workben
   // migrations starved every live writer for the length of the promotion.
   database.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   applyMigrations(database);
+  attachAuditDatabase(database, absolutePath);
   return database;
 }
 

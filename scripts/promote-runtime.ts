@@ -6,6 +6,8 @@ import { get as httpGet } from 'node:http';
 import { runtimeSourceFingerprint } from '../src/server/runtime-preview.js';
 import { markRuntimePromotionPending, publishRuntimeRelease } from '../src/server/runtime-release.js';
 import { promotionMustWaitForAgents } from '../src/server/runtime-promotion.js';
+import { auditDatabasePath } from '../src/server/audit-database.js';
+import { runMcpJamGate } from './mcpjam-check.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
 const runtimeRoot = join(root, '.workbench-runtime');
@@ -14,6 +16,7 @@ const lockPath = join(runtimeRoot, 'promotion.lock');
 const LOCK_WAIT_MS = 60_000;
 const LOCK_POLL_MS = 250;
 const databasePath = process.env.DATABASE_PATH?.trim() || join(root, 'data', 'workbench.db');
+const liveAuditDatabasePath = auditDatabasePath(databasePath);
 
 function wait(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -129,16 +132,26 @@ function waitForCandidateHealth(port: number, processToCheck: ReturnType<typeof 
 async function preflightCandidate(): Promise<void> {
   const preflightDirectory = mkdtempSync(join(tmpdir(), 'workbench-runtime-preflight-'));
   const copiedDatabase = join(preflightDirectory, 'workbench.db');
+  const copiedAuditDatabase = join(preflightDirectory, 'workbench-audit.db');
   const backup = spawnSync('sqlite3', [databasePath, `.backup ${copiedDatabase}`], { encoding: 'utf8' });
   if (backup.status !== 0) throw new Error(`Could not copy the live database for promotion preflight: ${backup.stderr || backup.stdout}`);
+  if (liveAuditDatabasePath !== ':memory:' && existsSync(liveAuditDatabasePath)) {
+    const auditBackup = spawnSync('sqlite3', [liveAuditDatabasePath, `.backup ${copiedAuditDatabase}`], { encoding: 'utf8' });
+    if (auditBackup.status !== 0) throw new Error(`Could not copy the live audit database for promotion preflight: ${auditBackup.stderr || auditBackup.stdout}`);
+  }
   const port = 46_000 + (process.pid % 1_000);
   const child = spawn(join(root, 'node_modules/.bin/tsx'), [join(root, 'scripts/runtime-preflight-api.ts')], {
     cwd: root,
-    env: { ...process.env, PORT: String(port), DATABASE_PATH: copiedDatabase, WORKBENCH_CLIENT_PATH: join(root, 'dist/client') },
+    env: { ...process.env, PORT: String(port), DATABASE_PATH: copiedDatabase, AUDIT_DATABASE_PATH: copiedAuditDatabase, WORKBENCH_CLIENT_PATH: join(root, 'dist/client') },
     stdio: 'ignore',
   });
   try {
     await waitForCandidateHealth(port, child);
+    runMcpJamGate({
+      url: `http://127.0.0.1:${port}/mcp`,
+      artifactDirectory: join(root, 'data', 'mcpjam', 'promotion-latest'),
+      accessToken: 'loopback',
+    });
   } finally {
     child.kill('SIGTERM');
     rmSync(preflightDirectory, { recursive: true, force: true });

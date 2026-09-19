@@ -1481,6 +1481,16 @@ describe('WorkItemRepository', () => {
     expect(() => repository.listSharedMessages(2, 'not-a-real-cursor', conversation.id)).toThrow('Invalid message cursor.');
   });
 
+  it('seeks conversation messages through the conversation/created-at index', () => {
+    const plan = database.prepare(`EXPLAIN QUERY PLAN
+      SELECT rowid, * FROM shared_messages
+      WHERE conversation_id = ?
+      ORDER BY created_at DESC, rowid DESC LIMIT ?`).all('conversation-id', 40) as Array<{ detail: string }>;
+
+    expect(plan.map((step) => step.detail).join('\n')).toContain('idx_shared_messages_conversation_created');
+    expect(plan.map((step) => step.detail).join('\n')).not.toContain('SCAN shared_messages');
+  });
+
   it('persists queued chat turns with their requested agent target', () => {
     const conversation = repository.createConversation('Queued thread');
     const message = repository.createSharedMessage('jeffrey', 'Do this next', 'queued', conversation.id, [], 'both');
@@ -2552,6 +2562,51 @@ describe('WorkItemRepository', () => {
       expect(secondPage.entries).toHaveLength(2);
       expect(secondPage.entries.map((entry) => entry.detail)).not.toEqual(firstPage.entries.map((entry) => entry.detail));
       expect(() => repository.listAuditLog(2, 'not-a-real-cursor')).toThrow('Invalid audit log cursor.');
+    });
+  });
+
+  describe('bounded operational retention', () => {
+    it('prunes old terminal traces and only unreviewed superseded diff snapshots', () => {
+      const item = repository.create({ title: 'Retention task', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+      const conversation = repository.createConversation('Retention conversation', item.id);
+      const terminalMessage = repository.createSharedMessage('codex', 'done', 'completed', conversation.id);
+      const activeMessage = repository.createSharedMessage('claude', 'working', 'running', conversation.id);
+      const terminalRun = repository.createRun(item.id, 'analysis', 'codex', 'codex', 'prompt', conversation.id, terminalMessage.id);
+      const activeRun = repository.createRun(item.id, 'analysis', 'claude', 'claude', 'prompt', conversation.id, activeMessage.id);
+      repository.updateRun(terminalRun.id, { status: 'completed' });
+      repository.addAgentStreamEvents(terminalMessage.id, terminalRun.id, [{ kind: 'decision', detail: 'old terminal event' }]);
+      repository.addAgentStreamEvents(activeMessage.id, activeRun.id, [{ kind: 'decision', detail: 'old active event' }]);
+      repository.addAgentRunDiagnostic(terminalRun.id, terminalMessage.id, 'codex', 'prompt', { old: true });
+      repository.addAgentRunDiagnostic(activeRun.id, activeMessage.id, 'claude', 'prompt', { old: true });
+      database.prepare("UPDATE agent_stream_events SET created_at = '2026-01-01T00:00:00.000Z'").run();
+      database.prepare("UPDATE agent_run_diagnostics SET created_at = '2026-01-01T00:00:00.000Z'").run();
+
+      for (let index = 0; index < 7; index += 1) {
+        repository.captureWorkspaceDiffSnapshot({ conversationId: conversation.id }, {
+          revision: `revision-${index}`,
+          workspacePath: '/tmp/repo',
+          branch: 'feature/retention',
+          files: [],
+          changedFiles: 0,
+          additions: index,
+          deletions: 0,
+          publish: { branch: 'feature/retention', hasOrigin: true, ahead: 0, hasChanges: true, reason: null },
+        }, { repositoryIdentity: 'example/repo' });
+        database.prepare('UPDATE workspace_diff_snapshots SET captured_at = ? WHERE conversation_id = ? AND revision = ?')
+          .run(`2026-01-0${index + 1}T00:00:00.000Z`, conversation.id, `revision-${index}`);
+      }
+      repository.upsertDiffHunkReview({ conversationId: conversation.id }, {
+        revision: 'revision-0', filePath: 'src/a.ts', hunkRange: '@@ -1 +1 @@', contentHash: 'hash', state: 'reviewed',
+      });
+
+      repository.runRetentionCleanup();
+
+      expect(database.prepare('SELECT detail FROM agent_stream_events ORDER BY detail').all())
+        .toEqual([{ detail: 'old active event' }]);
+      expect(database.prepare('SELECT run_id FROM agent_run_diagnostics').all())
+        .toEqual([{ run_id: activeRun.id }]);
+      expect(repository.listWorkspaceDiffSnapshots({ conversationId: conversation.id }).map((snapshot) => snapshot.revision))
+        .toEqual(['revision-6', 'revision-5', 'revision-4', 'revision-3', 'revision-2', 'revision-0']);
     });
   });
 

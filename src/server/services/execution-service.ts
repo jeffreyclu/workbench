@@ -597,18 +597,77 @@ export class ExecutionService {
     return Number(changed);
   }
 
+  /**
+   * Operational traces are debugging aids, not permanent conversation
+   * history. Keep one month of terminal-run detail. Diff history is content,
+   * so retain the newest five snapshots per scope/repository and every
+   * revision that has a human review verdict; only unreviewed superseded
+   * snapshots are eligible for removal.
+   */
+  pruneOperationalHistory(retentionDays: number = 30, snapshotsPerScope: number = 5): {
+    diagnostics: number;
+    runDiagnostics: number;
+    streamEvents: number;
+    diffSnapshots: number;
+  } {
+    const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const diagnostics = Number(this.database.prepare('DELETE FROM diagnostics WHERE created_at < ?').run(cutoffDate).changes);
+    const runDiagnostics = Number(this.database.prepare(`
+      DELETE FROM agent_run_diagnostics
+      WHERE created_at < ? AND run_id IN (
+        SELECT id FROM agent_runs WHERE status IN ('completed', 'failed', 'canceled')
+      )
+    `).run(cutoffDate).changes);
+    const streamEvents = Number(this.database.prepare(`
+      DELETE FROM agent_stream_events
+      WHERE created_at < ? AND message_id IN (
+        SELECT id FROM shared_messages WHERE status IN ('completed', 'failed', 'canceled')
+      )
+    `).run(cutoffDate).changes);
+    const diffSnapshots = Number(this.database.prepare(`
+      DELETE FROM workspace_diff_snapshots
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+            ROW_NUMBER() OVER (
+              PARTITION BY
+                CASE WHEN work_item_id IS NOT NULL THEN 'work:' || work_item_id ELSE 'conversation:' || conversation_id END,
+                COALESCE(repository_identity, '')
+              ORDER BY captured_at DESC, rowid DESC
+            ) AS snapshot_rank
+          FROM workspace_diff_snapshots
+        ) ranked
+        WHERE snapshot_rank > ?
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM diff_hunk_reviews review
+        WHERE review.revision = workspace_diff_snapshots.revision
+          AND (review.work_item_id = workspace_diff_snapshots.work_item_id
+            OR review.conversation_id = workspace_diff_snapshots.conversation_id)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM diff_block_reviews review
+        WHERE review.revision = workspace_diff_snapshots.revision
+          AND (review.work_item_id = workspace_diff_snapshots.work_item_id
+            OR review.conversation_id = workspace_diff_snapshots.conversation_id)
+      )
+    `).run(Math.max(1, snapshotsPerScope)).changes);
+    return { diagnostics, runDiagnostics, streamEvents, diffSnapshots };
+  }
+
   runRetentionCleanup(): void {
     const start = Date.now();
     try {
       const compactedRuns = this.compactTerminalRuns(7);
       const prunedMessages = this.pruneArchivedMessages(90);
+      const operational = this.pruneOperationalHistory(30, 5);
       const durationMs = Date.now() - start;
 
       this.telemetry.logDiagnostic(
         'retention_cleanup',
         'retention',
         'success',
-        `Compacted ${compactedRuns} terminal runs and pruned ${prunedMessages} archived messages.`,
+        `Compacted ${compactedRuns} terminal runs, pruned ${prunedMessages} archived messages, ${operational.diagnostics} diagnostics, ${operational.runDiagnostics} run diagnostics, ${operational.streamEvents} stream events, and ${operational.diffSnapshots} superseded diff snapshots.`,
         durationMs,
       );
     } catch (error) {

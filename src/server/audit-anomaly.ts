@@ -1,5 +1,6 @@
 import type { AuditLogEntry } from '../shared/contracts.js';
 import type { WorkbenchDatabase } from './database.js';
+import { AUDIT_DATABASE_SCHEMA } from './audit-database.js';
 
 /**
  * A read-only, aggregate-only rate anomaly in `audit_log`. `detail` and work
@@ -87,7 +88,7 @@ export function auditLogRateAnomalies(database: WorkbenchDatabase, options: Audi
   const streams = new Map<string, RateStream>();
   const rows = database.prepare(`
     SELECT category, source, created_at
-    FROM audit_log
+    FROM ${AUDIT_DATABASE_SCHEMA}.audit_log
     ORDER BY category ASC, source ASC, created_at ASC
   `).all() as unknown as AuditRateRow[];
 

@@ -10,10 +10,11 @@ import { shutdownReviewAssist, warmReviewAssist } from './review-assist-ai.js';
 import { liveRuntimeCapabilities } from './runtime-capabilities.js';
 import { createServer } from 'node:http';
 import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
-import { collectMemoryDocuments, indexPendingMemory } from './memory-index.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
 import { shutdownTurnGroundingClassifier, warmTurnGroundingClassifier } from './turn-grounding-ai.js';
 import { configureRuntimeRetirement } from './runtime-retirement.js';
+import { shutdownMemorySemanticWorker } from './memory-semantic-worker.js';
+import { requestMemoryIndexRefresh, shutdownMemoryIndexMaintenance } from './memory-index-maintenance.js';
 
 const port = Number(process.env.PORT ?? 4317);
 const database = openDatabase();
@@ -34,27 +35,11 @@ warmDiffConfidenceModel();
 warmReviewAssist();
 warmTurnGroundingClassifier();
 
-// Keeps the vectorized memory index (memory-index.ts) warm so the very first
-// /api/activity-memory or /api/memory/search call after a restart does not
-// pay for a cold collect+embed pass. Deliberately not awaited: embedding the
-// full corpus can take longer than an acceptable boot time, and this is a
-// best-effort enrichment on top of the repository's own per-call refresh
-// (searchActivityMemory), never a dependency the server needs to start
-// serving traffic. Runs in this process only -- no detached process, no
-// background spawn -- so it stops the instant this process exits.
-void (async () => {
-  try {
-    collectMemoryDocuments(database);
-    await indexPendingMemory(database, { limit: 2_000 });
-  } catch (error) {
-    console.error('[memory-index] startup indexing failed; will retry on next search', error);
-  }
-})();
-
 const server = createServer(app);
 attachRealtimeServer(server);
 server.listen(port, () => {
   console.log(`Workbench API listening on http://localhost:${port}`);
+  requestMemoryIndexRefresh();
 });
 
 let shuttingDown = false;
@@ -70,6 +55,8 @@ const shutdown = () => {
   shutdownDiffConfidenceModel();
   shutdownReviewAssist();
   shutdownFastTaskDraftModel();
+  shutdownMemorySemanticWorker();
+  shutdownMemoryIndexMaintenance();
   // Do not exit immediately after the graceful signal: provider CLIs create
   // detached process groups, so the owning runtime must remain alive long
   // enough to escalate any group that ignores SIGTERM. This is also used when

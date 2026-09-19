@@ -58,8 +58,15 @@ logged there too, with the cause named when Workbench applied the move as a casc
 timeline explains a task.
 
 Every completed state-changing REST request is also recorded centrally in the append-only
-audit log and is searchable through activity memory. This generic request record complements,
+operational audit database. Audit rows are available through `list_audit_log`, but are deliberately
+excluded from activity memory and the knowledge graph. This generic request record complements,
 rather than replaces, the task-specific activity entries above.
+
+The `/mcp` surface is release-gated by a pinned local MCPJam check. Every candidate must pass
+Streamable HTTP initialization, protocol conformance, offline Claude/Codex compatibility, the
+reviewed tool-contract baseline, and one real read-only `list_projects` call before promotion can
+switch the runtime. MCP browser Origins are limited to loopback and explicitly configured trusted
+origins; native clients may omit Origin. The gate uses no public tunnel, hosted upload, or model call.
 
 ### Autonomous operation
 

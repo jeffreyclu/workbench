@@ -31,7 +31,7 @@ describe('memory diagnostics', () => {
 
     expect(result.status).toBe('healthy');
     expect(result.migrationApplied).toBe(true);
-    expect(result.graph.triggerCount).toBe(20);
+    expect(result.graph.triggerCount).toBe(18);
     expect(result.graph.missingNodeCount).toBe(0);
     expect(result.graph.staleNodeCount).toBe(0);
     expect(result.graph.danglingEdgeCount).toBe(0);
@@ -68,7 +68,7 @@ describe('memory diagnostics', () => {
     const result = getMemoryDiagnostics(database);
 
     expect(result.status).toBe('degraded');
-    expect(result.graph.triggerCount).toBe(19);
-    expect(result.graph.requiredTriggerCount).toBe(20);
+    expect(result.graph.triggerCount).toBe(17);
+    expect(result.graph.requiredTriggerCount).toBe(18);
   });
 });

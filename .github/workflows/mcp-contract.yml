@@ -1,0 +1,47 @@
+name: MCP contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/mcp-contract.yml'
+      - '.mcpjam/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/mcpjam-*.ts'
+      - 'scripts/runtime-preflight-api.ts'
+      - 'src/server/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mcp-contract.yml'
+      - '.mcpjam/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/mcpjam-*.ts'
+      - 'scripts/runtime-preflight-api.ts'
+      - 'src/server/**'
+
+permissions:
+  contents: read
+
+jobs:
+  mcpjam:
+    name: MCPJam regression gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+      - run: npm ci
+      - run: npm run mcp:check
+      - name: Upload MCPJam traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcpjam-traces
+          path: data/mcpjam/local-latest
+          if-no-files-found: warn
+          retention-days: 14

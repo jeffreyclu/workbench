@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
-import { buildMemoryFtsMatchQuery, chunkText, collectMemoryDocuments, diversifyMemoryResults, indexPendingMemory, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, reciprocalRankFusion, searchMemory, setEmbedder, type MemorySearchResult } from './memory-index.js';
+import { buildMemoryFtsMatchQuery, chunkText, collectMemoryDocuments, diversifyMemoryResults, indexPendingMemory, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, pruneLegacyAuditMemory, pruneLegacyAuditMemoryBatch, reciprocalRankFusion, searchMemory, setEmbedder, type MemorySearchResult } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { WorkItemRepository } from './repository.js';
 
@@ -195,6 +195,33 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     expect(database.prepare("SELECT source_id FROM memory_documents WHERE source = 'artifact'").get()).toBeUndefined();
     expect(database.prepare("SELECT COUNT(*) AS count FROM memory_chunks WHERE document_id NOT IN (SELECT id FROM memory_documents)").get())
       .toEqual({ count: 0 });
+  });
+
+  it('keeps operational audit entries out of retrieval while compatibility cleanup removes old projections', async () => {
+    const repository = new WorkItemRepository(database);
+    repository.addAuditEntry('api_mutation', 'workbench_api', 'POST /api/shared/conversations/read → 200');
+    insertDocument('legacy-audit-memory', 'audit', 'Workbench API', 'api_mutation: legacy read');
+
+    collectMemoryDocuments(database, { docRoots: [] });
+    await indexPendingMemory(database);
+
+    expect(repository.listAuditLog().entries).toHaveLength(1);
+    expect(await searchMemory(database, 'legacy read')).toEqual([]);
+    expect(pruneLegacyAuditMemoryBatch(database)).toEqual({ documents: 1, graphNodes: 0 });
+    expect(database.prepare("SELECT id FROM memory_documents WHERE source = 'audit'").all()).toEqual([]);
+  });
+
+  it('rebuilds the FTS mirror once when bulk-removing legacy audit memory', async () => {
+    insertDocument('kept-memory', 'message', 'Keep', 'surviving lexical marker');
+    insertDocument('audit-memory', 'audit', 'Audit', 'removed lexical marker');
+    database.prepare("INSERT INTO memory_chunks (document_id, ordinal, text) VALUES ('kept-memory', 0, 'surviving lexical marker')").run();
+    database.prepare("INSERT INTO memory_chunks (document_id, ordinal, text) VALUES ('audit-memory', 0, 'removed lexical marker')").run();
+
+    expect(await pruneLegacyAuditMemory(database)).toEqual({ documents: 1, graphNodes: 0 });
+
+    expect(database.prepare("SELECT text FROM memory_chunks_fts WHERE memory_chunks_fts MATCH 'surviving'").all())
+      .toEqual([{ text: 'surviving lexical marker' }]);
+    expect(database.prepare("SELECT text FROM memory_chunks_fts WHERE memory_chunks_fts MATCH 'removed'").all()).toEqual([]);
   });
 
   it('filters results down to the requested sources', async () => {

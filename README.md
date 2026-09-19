@@ -133,6 +133,34 @@ http://localhost:5180/mcp
 
 For non-loopback use, authenticate with `Authorization: Bearer <WORKBENCH_TOKEN>`. The MCP API gives Codex and Claude the same admin control Jeffrey has in the UI: tasks and stack ordering, discoveries and scans, conversations and agent dispatch, execution plans and their approval, artifact publication and revocation, and runtime promotion. It does not expose provider credentials or direct SQLite access — those are not Workbench operations.
 
+#### MCPJam regression gate
+
+Workbench validates `/mcp` with the pinned, local MCPJam CLI. The gate starts an isolated Workbench API and checks connectivity, protocol conformance, Claude/Codex host compatibility, breaking tool-contract changes, and a real read-only `list_projects` call:
+
+```bash
+npm run mcp:check
+```
+
+The same gate runs automatically against the candidate API during `runtime:promote`; a failure stops promotion before the runtime switches. GitHub CI runs it for MCP/server changes and uploads the JSON traces. Local traces are written under `data/mcpjam/`.
+
+To inspect the live local runtime interactively:
+
+```bash
+npm run mcp:inspect
+npm run mcp:inspect:stop
+```
+
+This first validates the live endpoint, then opens MCPJam's Tools tab. On the first run, add a Streamable HTTP server named `Workbench` at `http://127.0.0.1:5180/mcp`; MCPJam keeps that local configuration afterward. It uses `127.0.0.1` only and does not create a public MCPJam tunnel.
+
+The committed baseline at `.mcpjam/workbench-baseline.json` is the reviewed MCP contract. After an intentional tool addition or compatible schema change, update it explicitly and review its diff:
+
+```bash
+npm run mcp:baseline
+git diff -- .mcpjam/workbench-baseline.json
+```
+
+The deterministic gate never invokes a language model or uploads Workbench data. Cross-model MCPJam evals remain a separate, explicit run because they can spend model credits.
+
 ## Nightly discovery
 
 Install the scheduled discovery job once:
@@ -216,6 +244,9 @@ npm run runtime:start    # serve the stable runtime on localhost:5180
 npm run preview          # read-only live-data preview UI on 5181
 npm run preview:sandbox  # isolated writable preview UI + API
 npm run dev              # isolated API + Vite development
+npm run mcp:check        # run the deterministic local MCPJam release gate
+npm run mcp:inspect      # open MCPJam against the live local Workbench MCP server
+npm run mcp:inspect:stop # stop the local MCPJam Inspector
 npm run share -- <url>   # expose an already-running local app through the shared ngrok hostname
 npm run share:workbench  # expose Workbench's stable runtime through its configured tunnel
 npm run discovery:scan   # run discovery now

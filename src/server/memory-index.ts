@@ -6,14 +6,15 @@ import { pipeline } from '@huggingface/transformers';
 import type { WorkbenchDatabase } from './database.js';
 import { buildFtsMatchQuery } from './fts-query.js';
 import { expandKnowledgeGraph } from './knowledge-graph.js';
+import { scoreSemanticDocuments, searchSemanticChunks, searchSemanticTexts } from './memory-semantic-worker.js';
 
 /**
  * Vectorized, hybrid retrieval over the complete durable Workbench record
  * (migration 031_memory_index in database.ts). Three stages:
  *
  *  1. `collectMemoryDocuments` upserts one row per durable record (a message,
- *     an activity entry, an agent-run prompt/response/error, an audit entry,
- *     a work item, a published artifact, or a doc page) into
+ *     an activity entry, an agent-run prompt/response/error, a work item, a
+ *     published artifact, or a doc page) into
  *     `memory_documents`, keyed by
  *     (source, source_id) with a content hash so unchanged rows are a no-op.
  *  2. `indexPendingMemory` chunks and embeds whatever has never been embedded
@@ -181,7 +182,10 @@ function nonEmpty(value: string | null | undefined): value is string {
 }
 
 function memoryScopeClause(options: MemorySearchOptions, alias: string): { sql: string; parameters: string[] } {
-  const clauses: string[] = [];
+  // Operational audit rows may still exist during compatibility cleanup, but
+  // they are never memory candidates. Apply this before lexical and exhaustive
+  // semantic ranking rather than filtering returned results afterward.
+  const clauses: string[] = [`${alias}.source <> 'audit'`];
   const parameters: string[] = [];
   const projectKey = options.projectKey?.trim();
   const conversationId = options.conversationId?.trim();
@@ -242,8 +246,8 @@ function collectDocCandidates(label: string, docsRoot: string): CandidateDocumen
  * Upserts one memory_documents row per durable record from every source
  * Jeffrey wants captured: shared messages, shared conversations, task
  * activity, agent-run prompts/responses/errors (as three independent
- * documents so a prompt is retrievable without its response), the audit log,
- * work items, repo markdown under docs/, and the shared cross-tool knowledge
+ * documents so a prompt is retrievable without its response), work items,
+ * repo markdown under docs/, and the shared cross-tool knowledge
  * base under ~/notes (durable facts recorded outside Workbench's own tables,
  * e.g. by Codex). Skips null/empty bodies.
  *
@@ -309,19 +313,6 @@ export function collectMemoryDocuments(
     if (nonEmpty(row.error)) candidates.push({ ...base, source: 'run_error', sourceId: `${row.id}:error`, body: row.error });
   }
 
-  const auditRows = database.prepare(`
-    SELECT a.id AS id, a.work_item_id AS work_item_id, a.source AS actor, a.category AS category, a.detail AS detail, a.created_at AS created_at,
-           COALESCE(w.title, 'Workbench API') AS title
-    FROM audit_log a LEFT JOIN work_items w ON w.id = a.work_item_id
-  `).all() as Array<{ id: string; work_item_id: string | null; actor: string; category: string; detail: string; created_at: string; title: string }>;
-  for (const row of auditRows) {
-    if (!nonEmpty(row.detail)) continue;
-    candidates.push({
-      source: 'audit', sourceId: row.id, conversationId: null, workItemId: row.work_item_id,
-      actor: row.actor, title: row.title, body: `${row.category}: ${row.detail}`, createdAt: row.created_at,
-    });
-  }
-
   const workItemRows = database.prepare(`
     SELECT id, title, description, created_at FROM work_items WHERE deleted_at IS NULL
   `).all() as Array<{ id: string; title: string; description: string; created_at: string }>;
@@ -358,7 +349,7 @@ function upsertMemoryDocuments(
   candidates: CandidateDocument[],
   pruneSources: ReadonlySet<string> = new Set(),
 ): { upserted: number } {
-  const existing = database.prepare('SELECT source, source_id, content_hash, conversation_id, work_item_id, actor, created_at FROM memory_documents').all() as Array<{
+  const existing = database.prepare("SELECT source, source_id, content_hash, conversation_id, work_item_id, actor, created_at FROM memory_documents WHERE source <> 'audit'").all() as Array<{
     source: string; source_id: string; content_hash: string; conversation_id: string | null; work_item_id: string | null; actor: string | null; created_at: string;
   }>;
   const existingDocuments = new Map(existing.map((row) => [`${row.source}::${row.source_id}`, row]));
@@ -435,7 +426,7 @@ function upsertMemoryDocuments(
  */
 export async function indexPendingMemory(database: WorkbenchDatabase, options: { limit?: number } = {}): Promise<{ documents: number; chunks: number }> {
   const limit = Math.max(1, Math.min(5_000, options.limit ?? 500));
-  const pending = database.prepare('SELECT id, body FROM memory_documents WHERE indexed_at IS NULL ORDER BY created_at DESC LIMIT ?').all(limit) as Array<{ id: string; body: string }>;
+  const pending = database.prepare("SELECT id, body FROM memory_documents WHERE indexed_at IS NULL AND source <> 'audit' ORDER BY created_at DESC LIMIT ?").all(limit) as Array<{ id: string; body: string }>;
   if (!pending.length) return { documents: 0, chunks: 0 };
 
   const documentChunks = pending.map((doc) => ({ documentId: doc.id, chunks: chunkText(doc.body) }));
@@ -481,6 +472,63 @@ export async function indexPendingMemory(database: WorkbenchDatabase, options: {
   return { documents: pending.length, chunks: chunkCount };
 }
 
+/** One bounded compatibility-cleanup slice. Small transactions keep startup
+ * and conversation requests responsive while the old audit-derived memory
+ * projection is removed from an upgraded database. */
+export function pruneLegacyAuditMemoryBatch(database: WorkbenchDatabase, batchSize = 200): { documents: number; graphNodes: number } {
+  const safeBatchSize = Math.max(1, Math.min(1_000, batchSize));
+  const documents = Number(database.prepare(`DELETE FROM memory_documents WHERE id IN (
+    SELECT id FROM memory_documents WHERE source = 'audit' LIMIT ?
+  )`).run(safeBatchSize).changes);
+  const graphNodes = Number(database.prepare(`DELETE FROM knowledge_graph_nodes WHERE id IN (
+    SELECT id FROM knowledge_graph_nodes WHERE entity_type = 'audit' LIMIT ?
+  )`).run(safeBatchSize).changes);
+  return { documents, graphNodes };
+}
+
+export async function pruneLegacyAuditMemory(database: WorkbenchDatabase, batchSize = 200): Promise<{ documents: number; graphNodes: number }> {
+  void batchSize;
+  await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+  if (!database.isOpen) return { documents: 0, graphNodes: 0 };
+  const documents = Number((database.prepare("SELECT COUNT(*) AS count FROM memory_documents WHERE source = 'audit'").get() as { count: number }).count);
+  const graphNodes = Number((database.prepare("SELECT COUNT(*) AS count FROM knowledge_graph_nodes WHERE entity_type = 'audit'").get() as { count: number }).count);
+  if (!documents && !graphNodes) return { documents, graphNodes };
+
+  // Deleting audit chunks through the normal FTS trigger performs one FTS
+  // lookup per chunk and takes tens of minutes at the current corpus size.
+  // Rebuild the standalone FTS mirror once inside one WAL transaction instead:
+  // readers keep seeing the prior committed index until the replacement is
+  // complete, and no request thread performs this work.
+  database.exec('BEGIN IMMEDIATE;');
+  try {
+    database.exec(`
+      DROP TRIGGER IF EXISTS memory_chunks_fts_ai;
+      DROP TRIGGER IF EXISTS memory_chunks_fts_au;
+      DROP TRIGGER IF EXISTS memory_chunks_fts_ad;
+      DELETE FROM memory_chunks_fts;
+      DELETE FROM memory_chunks WHERE document_id IN (SELECT id FROM memory_documents WHERE source = 'audit');
+      DELETE FROM memory_documents WHERE source = 'audit';
+      DELETE FROM knowledge_graph_nodes WHERE entity_type = 'audit';
+      INSERT INTO memory_chunks_fts(chunk_id, text) SELECT id, text FROM memory_chunks;
+      CREATE TRIGGER memory_chunks_fts_ai AFTER INSERT ON memory_chunks BEGIN
+        INSERT INTO memory_chunks_fts(chunk_id, text) VALUES (new.id, new.text);
+      END;
+      CREATE TRIGGER memory_chunks_fts_au AFTER UPDATE ON memory_chunks BEGIN
+        DELETE FROM memory_chunks_fts WHERE chunk_id = old.id;
+        INSERT INTO memory_chunks_fts(chunk_id, text) VALUES (new.id, new.text);
+      END;
+      CREATE TRIGGER memory_chunks_fts_ad AFTER DELETE ON memory_chunks BEGIN
+        DELETE FROM memory_chunks_fts WHERE chunk_id = old.id;
+      END;
+    `);
+    database.exec('COMMIT;');
+  } catch (error) {
+    database.exec('ROLLBACK;');
+    throw error;
+  }
+  return { documents, graphNodes };
+}
+
 export type MemorySearchResult = {
   source: string;
   sourceId: string;
@@ -509,7 +557,6 @@ const SOURCE_AUTHORITY: Readonly<Record<string, number>> = {
   run_output: 0.98,
   run_instructions: 0.95,
   run_error: 0.92,
-  audit: 0.9,
 };
 
 const QUERY_STOP_WORDS = new Set([
@@ -721,6 +768,7 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
   const contextDependent = Boolean(context) && (SHORTHAND_REQUEST.test(primary)
     || CONTEXT_REFERENTIAL_REQUEST.test(primary));
   const contextWeight = contextDependent ? 0.72 : 0.14;
+  const fileBacked = Boolean(database.location());
 
   const lexicalRows = (text: string): RankedChunk[] => {
     const matchQuery = buildMemoryFtsMatchQuery(text);
@@ -737,8 +785,8 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     `).all(matchQuery, ...scope.parameters) as RankedChunk[];
   };
 
-  const primaryLexicalRows = lexicalRows(primary);
-  const contextLexicalRows = context ? lexicalRows(context) : [];
+  const primaryLexicalRows = fileBacked ? [] : lexicalRows(primary);
+  const contextLexicalRows = fileBacked || !context ? [] : lexicalRows(context);
   const chunks = new Map<string, { documentId: string; text: string }>();
   const signals = new Map<string, ChunkSignals>();
   const addRankedRows = (rows: RankedChunk[], key: 'primaryLexicalRank' | 'contextLexicalRank') => {
@@ -752,37 +800,44 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
   addRankedRows(contextLexicalRows, 'contextLexicalRank');
 
   const bestPrimarySemanticByDocument = new Map<string, number>();
+  let primaryQueryVector: Float32Array | null = null;
   try {
     const semanticQueries = context ? [primary, context] : [primary];
-    const queryVectors = await embedTexts(semanticQueries);
-    if (queryVectors.length) {
-      const embedded = database.prepare(`
-        SELECT memory_chunks.id, memory_chunks.document_id, memory_chunks.text, memory_chunks.embedding
-        FROM memory_chunks
-        JOIN memory_documents md ON md.id = memory_chunks.document_id
-        WHERE memory_chunks.embedding IS NOT NULL
-          ${scope.sql}
-      `).all(...scope.parameters) as Array<{ id: number; document_id: string; text: string; embedding: Uint8Array }>;
-      const semanticRows = embedded.map((row) => {
-        const embedding = blobToEmbedding(row.embedding);
-        const primarySimilarity = cosineSimilarity(queryVectors[0], embedding);
-        const contextSimilarity = queryVectors[1] ? cosineSimilarity(queryVectors[1], embedding) : undefined;
-        bestPrimarySemanticByDocument.set(row.document_id, Math.max(bestPrimarySemanticByDocument.get(row.document_id) ?? -1, primarySimilarity));
-        return { ...row, primarySimilarity, contextSimilarity };
-      });
-      const addSemanticRows = (key: 'primarySemanticSimilarity' | 'contextSemanticSimilarity', similarity: (row: typeof semanticRows[number]) => number | undefined) => {
-        semanticRows
-          .filter((row) => (similarity(row) ?? -1) >= MIN_SEMANTIC_SIMILARITY)
-          .sort((left, right) => (similarity(right) ?? -1) - (similarity(left) ?? -1))
-          .slice(0, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE)
-          .forEach((row) => {
-            const chunkId = String(row.id);
-            chunks.set(chunkId, { documentId: row.document_id, text: row.text });
-            signals.set(chunkId, { ...signals.get(chunkId), [key]: similarity(row) });
-          });
+    const semantic = fileBacked
+      ? await searchSemanticTexts(
+          database,
+          semanticQueries,
+          scope.sql,
+          scope.parameters,
+          MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE,
+          MIN_SEMANTIC_SIMILARITY,
+          buildMemoryFtsMatchQuery(primary),
+          context ? buildMemoryFtsMatchQuery(context) : null,
+        )
+      : await embedTexts(semanticQueries).then((queryVectors) => searchSemanticChunks(
+          database,
+          queryVectors,
+          scope.sql,
+          scope.parameters,
+          MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE,
+          MIN_SEMANTIC_SIMILARITY,
+        ));
+    if (semantic.primaryVector) {
+      primaryQueryVector = semantic.primaryVector;
+      addRankedRows(semantic.primaryLexical.map((row) => ({ chunk_id: row.id, document_id: row.documentId, text: row.text })), 'primaryLexicalRank');
+      addRankedRows(semantic.contextLexical.map((row) => ({ chunk_id: row.id, document_id: row.documentId, text: row.text })), 'contextLexicalRank');
+      const addSemanticRows = (rows: typeof semantic.primary, key: 'primarySemanticSimilarity' | 'contextSemanticSimilarity') => {
+        rows.forEach((row) => {
+          const chunkId = String(row.id);
+          chunks.set(chunkId, { documentId: row.documentId, text: row.text });
+          signals.set(chunkId, { ...signals.get(chunkId), [key]: row.similarity });
+          if (key === 'primarySemanticSimilarity') {
+            bestPrimarySemanticByDocument.set(row.documentId, Math.max(bestPrimarySemanticByDocument.get(row.documentId) ?? -1, row.similarity));
+          }
+        });
       };
-      addSemanticRows('primarySemanticSimilarity', (row) => row.primarySimilarity);
-      if (queryVectors[1]) addSemanticRows('contextSemanticSimilarity', (row) => row.contextSimilarity);
+      addSemanticRows(semantic.primary, 'primarySemanticSimilarity');
+      if (semanticQueries.length > 1) addSemanticRows(semantic.context, 'contextSemanticSimilarity');
     }
   } catch (error) {
     console.error('[memory-index] embedding query failed; falling back to full-text results only', error);
@@ -860,6 +915,14 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     WHERE ${graphResults.map(() => '(source = ? AND source_id = ?)').join(' OR ')}
   `).all(...graphResults.flatMap(({ source, sourceId }) => [source, sourceId])) as Array<{ id: string; source: string; source_id: string }> : [];
   const graphDocumentIds = new Map(graphDocumentRows.map((row) => [`${row.source}:${row.source_id}`, row.id]));
+  if (primaryQueryVector && graphDocumentRows.length) {
+    try {
+      const graphSimilarities = await scoreSemanticDocuments(database, primaryQueryVector, graphDocumentRows.map((row) => row.id));
+      for (const [documentId, similarity] of graphSimilarities) bestPrimarySemanticByDocument.set(documentId, similarity);
+    } catch (error) {
+      console.error('[memory-index] graph semantic scoring failed; using lexical graph affinity only', error);
+    }
+  }
   const relevantGraph = graphResults.flatMap((result) => {
     if (options.excludeConversationId && result.conversationId === options.excludeConversationId) return [];
     if (options.excludeGeneratedConversationId && result.conversationId === options.excludeGeneratedConversationId

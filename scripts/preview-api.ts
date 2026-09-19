@@ -5,6 +5,8 @@ import { warmFastTaskDraftModel } from '../src/server/fast-task-draft-ai.js';
 import { previewRuntimeCapabilities } from '../src/server/runtime-capabilities.js';
 import { createServer } from 'node:http';
 import { attachRealtimeServer } from '../src/server/realtime.js';
+import { shutdownMemoryIndexMaintenance } from '../src/server/memory-index-maintenance.js';
+import { shutdownMemorySemanticWorker } from '../src/server/memory-semantic-worker.js';
 
 const port = Number(process.env.PORT ?? 45175);
 const database = openDatabase();
@@ -18,3 +20,12 @@ attachRealtimeServer(server);
 server.listen(port, '127.0.0.1', () => {
   console.log(`Workbench preview API listening on http://127.0.0.1:${port}`);
 });
+
+const shutdown = () => server.close(() => {
+  shutdownMemoryIndexMaintenance();
+  shutdownMemorySemanticWorker();
+  database.close();
+  process.exit(0);
+});
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);

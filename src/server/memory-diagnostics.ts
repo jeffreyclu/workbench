@@ -18,8 +18,6 @@ const REQUIRED_TRIGGERS = [
   'knowledge_graph_agent_runs_insert',
   'knowledge_graph_agent_runs_conversation_update',
   'knowledge_graph_agent_runs_delete',
-  'knowledge_graph_audit_insert',
-  'knowledge_graph_audit_delete',
   'knowledge_graph_artifacts_insert',
   'knowledge_graph_artifacts_scope_update',
   'knowledge_graph_artifacts_delete',
@@ -75,8 +73,9 @@ export function getMemoryDiagnostics(database: WorkbenchDatabase): MemoryDiagnos
   try {
     const migrationApplied = Boolean(database.prepare("SELECT 1 FROM schema_migrations WHERE id = '078_knowledge_graph'").get());
     const graphCounts = database.prepare(`SELECT
-      (SELECT COUNT(*) FROM knowledge_graph_nodes) AS node_count,
-      (SELECT COUNT(*) FROM knowledge_graph_edges) AS edge_count`).get() as { node_count: number; edge_count: number };
+      (SELECT COUNT(*) FROM knowledge_graph_nodes WHERE entity_type <> 'audit') AS node_count,
+      (SELECT COUNT(*) FROM knowledge_graph_edges
+        WHERE from_node_id NOT LIKE 'audit:%' AND to_node_id NOT LIKE 'audit:%') AS edge_count`).get() as { node_count: number; edge_count: number };
     const projection = database.prepare(`SELECT SUM(canonical_count) AS canonical_count, SUM(missing_count) AS missing_count FROM (
       SELECT COUNT(*) AS canonical_count, COUNT(*) FILTER (WHERE graph.id IS NULL) AS missing_count FROM projects source LEFT JOIN knowledge_graph_nodes graph ON graph.id = 'project:' || source.id
       UNION ALL SELECT COUNT(*), COUNT(*) FILTER (WHERE graph.id IS NULL) FROM work_items source LEFT JOIN knowledge_graph_nodes graph ON graph.id = 'work_item:' || source.id
@@ -84,7 +83,6 @@ export function getMemoryDiagnostics(database: WorkbenchDatabase): MemoryDiagnos
       UNION ALL SELECT COUNT(*), COUNT(*) FILTER (WHERE graph.id IS NULL) FROM shared_messages source LEFT JOIN knowledge_graph_nodes graph ON graph.id = 'message:' || source.id
       UNION ALL SELECT COUNT(*), COUNT(*) FILTER (WHERE graph.id IS NULL) FROM activities source LEFT JOIN knowledge_graph_nodes graph ON graph.id = 'activity:' || source.id
       UNION ALL SELECT COUNT(*), COUNT(*) FILTER (WHERE graph.id IS NULL) FROM agent_runs source LEFT JOIN knowledge_graph_nodes graph ON graph.id = 'agent_run:' || source.id
-      UNION ALL SELECT COUNT(*), COUNT(*) FILTER (WHERE graph.id IS NULL) FROM audit_log source LEFT JOIN knowledge_graph_nodes graph ON graph.id = 'audit:' || source.id
       UNION ALL SELECT COUNT(*), COUNT(*) FILTER (WHERE graph.id IS NULL) FROM published_artifacts source LEFT JOIN knowledge_graph_nodes graph ON graph.id = 'artifact:' || source.id
     )`).get() as { canonical_count: number; missing_count: number };
     const staleCount = Math.max(0, graphCounts.node_count - (projection.canonical_count - projection.missing_count));

@@ -3,7 +3,7 @@ import { openDatabase } from '../src/server/database.js';
 import { collectMemoryDocuments, indexPendingMemory } from '../src/server/memory-index.js';
 
 // One-shot backfill for the vectorized memory index: collects every durable
-// record (messages, activity, runs, audit log, work items, docs/**/*.md) into
+// record (messages, activity, runs, work items, docs/**/*.md) into
 // memory_documents, then chunks and embeds whatever is new or changed. Safe
 // to run repeatedly -- both stages are upserts keyed on content, so a repeat
 // run with no new durable records is a no-op. The server also runs this pair

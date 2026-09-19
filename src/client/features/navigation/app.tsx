@@ -58,6 +58,8 @@ import { FollowUpArchiveDialog } from '../../components/dialogs/follow-up-archiv
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../lib/formatters';
 import { clearLastOpenedItem, clearSentConversationDraft, readConversationDrafts, readConversationModelProfiles, readTaskModelProfiles, writeConversationDraft, writeConversationModelProfiles, writeLastOpenedItem, writeTaskModelProfile } from '../../lib/preferences';
 import { QueueExplanationList } from '../../components/queue-explanations';
+import { StackHeader } from '../../components/stack-header';
+import { StackList } from '../../components/stack-list';
 import { ProjectColorDot } from '../../components/project/project-color';
 import { InlineProjectEditor } from '../../components/project/project-field';
 import { useValuePulse } from '../../hooks/use-value-pulse';
@@ -86,10 +88,9 @@ function isEditableTarget(target: EventTarget | null) {
   return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName));
 }
 
-function PulseCount({ value, as: Tag = 'strong', centerGlyph = false }: { value: number; as?: 'strong' | 'span'; centerGlyph?: boolean }) {
+function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong' | 'span' }) {
   const pulse = useValuePulse(value);
-  const className = [pulse, centerGlyph ? 'optically-centered-count' : ''].filter(Boolean).join(' ');
-  return <Tag className={className}>{centerGlyph ? <span className="optically-centered-number">{value}</span> : value}</Tag>;
+  return <Tag className={pulse}>{value}</Tag>;
 }
 
 export function App() {
@@ -635,7 +636,7 @@ export function App() {
           </div>
         )}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={startTaskDrag} onDragCancel={finishTaskDrag} onDragEnd={handleDragEnd}>
-        <div ref={queueScrollRef} className={`queue-list ${isTaskDragging ? 'is-dragging' : ''}`} role="list" aria-label={isArchiveView ? 'Archived tasks' : view === 'workbench' ? 'Workbench focus' : 'Work stacks'} onScroll={(event) => {
+        <StackList scrollRef={queueScrollRef} className={`queue-list ${isTaskDragging ? 'is-dragging' : ''}`} role="list" ariaLabel={isArchiveView ? 'Archived tasks' : view === 'workbench' ? 'Workbench focus' : 'Work stacks'} onScroll={(event) => {
           const element = event.currentTarget;
           if (element.scrollHeight - element.scrollTop - element.clientHeight < 500 && items.hasNextPage && !items.isFetchingNextPage) void items.fetchNextPage();
         }}>
@@ -644,7 +645,7 @@ export function App() {
           {!items.isLoading && !items.isError && filtered.length === 0 && <div className="list-state">{taskSearch.trim() ? `No tasks match “${taskSearch.trim()}”.` : view === 'active' ? 'No work items yet. Add one or connect Linear.' : view === 'workbench' ? 'No Workbench-project tasks yet.' : 'No archived tasks.'}</div>}
           <div className="queue-rows">
             {renderedSections.map((section, sectionIndex) => <Fragment key={`section-${section.header?.id ?? sectionIndex}`}>
-              {section.header && <div key={section.header.id} className={`stack-header stack-header-${section.header.group}`}><span>{section.header.label}</span><PulseCount value={section.header.count} centerGlyph /></div>}
+              {section.header && <StackHeader key={section.header.id} label={section.header.label} count={section.header.count} group={section.header.group} />}
               <SortableContext items={(view === 'active' || view === 'workbench') && selectedIds.size === 0 ? section.items.filter(({ item }) => item.status !== 'in_progress').map((item) => item.id) : []} strategy={verticalListSortingStrategy}>
                 {section.items.map((rendered) => <div key={rendered.id} className={`task-group-row task-group-${rendered.group} ${enteringTaskIds.has(rendered.item.id) ? 'is-entering' : ''} ${exitingTaskIds.has(rendered.item.id) ? 'is-exiting' : ''}`}><TaskQueueItem item={rendered.item} index={renderedItems.indexOf(rendered.item)} selected={selectedId === rendered.item.id} focused={(focusedId ?? renderedItems[0]?.id) === rendered.item.id} draggable={(view === 'active' || view === 'workbench') && rendered.item.status !== 'in_progress' && !items.isFetchingNextPage && selectedIds.size === 0} onSelect={() => selectTaskInStack(rendered.item.id)} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onFocus={() => setFocusedId(rendered.item.id)} onKeyDown={(event) => handleQueueKeyDown(event, rendered.item.id)} /></div>)}
               </SortableContext>
@@ -652,7 +653,7 @@ export function App() {
           </div>
           {items.isFetchingNextPage && <TaskQueueSkeleton count={2} />}
           {!items.hasNextPage && filtered.length > 0 && <div className="page-state">All {items.data?.pages[0]?.totalCount ?? filtered.length} items loaded</div>}
-        </div>
+        </StackList>
         </DndContext>
       </main>
 

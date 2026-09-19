@@ -334,6 +334,27 @@ describe('shared room', () => {
     expect(await screen.findByText('No messages yet. Choose a provider to get started.')).toBeTruthy();
   });
 
+  it('renders conversation stack headers through the shared optically centered stack header', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn(() => Promise.resolve()) });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes('/api/shared/conversations') ? { conversations: [{ id: '00000000-0000-4000-8000-000000000002', title: 'Workbench', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }] }
+        : url.includes('/api/shared/messages') ? { messages: [] } : { items: [], proposal: null };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: /conversations/i }));
+    const attentionHeader = await waitFor(() => {
+      const header = document.querySelector('.conversation-stack-header.stack-header-attention');
+      expect(header).toBeTruthy();
+      return header as HTMLElement;
+    });
+    expect(attentionHeader.textContent).toContain('Attention stack');
+    expect(attentionHeader.querySelector('.optically-centered-count > .optically-centered-number')).toHaveTextContent('1');
+  });
+
   it('renders an interjection inside the matching live agent stream', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const conversationId = '00000000-0000-4000-8000-000000000110';

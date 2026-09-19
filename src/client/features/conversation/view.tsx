@@ -43,6 +43,8 @@ import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAG
 import type { AiProviderChoice } from '../../../shared/ai-providers';
 import { ComposerProviderSelect, type ComposerProvider } from '../../components/composer-provider-select';
 import { ComposerModelSelect } from '../../components/composer-model-select';
+import { StackHeader } from '../../components/stack-header';
+import { StackList } from '../../components/stack-list';
 import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../data/api';
 import { ArtifactLibraryView } from '../artifacts/view';
@@ -1278,7 +1280,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {conversationSearch && <button type="button" className="icon-button" aria-label="Clear search" onClick={() => setConversationSearch('')}><X size={13} /></button>}
         </div>
         {debouncedConversationSearch ? (
-          <div className="conversation-tabs">
+          <StackList className="conversation-tabs">
             {conversationSearchResults.isLoading && <ConversationSearchResultSkeleton />}
             {conversationSearchResults.isError && <div className="page-state error-message">Search failed. <button className="button secondary compact" onClick={() => conversationSearchResults.refetch()}>Retry</button></div>}
             {!conversationSearchResults.isLoading && !conversationSearchResults.isError && (conversationSearchResults.data?.results.length ?? 0) === 0 && (
@@ -1287,7 +1289,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
             {conversationSearchResults.data?.results.map((result) => (
               <div key={`${result.type}-${result.messageId ?? result.conversationId}`} className="virtual-row" style={{ position: 'static' }}>
                 <button
-                  className={result.conversationId === conversationId ? 'active' : ''}
+                  className={`stack-card ${result.conversationId === conversationId ? 'active' : 'conversation-read'}`}
                   onClick={() => {
                     setShowingConversationStackOnly(false);
                     openConversation(result.conversationId);
@@ -1301,19 +1303,19 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                 </button>
               </div>
             ))}
-          </div>
+          </StackList>
         ) : (
           <>
             <Tabs ariaLabel="Conversation view" className="conversation-view-tabs" panelClassName="conversation-tab-panel" selected={conversationView} onSelect={selectConversationView} items={[
               { value: 'active', label: 'Active' },
               { value: 'archive', label: 'Archive' },
             ]}>
-            <div ref={conversationScrollRef} className="conversation-tabs">
+            <StackList scrollRef={conversationScrollRef} className="conversation-tabs">
               <div className="virtual-list" style={{ height: conversationVirtualizer.getTotalSize() }}>
                 {displayedConversationRows.map((virtualRow) => {
                   const row = conversationStackRows[virtualRow.index];
                   if (!row) return null;
-                  if (row.type === 'header') return <div key={row.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><div className={`stack-header conversation-stack-header stack-header-${row.group}`}><span>{row.label}</span><strong>{row.count}</strong></div></div>;
+                  if (row.type === 'header') return <div key={row.id} ref={conversationVirtualizer.measureElement} data-index={virtualRow.index} className="virtual-row" style={{ transform: `translateY(${virtualRow.start}px)` }}><StackHeader label={row.label} count={row.count} group={row.group} className="conversation-stack-header" /></div>;
 
                   const { conversation, state } = row;
                   const isUnread = Boolean(conversation.isUnread && !locallyReadConversationIds.has(conversation.id) && conversation.id !== conversationId);
@@ -1330,7 +1332,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
               )}
               {!conversations.isLoading && !conversations.isError && conversationList.length === 0 && <div className="page-state">No {conversationView} conversations.</div>}
               {conversations.isFetchingNextPage && <ConversationRailSkeleton count={2} />}
-            </div>
+            </StackList>
             </Tabs>
           </>
         )}

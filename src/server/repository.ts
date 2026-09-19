@@ -29,6 +29,7 @@ import { ConversationService } from './services/conversation-service.js';
 import { ShortTermMemoryStore } from './short-term-memory.js';
 import { normalizeLabels, providerSyncFields, providerValues, sameProviderValue, type ProviderFieldValue, type ProviderSnapshotRow, type ProviderSnapshotValues } from './repositories/provider-sync-support.js';
 import { EXTERNAL_ACTION_GRANT_TTL_MS, mergeExternalActionAuthorizations, type ExternalActionAuthorization } from './external-action-authorization.js';
+import { requestMemoryIndexRefresh } from './memory-index-maintenance.js';
 
 export type { ProviderWorkItem } from './services/provider-sync-service.js';
 
@@ -697,23 +698,36 @@ export class WorkItemRepository {
     // Tiebreak on rowid (insertion order), not id: several messages can share
     // the same millisecond-resolution created_at, and id is a random UUID that
     // would otherwise reorder same-timestamp messages arbitrarily.
-    const rows = this.database.prepare(`
-      SELECT rowid AS rowid, * FROM shared_messages
-      WHERE (? IS NULL OR conversation_id = ?)
-        AND (? IS NULL OR created_at < ? OR (created_at = ? AND rowid < ?))
-      ORDER BY created_at DESC, rowid DESC LIMIT ?
-    `).all(
-      conversationId ?? null, conversationId ?? null,
-      cursorValues?.rowid ?? null, cursorValues?.createdAt ?? null, cursorValues?.createdAt ?? null, cursorValues?.rowid ?? null,
-      safeLimit + 1,
-    ) as Array<Record<string, string | number | null>>;
-    const hasMore = rows.length > safeLimit;
-    const page = rows.slice(0, safeLimit).reverse();
+    const cursorClause = cursorValues
+      ? 'AND (created_at < ? OR (created_at = ? AND rowid < ?))'
+      : '';
+    const cursorParameters = cursorValues
+      ? [cursorValues.createdAt, cursorValues.createdAt, cursorValues.rowid]
+      : [];
+    // Keep the conversation and global paths as separate SQL statements.
+    // Nullable `(? IS NULL OR conversation_id = ?)` forced SQLite to scan the
+    // global created-at index even when a conversation was always supplied.
+    const rows = conversationId
+      ? this.database.prepare(`
+          SELECT rowid AS rowid, * FROM shared_messages
+          WHERE conversation_id = ? ${cursorClause}
+          ORDER BY created_at DESC, rowid DESC LIMIT ?
+        `).all(conversationId, ...cursorParameters, safeLimit + 1)
+      : this.database.prepare(`
+          SELECT rowid AS rowid, * FROM shared_messages
+          WHERE 1 = 1 ${cursorClause}
+          ORDER BY created_at DESC, rowid DESC LIMIT ?
+        `).all(...cursorParameters, safeLimit + 1);
+    const typedRows = rows as Array<Record<string, string | number | null>>;
+    const hasMore = typedRows.length > safeLimit;
+    const page = typedRows.slice(0, safeLimit).reverse();
     const messages = page.map((row) => this.mapSharedMessageRow(row));
     const oldestRow = page[0];
     const nextCursor = hasMore && oldestRow ? Buffer.from(JSON.stringify({ createdAt: String(oldestRow.created_at), rowid: Number(oldestRow.rowid) })).toString('base64url') : null;
-    const totalCount = Number((this.database.prepare('SELECT COUNT(*) AS count FROM shared_messages WHERE (? IS NULL OR conversation_id = ?)')
-      .get(conversationId ?? null, conversationId ?? null) as { count: number }).count);
+    const countRow = (conversationId
+      ? this.database.prepare('SELECT COUNT(*) AS count FROM shared_messages WHERE conversation_id = ?').get(conversationId)
+      : this.database.prepare('SELECT COUNT(*) AS count FROM shared_messages').get()) as { count: number };
+    const totalCount = Number(countRow.count);
     return { messages, nextCursor, totalCount };
   }
 
@@ -814,30 +828,23 @@ export class WorkItemRepository {
   /**
    * Read-only retrieval over the complete durable Workbench record for
    * agents. Built on the vectorized hybrid (FTS5 BM25 + cosine) index in
-   * memory-index.ts rather than a LIKE scan. Public/ad-hoc searches refresh
-   * first, collecting new or changed durable records and embedding anything
-   * pending so a write made moments ago is retrievable with no separate
-   * reindex step. Prompt assembly may opt out of that refresh to avoid making
-   * a task wait behind corpus maintenance; it searches the already-ready
-   * index instead.
-   *
-   * At the current corpus size (~19k rows) that per-call refresh is a
-   * handful of full-table scans plus embedding only whatever is still
-   * unindexed (usually nothing, once collectMemoryDocuments/indexPendingMemory
-   * have run at startup) -- cheap in steady state. If the corpus grows enough
-   * for the full per-source scan itself to matter, decouple collection from
-   * the request path (a poller keyed off a watermark) rather than doing it
-   * here.
+   * memory-index.ts rather than a LIKE scan. Public/ad-hoc searches request a
+   * coalesced refresh in a child process, then search the last completed index
+   * immediately. Collection, embedding writes, and compatibility cleanup never
+   * block the HTTP event loop. Prompt assembly may opt out when a refresh has
+   * already been requested for the same dispatch.
    */
   async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; excludeConversationId?: string; excludeGeneratedConversationId?: string; projectKey?: string; conversationId?: string; workItemId?: string; sources?: string[]; importanceProfile?: 'default' | 'personal' } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null; retrievalPath: string[] }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
-      try {
-        collectMemoryDocuments(this.database);
-        await indexPendingMemory(this.database, { limit: 2_000 });
-      } catch (error) {
-        console.error('[memory-index] failed to refresh memory index before search', error);
-      }
+      if (process.env.VITEST) {
+        try {
+          collectMemoryDocuments(this.database);
+          await indexPendingMemory(this.database, { limit: 2_000 });
+        } catch (error) {
+          console.error('[memory-index] failed to refresh memory index before search', error);
+        }
+      } else requestMemoryIndexRefresh();
     }
     const safeLimit = Math.max(1, Math.min(100, limit));
     const results = await searchMemory(this.database, query, {

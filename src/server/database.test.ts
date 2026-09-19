@@ -94,6 +94,7 @@ const EXPECTED_MIGRATIONS = [
   '078_knowledge_graph',
   '079_conversation_external_action_grants',
   '080_external_evidence_snapshots',
+  '081_audit_store_and_conversation_reads',
 ];
 
 describe('openDatabase', () => {
@@ -124,6 +125,44 @@ describe('openDatabase', () => {
     const second = openDatabase(path);
     expect(second.prepare('SELECT count(*) AS count FROM schema_migrations').get()).toEqual({ count: EXPECTED_MIGRATIONS.length });
     second.close();
+  });
+
+  it('moves audit reads and writes to a separate database while importing legacy rows', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.prepare(`INSERT INTO main.audit_log (id, category, source, detail, work_item_id, created_at)
+      VALUES ('legacy-audit', 'api_mutation', 'workbench_api', 'legacy row', NULL, '2026-09-18T12:00:00.000Z')`).run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const repository = new WorkItemRepository(upgraded);
+    repository.addAuditEntry('outbound_call', 'github', 'new separate row');
+
+    expect(upgraded.prepare('SELECT id FROM audit_store.audit_log ORDER BY created_at').all())
+      .toEqual([{ id: 'legacy-audit' }, expect.objectContaining({ id: expect.any(String) })]);
+    expect(upgraded.prepare('SELECT COUNT(*) AS count FROM main.audit_log').get()).toEqual({ count: 1 });
+    expect(repository.listAuditLog().entries.map((entry) => entry.detail)).toEqual(['new separate row', 'legacy row']);
+    upgraded.close();
+  });
+
+  it('adds indexed conversation reads when upgrading from migration 080 without blocking on data cleanup', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP INDEX idx_shared_messages_conversation_created;');
+    current.prepare(`INSERT INTO memory_documents
+      (id, source, source_id, title, body, created_at, content_hash, indexed_at)
+      VALUES ('audit-memory', 'audit', 'legacy-audit', 'Audit', 'api_mutation: read', ?, 'hash', ?)`)
+      .run('2026-09-18T12:00:00.000Z', '2026-09-18T12:00:00.000Z');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '081_audit_store_and_conversation_reads'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_shared_messages_conversation_created'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM memory_documents WHERE source = 'audit'").get()).toEqual({ id: 'audit-memory' });
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '081_audit_store_and_conversation_reads'").get()).toBeTruthy();
+    upgraded.close();
   });
 
   it('configures a bounded busy timeout and exposes write contention across two connections', () => {

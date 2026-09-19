@@ -1,0 +1,8 @@
+{
+  "toolCalls": [
+    {
+      "toolName": "list_projects",
+      "arguments": {}
+    }
+  ]
+}

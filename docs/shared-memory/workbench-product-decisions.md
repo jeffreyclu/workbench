@@ -1444,9 +1444,11 @@ summarize, or remove the five pass sections after they have been validated.
 
 ### The knowledge graph is a derived SQLite index, never a second source of truth
 
-*Decision from Jeffrey, 2026-09-09.* Workbench's canonical task, project,
-conversation, message, activity, run, audit, and artifact rows remain the only
-durable truth. `knowledge_graph_nodes` stores stable references to those rows,
+*Decision from Jeffrey, 2026-09-09; corrected 2026-09-18.* Workbench's canonical
+task, project, conversation, message, activity, run, and artifact rows remain
+the only durable memory truth. Operational audit rows live in the separate
+`workbench-audit.db` and never enter durable memory or the knowledge graph.
+`knowledge_graph_nodes` stores stable references to memory-bearing rows,
 not copied bodies, and `knowledge_graph_edges` stores deterministic typed
 relationships. SQLite triggers update canonical rows and graph relationships
 in the same transaction, so there is no sequential dual-write gap.
@@ -1476,6 +1478,24 @@ It compares graph nodes with canonical database rows, verifies every sync
 trigger and relationship target, runs a live read-only traversal, and lists
 recent replies with their direct and graph-expanded retrieval paths. A deployed
 graph is not considered observable until these checks are visible to Jeffrey.
+
+### Operational audit data is physically separate from memory
+
+*Correction from Jeffrey, 2026-09-18.* API, tool, file-access, supervisor, and
+external-call audit events are operational records, not memories. New writes
+and all audit reads use `data/workbench-audit.db`; `/api/memory/search`, the
+prompt retrieval path, `memory_documents`, and the knowledge graph exclude
+them completely. Existing audit rows are imported idempotently into the audit
+database. The old table remains only as a temporary rollback-compatible shell
+until a later release can remove it safely after every serving runtime has
+switched.
+
+Exhaustive vector scoring remains exhaustive—no lexical candidate prefilter—but
+runs in a worker thread so SQLite reads and cosine scoring cannot block the HTTP
+event loop. Conversation message reads use a dedicated
+`(conversation_id, created_at DESC)` index. Retention keeps one month of terminal
+diagnostics and stream events, plus the newest five diff snapshots per
+scope/repository and every snapshot with a recorded review decision.
 
 ### Response-formatting mechanics stay internal
 
@@ -1602,3 +1622,17 @@ so Workbench can deduplicate the read and show the evidence decision in both
 agents' decision graphs. Authentication, model inference, health checks, and
 external mutations are transport/control operations rather than shareable
 evidence and are not cached as evidence.
+
+### MCPJam is the deterministic MCP release gate (2026-09-18)
+
+*Decision from Jeffrey.* Workbench's MCP server is checked through MCPJam locally, in GitHub CI, and
+against the exact candidate API during runtime promotion. The mandatory gate covers server health,
+MCP protocol conformance, offline Claude and Codex host compatibility, breaking changes against a
+reviewed tool-surface baseline, and a real read-only tool call. A failure stops promotion and leaves
+structured JSON traces under `data/mcpjam/`; CI uploads the same traces.
+
+The gate is supervisor-owned and identical for Claude and Codex. It uses only `127.0.0.1`, never an
+MCPJam/public tunnel, and never uploads Workbench data. Browser requests to `/mcp` must come from a
+loopback or explicitly configured trusted Origin; native MCP clients may omit Origin. Live model evals
+are outside the automatic gate because they can spend model credits and require Jeffrey's explicit
+run-specific instruction.

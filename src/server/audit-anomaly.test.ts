@@ -16,7 +16,7 @@ describe('auditLogRateAnomalies', () => {
   function insertEvents(category: 'outbound_call' | 'agent_file_read', source: string, bucket: number, count: number): void {
     for (let index = 0; index < count; index += 1) {
       database.prepare(`
-        INSERT INTO audit_log (id, category, source, detail, work_item_id, created_at)
+        INSERT INTO audit_store.audit_log (id, category, source, detail, work_item_id, created_at)
         VALUES (?, ?, ?, ?, NULL, ?)
       `).run(`${category}-${source}-${bucket}-${index}`, category, source, `private ${index}`, new Date(bucket + index * 1_000).toISOString());
     }

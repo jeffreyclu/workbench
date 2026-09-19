@@ -66,7 +66,7 @@ export function ListRowSkeleton({ count = 5, className = '' }: { count?: number;
 /** Mirrors grouped task cards, including their project marker, copy, and metadata. */
 export function TaskQueueSkeleton({ count = 6 }: { count?: number }) {
   return <div className="task-queue-skeleton" aria-hidden="true">
-    <div className="stack-header skeleton-stack-header"><Skeleton width="76px" height="9px" /><Skeleton width="18px" height="18px" radius="99px" /></div>
+    <div className="stack-header skeleton-stack-header"><Skeleton width="76px" height="9px" /><Skeleton width="22px" height="22px" radius="99px" /></div>
     {Array.from({ length: count }, (_, index) => <div className="queue-item task-queue-skeleton-card" key={index}>
       <Skeleton width="18px" height="18px" radius="99px" />
       <div className="task-queue-skeleton-copy"><Skeleton width={index % 3 === 0 ? '82%' : '68%'} height="13px" /><Skeleton width="48%" height="8px" /><div><Skeleton width="54px" height="16px" radius="99px" /><Skeleton width="42px" height="16px" radius="99px" /></div></div>
@@ -103,7 +103,7 @@ export function CandidateRowSkeleton({ count = 3 }: { count?: number }) {
 export function ConversationRailSkeleton({ count = 5 }: { count?: number }) {
   return (
     <div className="conversation-rail-skeleton" aria-hidden="true">
-      <div className="stack-header conversation-stack-header skeleton-stack-header"><Skeleton width="72px" height="9px" /><Skeleton width="22px" height="20px" radius="99px" /></div>
+      <div className="stack-header conversation-stack-header skeleton-stack-header"><Skeleton width="72px" height="9px" /><Skeleton width="22px" height="22px" radius="99px" /></div>
       {Array.from({ length: count }, (_, index) => (
         <div className="conversation-skeleton-card" key={index}>
           <div className="conversation-skeleton-title"><Skeleton width="14px" height="14px" radius="99px" /><Skeleton width={index % 2 ? '64%' : '78%'} height="13px" /></div>

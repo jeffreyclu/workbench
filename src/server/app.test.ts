@@ -1328,13 +1328,14 @@ describe('API mutation audit middleware', () => {
     expect(audit.entries.some((entry) => entry.detail.includes('private request body'))).toBe(false);
   });
 
-  it('makes middleware audit entries available through activity memory', async () => {
+  it('keeps middleware audit entries out of activity memory', async () => {
     const response = await fetch(`${baseUrl}/api/work-items`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Middleware memory task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null }),
     });
     expect(response.status).toBe(201);
     const results = await repository.searchActivityMemory('api_mutation');
-    expect(results.some((entry) => entry.source === 'audit' && entry.body === 'api_mutation: POST /api/work-items → 201')).toBe(true);
+    expect(repository.listAuditLog(10, null, 'api_mutation').entries.some((entry) => entry.detail === 'POST /api/work-items → 201')).toBe(true);
+    expect(results.some((entry) => entry.source === 'audit')).toBe(false);
   });
 });
 

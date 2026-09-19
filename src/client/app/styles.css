@@ -150,18 +150,20 @@ nav { display: grid; gap: 3px; }
 .queue-bulkbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 0 15px 9px; padding: 8px; background: #222615f2; border: 1px solid #59652e; border-radius: 7px; backdrop-filter: blur(10px); }
 .queue-bulkbar span { color: var(--acid); font: 10px 'DM Mono'; }.queue-bulkbar small { color: #aaa889; font-size: 9px; }.queue-bulkbar button { min-height: 34px; padding: 0 9px; color: var(--soft); background: #151610; border: 1px solid #475021; border-radius: 6px; font-size: 10px; }
 .conversation-tabs mark { padding: 0 1px; color: #d3ff40; background: transparent; font-weight: 600; }
-.queue-list { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 6px 10px 18px; }
+/* The one stack container: task queue and conversation rail share this box so
+   their scrolling, sizing and edge padding cannot drift apart. */
+.stack-list { position: relative; z-index: 0; flex: 1; min-height: 0; overflow-y: auto; padding: 6px 10px 18px; }
 .virtual-list { position: relative; width: 100%; }
 .virtual-row { position: absolute; top: 0; left: 0; width: 100%; }
 /* Gap between rail cards must live in the measured DOM height (not just the
    virtualizer's pre-measurement estimate), or it disappears the moment
    ResizeObserver measures the real element and overwrites the estimate. */
-.conversation-tabs .virtual-row { box-sizing: border-box; padding-bottom: 6px; }
+.stack-list .virtual-row { box-sizing: border-box; padding-bottom: 6px; }
 .queue-rows { display: grid; gap: 6px; }
 .page-state { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; color: var(--muted); font-size: 10px; }
 .stack-header { display: flex; align-items: center; justify-content: space-between; height: 38px; padding: 0 12px; border-radius: 7px; font: 600 9px 'DM Mono'; letter-spacing: .1em; text-transform: uppercase; }
 .stack-header strong { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0 6px; border-radius: 99px; font-size: 8px; line-height: 1; }
-.queue-rows .stack-header strong.optically-centered-count { display: flex; align-items: center; justify-content: center; width: 22px; min-width: 22px; height: 22px; padding: 0; border-radius: 50%; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.stack-header strong.optically-centered-count { display: flex; align-items: center; justify-content: center; width: 22px; min-width: 22px; height: 22px; padding: 0; border-radius: 50%; letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .optically-centered-number { display: block; line-height: normal; text-box: trim-both cap alphabetic; }
 .stack-header-progress { color: #e6c75f; background: #2b2618; border: 1px solid #504522; }
 .stack-header-progress strong { color: #17140b; background: #e6c75f; }
@@ -269,7 +271,7 @@ nav { display: grid; gap: 3px; }
 .skeleton-text { display: flex; flex-direction: column; gap: 6px; }
 .skeleton-list-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 20px; }
 .list-state-skeleton { display: flex; flex-direction: column; }
-.conversation-rail-skeleton { display: grid; gap: 6px; padding: 0 5px; }
+.conversation-rail-skeleton { display: grid; gap: 6px; }
 .conversation-rail-skeleton .skeleton-stack-header { margin-bottom: 2px; }
 .skeleton-stack-header { background: #171714; border: 1px solid #292925; }
 .conversation-skeleton-card { display: grid; gap: 10px; min-height: 88px; padding: 12px 10px; background: #121318; border: 1px solid #292d3d; border-radius: 8px; }
@@ -285,7 +287,7 @@ nav { display: grid; gap: 3px; }
 .conversation-composer-skeleton-toolbar .skeleton:first-child { margin-right: auto; }
 .conversation-search-skeleton { display: grid; gap: 6px; padding: 0 5px; }
 .conversation-search-skeleton-row { display: grid; align-content: center; gap: 8px; min-height: 88px; padding: 12px 10px; background: #121318; border: 1px solid #292d3d; border-radius: 8px; }
-.task-queue-skeleton { display: grid; gap: 7px; padding: 0 5px; }.task-queue-skeleton .stack-header { display: flex; align-items: center; justify-content: space-between; min-height: 30px; padding: 0 5px; }.task-queue-skeleton-card { cursor: default; pointer-events: none; }.task-queue-skeleton-copy { display: grid; align-content: start; gap: 7px; min-width: 0; }.task-queue-skeleton-copy > div { display: flex; gap: 5px; }
+.task-queue-skeleton { display: grid; gap: 7px; }.task-queue-skeleton .stack-header { display: flex; align-items: center; justify-content: space-between; min-height: 30px; padding: 0 5px; }.task-queue-skeleton-card { cursor: default; pointer-events: none; }.task-queue-skeleton-copy { display: grid; align-content: start; gap: 7px; min-width: 0; }.task-queue-skeleton-copy > div { display: flex; gap: 5px; }
 .detail-skeleton { display: grid; align-content: start; gap: 18px; }.detail-skeleton-topline, .detail-skeleton-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }.detail-skeleton-meta { justify-content: flex-start; }.detail-skeleton-section { display: grid; gap: 10px; padding: 18px 0; border-top: 1px solid var(--line); }
 .discovery-card-skeletons, .artifact-card-skeletons { display: grid; gap: 10px; }.discovery-card-skeleton { display: grid; gap: 10px; }.discovery-skeleton-source { display: flex; justify-content: space-between; gap: 12px; }.discovery-skeleton-actions, .artifact-skeleton-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; margin-top: 6px; }.artifact-card-skeleton { display: grid; gap: 8px; }.artifact-skeleton-header { display: flex; align-items: center; gap: 8px; }.artifact-detail-skeleton { pointer-events: none; }.artifact-skeleton-section { display: grid; gap: 8px; }.candidate-row-skeleton li > div { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 36px; padding: 8px 10px; }
 .figma-scope-skeleton { display: grid; align-content: start; gap: 8px; min-height: 78px; padding: 9px 10px; background: #0e0e0d; border: 1px solid #30302b; border-radius: 6px; }
@@ -1326,7 +1328,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .conversation-view-tabs button.active { color: #d9d8d0; background: #252522; }
 .conversation-tab-panel { display: flex; flex: 1; min-height: 0; }
 .archived-composer-note { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 72px; padding: 18px; color: #85847d; border-top: 1px solid var(--line); font: 10px 'DM Mono'; }
-.conversation-tabs { position: relative; z-index: 0; flex: 1; min-height: 0; overflow: auto; }
 /* Reviews reuse the rail's card surface, but list plainly rather than through
    the conversation virtualizer, so the row gap has to come from the list. */
 .review-target-list { display: grid; align-content: start; gap: 6px; }
@@ -1344,7 +1345,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .new-review-dialog .segmented-control { display: flex; gap: 6px; }
 .new-review-dialog .segmented-control .button.active { color: #e7e6df; border-color: #59683a; }
 .dialog-subtitle { margin: 4px 0 0; color: #85847d; font: 10px 'DM Mono'; }
-.conversation-tabs button { display: grid; gap: 6px; width: 100%; min-height: 88px; padding: 12px 10px; color: #8d8c85; background: #121318; border: 1px solid #292d3d; border-radius: 8px; text-align: left; }
 .conversation-tabs button:hover { background: #1a1e16; border-color: #59683a; }.conversation-tabs button.active { color: #e7e6df; background: #1d1d1a; border-color: #33332e; outline: 2px solid #c9cbd3; outline-offset: -2px; }
 .conversation-tabs button:disabled { cursor: default; opacity: 0.65; }
 .conversation-tabs button:disabled:hover { background: transparent; }
@@ -1865,9 +1865,9 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .queue-header .icon-button,
   .task-lifecycle-actions .icon-button { width: 44px; height: 44px; }
   .search-box { flex: 0 0 auto; margin-inline: 12px; }
-  .queue-list { display: flex; flex-direction: column; padding: 6px 12px 18px; overscroll-behavior: contain; }
+  .stack-list { display: flex; flex-direction: column; padding: 6px 12px 18px; overscroll-behavior: contain; }
   .queue-bulkbar { position: fixed; right: 10px; bottom: calc(var(--mobile-nav) + env(safe-area-inset-bottom, 0px) + 8px); left: 10px; margin: 0; padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); box-shadow: 0 8px 28px #0009; }.queue-bulkbar button { min-height: 44px; }
-  .queue-list > .queue-rows { flex: 0 0 auto; width: 100%; }
+  .stack-list > .queue-rows, .stack-list > .virtual-list { flex: 0 0 auto; width: 100%; }
   .detail-panel { position: fixed; inset: 0 0 var(--mobile-nav); z-index: 5; max-height: none; }
   .detail-panel { padding: 22px 18px calc(34px + env(safe-area-inset-bottom, 0px)); overscroll-behavior: contain; }
   .task-lifecycle-actions { flex-wrap: wrap; }

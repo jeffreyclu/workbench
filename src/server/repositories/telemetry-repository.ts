@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { AuditLogEntry, AuditLogPage, DiagnosticEvent } from '../../shared/contracts.js';
 import type { UnitOfWork } from '../unit-of-work.js';
+import { AUDIT_DATABASE_SCHEMA } from '../audit-database.js';
 
 /** Audit and diagnostic persistence for Workbench operations. */
 export class TelemetryRepository {
@@ -13,7 +14,7 @@ export class TelemetryRepository {
     const id = randomUUID();
     const now = new Date().toISOString();
     this.database.prepare(`
-      INSERT INTO audit_log (id, category, source, detail, work_item_id, created_at)
+      INSERT INTO ${AUDIT_DATABASE_SCHEMA}.audit_log (id, category, source, detail, work_item_id, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(id, category, source, detail, workItemId, now);
   }
@@ -27,7 +28,7 @@ export class TelemetryRepository {
       if (!cursorValues?.createdAt || !cursorValues.rowid) throw new Error('Invalid audit log cursor.');
     }
     const rows = this.database.prepare(`
-      SELECT rowid AS rowid, * FROM audit_log
+      SELECT rowid AS rowid, * FROM ${AUDIT_DATABASE_SCHEMA}.audit_log
       WHERE (? IS NULL OR category = ?)
         AND (? IS NULL OR work_item_id = ?)
         AND (? IS NULL OR created_at < ? OR (created_at = ? AND rowid < ?))
