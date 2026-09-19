@@ -96,6 +96,7 @@ const EXPECTED_MIGRATIONS = [
   '080_external_evidence_snapshots',
   '081_audit_store_and_conversation_reads',
   '082_agent_stream_event_traces',
+  '083_remove_session_feedback',
 ];
 
 describe('openDatabase', () => {
@@ -1036,19 +1037,33 @@ describe('openDatabase', () => {
     upgraded.close();
   });
 
-  it('adds session-feedback snapshots when upgrading from migration 049', () => {
+  it('can advance a database recorded before the retired outcome-rating migrations', () => {
     directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
     const path = join(directory, 'workbench.db');
     const current = openDatabase(path);
-    current.exec('DROP TABLE session_feedback;');
     current.prepare("DELETE FROM schema_migrations WHERE id = '050_session_feedback_decision_tree_snapshot'").run();
+    current.prepare("DELETE FROM schema_migrations WHERE id = '083_remove_session_feedback'").run();
     current.close();
 
     const upgraded = openDatabase(path);
-    const columns = (upgraded.prepare('PRAGMA table_info(session_feedback)').all() as Array<{ name: string }>).map((column) => column.name);
-    expect(columns).toEqual(expect.arrayContaining(['conversation_id', 'work_item_id', 'rating', 'decision_tree_json', 'created_at']));
-    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_feedback_conversation'").get()).toBeTruthy();
-    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_feedback_work_item'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '050_session_feedback_decision_tree_snapshot'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '083_remove_session_feedback'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_feedback'").get()).toBeUndefined();
+    upgraded.close();
+  });
+
+  it('removes outcome-rating snapshots when upgrading from migration 082', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('CREATE TABLE session_feedback (id TEXT PRIMARY KEY, rating TEXT NOT NULL);');
+    current.prepare("INSERT INTO session_feedback (id, rating) VALUES ('old-rating', 'positive')").run();
+    current.prepare("DELETE FROM schema_migrations WHERE id = '083_remove_session_feedback'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_feedback'").get()).toBeUndefined();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '083_remove_session_feedback'").get()).toBeTruthy();
     upgraded.close();
   });
 

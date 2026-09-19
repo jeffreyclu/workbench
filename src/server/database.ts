@@ -2409,6 +2409,15 @@ const schemaMigrations: readonly Migration[] = [
       if (!columns.some((column) => column.name === 'payload_json')) database.exec('ALTER TABLE agent_stream_events ADD COLUMN payload_json TEXT;');
     },
   },
+  {
+    // Outcome-rating collection was removed in the preceding compatibility
+    // release. Every serving runtime now ignores this table, so the later
+    // migration can safely remove the obsolete snapshots and indexes.
+    id: '083_remove_session_feedback',
+    apply(database) {
+      database.exec('DROP TABLE IF EXISTS session_feedback;');
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
