@@ -1,5 +1,11 @@
 ## Workbench product decisions
 
+### Outcome-rating collection is retired
+
+*Decision from Jeffrey, 2026-09-18.* Workbench no longer asks for a rating after completing a task
+or archiving a conversation. Do not render a blocking outcome prompt, expose rating endpoints, or
+read or write decision-tree rating snapshots. The feature served its purpose and must stay removed.
+
 ### MCPJam is Workbench automation, not a terminal workflow
 
 *Decision from Jeffrey, 2026-09-18.* Jeffrey must never need to run MCPJam commands manually.
@@ -477,16 +483,6 @@ Every Request node must show the human-provided brief. Tool calls after a
 decision must be visibly nested beneath that decision at its indentation level.
 Raw details stay in the fixed details panel and are revealed by hover or
 keyboard focus; do not render an Inspect control or make a call clickable.
-
-### Session feedback retains decision-tree evidence
-
-*Decision from Jeffrey, 2026-08-25.* After a task is completed, and after a
-taskless conversation finishes or is archived, require a non-dismissible
-**How did we do?** verdict with positive, neutral, and negative choices. Store
-the selected outcome immutably with its associated conversation/task and the
-decision-tree event snapshot visible at that time. This is training evidence
-for identifying which agent decision trees work; do not make it a transient
-toast or allow it to be silently skipped.
 
 ### Restore the last-opened item in each primary surface
 
@@ -1087,12 +1083,6 @@ contains only one response section. The one-card case is labeled `Detail`.
 This does not reintroduce the stream regression: decision preambles stay out
 of the completed body, and multi-block replies remain capped to a small number
 of cards rather than one card per streamed line.
-### Synthesized dual-agent replies do not trigger session feedback
-
-*Decision from Jeffrey, 2026-08-25.* The automatic “How did we do?” prompt
-must not open when a Codex-and-Claude turn finishes with a system synthesis.
-That synthesis is system-generated completion, not an explicit request for
-session feedback. Manual archive and task-completion feedback remain available.
 ### RAG memory retrieval: tiering plus a rank floor, both fixes together
 
 *Decision from Jeffrey, 2026-08-25 ("hit it")* on the earlier synthesized

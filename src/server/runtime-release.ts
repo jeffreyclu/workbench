@@ -8,6 +8,7 @@ const PROMOTION_PENDING = 'pending-promotion.json';
 const PROMOTION_COMPLETED = 'last-promotion.json';
 
 type RuntimePromotionRecord = { releaseId: string; at: string };
+export type ActiveRuntimePromotion = { phase: 'building' | 'switching'; startedAt: string };
 
 function readPromotionRecord(path: string): RuntimePromotionRecord | null {
   try {
@@ -46,6 +47,21 @@ export function completePendingRuntimePromotion(root: string, releasePath: strin
 
 export function lastCompletedRuntimePromotion(root = process.cwd()): RuntimePromotionRecord | null {
   return readPromotionRecord(join(root, '.workbench-runtime', PROMOTION_COMPLETED));
+}
+
+/** Reads the filesystem control plane used by direct and queued promotions.
+ * The API process cannot observe a directly invoked promotion in SQLite, but
+ * it can always see the cross-process lock and the pending gateway handoff. */
+export function activeRuntimePromotion(root = process.cwd()): ActiveRuntimePromotion | null {
+  const runtimeRoot = join(root, '.workbench-runtime');
+  const lockPath = join(runtimeRoot, 'promotion.lock');
+  try {
+    const owner = JSON.parse(readFileSync(join(lockPath, 'owner.json'), 'utf8')) as { pid?: unknown; startedAt?: unknown };
+    if (typeof owner.pid === 'number') process.kill(owner.pid, 0);
+    if (typeof owner.startedAt === 'string' && !Number.isNaN(Date.parse(owner.startedAt))) return { phase: 'building', startedAt: owner.startedAt };
+  } catch { /* Missing or dead promotion lock. */ }
+  const pending = readPromotionRecord(join(runtimeRoot, PROMOTION_PENDING));
+  return pending ? { phase: 'switching', startedAt: pending.at } : null;
 }
 
 /**

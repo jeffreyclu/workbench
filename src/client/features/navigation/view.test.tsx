@@ -158,6 +158,7 @@ describe('PromotionQueueStatus', () => {
     expect(screen.queryByRole('dialog', { name: 'Promotion status' })).not.toBeInTheDocument();
     expect(trigger).not.toHaveAttribute('aria-haspopup');
     expect(trigger).toHaveAttribute('aria-controls', 'promotion-status');
+    expect(trigger).toHaveClass('brand-mark-blue');
 
     const outside = document.createElement('button');
     document.body.appendChild(outside);

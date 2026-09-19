@@ -2303,15 +2303,6 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .toast-close:hover, .toast-close:focus-visible { color: var(--soft); background: var(--panel); outline: none; }
 .toast-exiting { pointer-events: none; animation: toast-out 180ms ease forwards; }
 
-.session-feedback-prompt { width: min(390px, calc(100vw - 28px)); padding: 22px; }
-.session-feedback-prompt h2 { margin: 5px 0 7px; font-size: 23px; }
-.session-feedback-prompt > p { margin: 0; color: var(--muted); line-height: 1.5; }
-.session-feedback-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 18px; }
-.session-feedback-choice { display: grid; place-items: center; gap: 7px; min-height: 76px; padding: 10px 6px; color: var(--soft); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font-weight: 700; cursor: pointer; }
-.session-feedback-choice:hover:not(:disabled), .session-feedback-choice:focus-visible { border-color: var(--acid); color: var(--acid); outline: none; }
-.session-feedback-choice.negative:hover:not(:disabled), .session-feedback-choice.negative:focus-visible { border-color: var(--danger); color: var(--danger); }
-.session-feedback-choice:disabled { opacity: .7; cursor: wait; }
-.session-feedback-error { margin-top: 12px !important; color: var(--danger) !important; font-size: 12px; }
 
 @keyframes toast-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes toast-out { to { opacity: 0; transform: translateY(4px) scale(0.98); } }

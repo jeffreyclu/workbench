@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { listAuditLogQuerySchema } from '../../shared/contracts.js';
 import type { RouteContext } from '../route-context.js';
 import { runtimePreviewStatus } from '../runtime-preview.js';
-import { lastCompletedRuntimePromotion } from '../runtime-release.js';
+import { activeRuntimePromotion, lastCompletedRuntimePromotion } from '../runtime-release.js';
 import { OWNER_ID } from '../scheduler.js';
 import { describeSlackConfig, escapeSlackText, resolveSlackConfig, sendSlackMessage } from '../slack-notify.js';
 import { beginRuntimeRetirement } from '../runtime-retirement.js';
@@ -52,16 +52,22 @@ export function createSystemRouter({ repository, database }: RouteContext) {
   });
   router.get('/api/runtime/promotion-status', (_request, response) => {
     const status = repository.getPromotionQueueStatus();
+    const activePromotion = activeRuntimePromotion();
+    const running = status.running ?? (activePromotion ? {
+      conversationId: null,
+      progress: activePromotion.phase === 'building' ? 'Building and verifying the release…' : 'Switching to the verified release…',
+      startedAt: activePromotion.startedAt,
+    } : null);
     const verified = lastCompletedRuntimePromotion();
     const lastBuildAt = status.lastBuild ? Date.parse(status.lastBuild.at) : Number.NEGATIVE_INFINITY;
     if (verified && Date.parse(verified.at) > lastBuildAt) {
-      return response.json({ ...status, lastBuild: {
+      return response.json({ ...status, running, lastBuild: {
         status: 'succeeded' as const,
         at: verified.at,
         summary: 'Verified runtime promotion completed and is live.',
       } });
     }
-    response.json(status);
+    response.json({ ...status, running });
   });
   router.get('/api/insights', (request, response) => {
     const timeframe = z.enum(['15m', '1h', '1d', '7d', '30d', 'all']).catch('all').parse(request.query.timeframe);

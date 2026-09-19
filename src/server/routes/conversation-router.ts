@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { createSessionFeedbackSchema, createSharedConversationSchema, createSharedMessageSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema, upsertDiffBlockReviewSchema, upsertDiffHunkReviewsSchema } from '../../shared/contracts.js';
+import { createSharedConversationSchema, createSharedMessageSchema, setConversationPinnedSchema, setConversationTaskSchema, updateSharedBriefSchema, updateSharedConversationDraftSchema, updateSharedMessageSchema, upsertDiffBlockReviewSchema, upsertDiffHunkReviewsSchema } from '../../shared/contracts.js';
 import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { aiProviderChoiceSchema } from '../../shared/ai-providers.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
@@ -121,11 +121,6 @@ export function createConversationRouter({ repository, database, capabilities, a
   router.get('/api/shared/conversations/:id/agent-events', (request, response) => {
     if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ events: repository.listAgentStreamEvents(request.params.id) });
-  });
-
-  router.get('/api/shared/conversations/:id/feedback', (request, response) => {
-    if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
-    response.json({ feedback: repository.getSessionFeedback(request.params.id) });
   });
 
   const conversationWorkingDirectory = (conversationId: string) => {
@@ -298,13 +293,6 @@ export function createConversationRouter({ repository, database, capabilities, a
       const input = upsertDiffBlockReviewSchema.parse(request.body);
       response.json({ review: repository.upsertDiffBlockReview({ conversationId: request.params.id }, input) });
     } catch (error) { next(error); }
-  });
-
-  router.post('/api/shared/session-feedback', (request, response) => {
-    const input = createSessionFeedbackSchema.parse(request.body);
-    const feedback = repository.createSessionFeedback(input);
-    if (!feedback) return response.status(404).json({ error: 'Conversation or task not found.' });
-    response.status(201).json({ feedback });
   });
 
   router.get('/api/shared/conversations-unread-count', (_request, response) => {

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { assertUsableRuntimeRelease, completePendingRuntimePromotion, lastCompletedRuntimePromotion, markRuntimePromotionPending, publishRuntimeRelease } from './runtime-release.js';
+import { activeRuntimePromotion, assertUsableRuntimeRelease, completePendingRuntimePromotion, lastCompletedRuntimePromotion, markRuntimePromotionPending, publishRuntimeRelease } from './runtime-release.js';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -40,5 +40,18 @@ describe('runtime release publishing', () => {
     expect(lastCompletedRuntimePromotion(root)).toBeNull();
     expect(completePendingRuntimePromotion(root, releasePath)).toEqual(expect.objectContaining({ releaseId: 'release-a' }));
     expect(lastCompletedRuntimePromotion(root)).toEqual(expect.objectContaining({ releaseId: 'release-a' }));
+  });
+
+  it('exposes direct promotions while building and during the gateway handoff', () => {
+    const root = fixture();
+    const runtimeRoot = join(root, '.workbench-runtime');
+    const lockPath = join(runtimeRoot, 'promotion.lock');
+    mkdirSync(lockPath, { recursive: true });
+    writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({ pid: process.pid, startedAt: '2026-09-18T12:00:00.000Z' }));
+    expect(activeRuntimePromotion(root)).toEqual({ phase: 'building', startedAt: '2026-09-18T12:00:00.000Z' });
+
+    rmSync(lockPath, { recursive: true, force: true });
+    markRuntimePromotionPending(root, 'release-a');
+    expect(activeRuntimePromotion(root)).toMatchObject({ phase: 'switching' });
   });
 });

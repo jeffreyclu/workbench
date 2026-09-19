@@ -26,6 +26,7 @@ const baselineInventory = [
   'POST /api/review-assist/stream',
   'POST /api/review-assist/lookup',
   'GET /api/insights',
+  'GET /api/insights/mcp-quality',
   'GET /api/audit-log',
   'POST /api/discovery/scan',
   'POST /api/agent-accounts/login',
@@ -64,7 +65,6 @@ const baselineInventory = [
   'GET /api/shared/conversations/:id/workspace-diff/block-reviews',
   'PUT /api/shared/conversations/:id/workspace-diff/block-reviews',
   'GET /api/shared/conversations/:id/agent-events',
-  'GET /api/shared/conversations/:id/feedback',
   'GET /api/shared/conversations-unread-count',
   'GET /api/shared/conversations-attention-count',
   'GET /api/shared/conversations-count',
@@ -92,7 +92,6 @@ const baselineInventory = [
   'POST /api/shared/messages/:id/retry',
   'POST /api/shared/messages/:id/interject',
   'POST /api/shared/messages/:id/create-tasks',
-  'POST /api/shared/session-feedback',
   'GET /api/work-items',
   'GET /api/work-item-filters',
   'POST /api/work-item-filters',
@@ -225,7 +224,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(191);
+    expect(baselineInventory).toHaveLength(190);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

@@ -1,5 +1,5 @@
 import type { AiProviderChoice } from '../../shared/ai-providers';
-import type { AgentRun, AgentStreamEvent, ConversationPage, ExecutionPlan, RetrievedMemoryDetail, SessionFeedback, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, SharedSearchResponse } from '../../shared/contracts';
+import type { AgentRun, AgentStreamEvent, ConversationPage, ExecutionPlan, RetrievedMemoryDetail, SharedConversation, SharedMessage, SharedMessagePage, SharedSearchResponse } from '../../shared/contracts';
 import type { WorkspaceExplorerResponse } from './source-client';
 import { request } from './request';
 
@@ -20,8 +20,6 @@ export const conversationClient = {
   getConversationWorkspaces: (id: string) => request<WorkspaceExplorerResponse>(`/api/shared/conversations/${id}/workspaces`),
   selectConversationWorkspace: (id: string, workspacePath: string) => request<WorkspaceExplorerResponse>(`/api/shared/conversations/${id}/workspaces/selection`, { method: 'PUT', body: JSON.stringify({ workspacePath }) }),
   listAgentStreamEvents: (id: string) => request<{ events: AgentStreamEvent[] }>(`/api/shared/conversations/${id}/agent-events`),
-  getConversationFeedback: (id: string) => request<{ feedback: SessionFeedback | null }>(`/api/shared/conversations/${id}/feedback`),
-  createSessionFeedback: (input: { conversationId?: string | null; workItemId?: string | null; rating: SessionFeedbackRating }) => request<{ feedback: SessionFeedback }>('/api/shared/session-feedback', { method: 'POST', body: JSON.stringify(input) }),
   createSharedConversation: (title = 'New conversation') => request<{ conversation: SharedConversation }>('/api/shared/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
   archiveSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/archive`, { method: 'POST' }),
   restoreSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}/restore`, { method: 'POST' }),

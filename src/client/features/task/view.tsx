@@ -41,7 +41,7 @@ import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../components/markdown/markdown-composer.js';
 import { MarkdownCode, MarkdownPre } from '../../components/markdown/markdown-code.js';
 import { isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_MESSAGE } from '../../../shared/contracts';
-import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
+import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../data/api';
 import { ArtifactLibraryView } from '../artifacts/view';
 import { AttachmentPreview } from '../../components/attachment-preview';
@@ -73,7 +73,6 @@ import { useRealtimeNotifications, type RealtimeNotification } from '../../hooks
 import { useTaskDetail } from './hooks';
 import { useTaskAccountProfile, useTaskExecutionProfile } from './state';
 import { celebrate } from '../../components/celebrate';
-import { SessionFeedbackPrompt } from '../../components/dialogs/session-feedback-prompt';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
@@ -87,7 +86,6 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const detail = useTaskDetail(id);
   const [showFollowUp, setShowFollowUp] = useState(false);
   const [deleteTaskPromptOpen, setDeleteTaskPromptOpen] = useState(false);
-  const [feedbackTarget, setFeedbackTarget] = useState<{ conversationId?: string | null; workItemId: string } | null>(null);
   const [editingField, setEditingField] = useState<'title' | 'project' | 'description' | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
@@ -289,9 +287,8 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       if (action === 'delete') setDeleteTaskPromptOpen(false);
       if (action === 'complete') {
         celebrate();
-        // Keep the detail mounted until the required verdict persists.
-        setFeedbackTarget({ conversationId: detail.data?.conversations.at(0)?.id ?? null, workItemId: id });
-      } else onClose();
+      }
+      onClose();
       const undoAction = action === 'delete' ? () => undeleteTask.mutate() : action === 'archive' || action === 'complete' ? () => lifecycle.mutate('restore') : undefined;
       toast.success(lifecycleSuccessMessage[action], undoAction ? { action: undoAction, actionLabel: 'Undo', duration: 10_000 } : undefined);
       await Promise.all([
@@ -715,7 +712,6 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
 
       {executionPlanArchivePromptOpen && <FollowUpArchiveDialog count={selectedExecutionTaskIndexes.size} pending={resolveExecutionPlan.isPending} onClose={() => setExecutionPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolveExecutionPlan.mutate({ resolution: 'accepted', archiveParent })} />}
       {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This deletes the task. You can undo it for a few seconds after." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
-      {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); onClose(); }} />}
 
       <details className="detail-section task-collapsible workspace-review-section">
         <summary><span>Workspace review</span><small>Latest changes and recorded snapshots</small></summary>

@@ -216,8 +216,6 @@ describe('conversation router', () => {
       const conversation = await createConversation();
       expect((await request(`/api/shared/conversations/${conversation.id}/agent-events`)).status).toBe(200);
       expect((await request('/api/shared/conversations/missing/agent-events')).status).toBe(404);
-      expect((await request(`/api/shared/conversations/${conversation.id}/feedback`)).status).toBe(200);
-      expect((await request('/api/shared/conversations/missing/feedback')).status).toBe(404);
     });
   });
 
@@ -425,14 +423,7 @@ describe('conversation router', () => {
     });
   });
 
-  describe('session feedback and counters', () => {
-    it('creates session feedback and 404s for an unlinked payload', async () => {
-      const conversation = await createConversation();
-      const created = await request('/api/shared/session-feedback', 'POST', { conversationId: conversation.id, rating: 'positive' });
-      expect(created.status).toBe(201);
-      expect((await request('/api/shared/session-feedback', 'POST', { conversationId: '00000000-0000-0000-0000-000000000000', rating: 'positive' })).status).toBe(404);
-    });
-
+  describe('conversation counters', () => {
     it('reports unread, attention, and active conversation counts', async () => {
       expect((await request('/api/shared/conversations-unread-count')).status).toBe(200);
       expect((await request('/api/shared/conversations-attention-count')).status).toBe(200);

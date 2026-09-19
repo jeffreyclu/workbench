@@ -45,7 +45,7 @@ import { ComposerProviderSelect, type ComposerProvider } from '../../components/
 import { ComposerModelSelect } from '../../components/composer-model-select';
 import { StackHeader } from '../../components/stack-header';
 import { StackList } from '../../components/stack-list';
-import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SessionFeedbackRating, SharedConversation, SharedMessage, SharedMessagePage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
+import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedConversation, SharedMessage, SharedMessagePage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../data/api';
 import { ArtifactLibraryView } from '../artifacts/view';
 import { ConfirmationDialog } from '../../components/dialogs/confirmation-dialog';
@@ -76,7 +76,6 @@ import { useRealtimeNotifications, type RealtimeNotification } from '../../hooks
 import { conversationData, conversationQueryKeys } from './data';
 import { DecisionTreeVisualizer } from './decision-tree-visualizer';
 import { celebrate } from '../../components/celebrate';
-import { SessionFeedbackPrompt } from '../../components/dialogs/session-feedback-prompt';
 import { useConversationChangesAvailability, useDebouncedValue } from './hooks';
 import { pullRequestUrls, pullRequestUrlsInText } from '../github-diff/logic.js';
 import { WorkspaceDiffView } from '../workspace-diff/view';
@@ -392,7 +391,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const [deleteConversationPromptOpen, setDeleteConversationPromptOpen] = useState(false);
   const [retrievedMemoryMessageId, setRetrievedMemoryMessageId] = useState<string | null>(null);
   const [decisionTreeOpen, setDecisionTreeOpen] = useState(false);
-  const [feedbackTarget, setFeedbackTarget] = useState<{ conversationId?: string | null; workItemId?: string | null } | null>(null);
   const [conversationSearch, setConversationSearch] = useState('');
   const [dismissedCompletionPromptPromotionId, setDismissedCompletionPromptPromotionId] = useState<string | null>(null);
   const [activePane, setActivePane] = useState<'conversation' | 'changes'>('conversation');
@@ -910,7 +908,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const archiveConversation = useMutation({
     mutationFn: async (id: string) => { await animateConversationExit(id); return api.archiveSharedConversation(id); },
     onSuccess: async (_response, archivedConversationId) => {
-      if (!linkedWorkItemId) setFeedbackTarget({ conversationId: archivedConversationId });
       if (!linkedWorkItemId) celebrate();
       toast.success(linkedWorkItemId ? 'Conversation and related task archived.' : 'Conversation archived.');
       await queryClient.cancelQueries({ queryKey: ['shared-conversations'] });
@@ -940,7 +937,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const completeLinkedTask = useMutation({
     mutationFn: () => api.completeWorkItem(linkedWorkItemId!),
     onSuccess: async ({ item }) => {
-      setFeedbackTarget({ conversationId, workItemId: item.id });
       celebrate();
       queryClient.setQueryData<WorkItemDetail>(['work-item', item.id], (current) => current && ({ ...current, item }));
       const completedConversationId = conversationId;
@@ -1553,7 +1549,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       {deleteConversationPromptOpen && conversationId && <ConfirmationDialog title="Delete this conversation?" description="This permanently deletes the conversation and cannot be undone." confirmLabel="Delete conversation" pending={deleteConversation.isPending} onClose={() => setDeleteConversationPromptOpen(false)} onConfirm={() => deleteConversation.mutate(conversationId)} />}
       {retrievedMemoryMessageId && <RetrievedMemoryDialog detail={retrievedMemoryDetail.data?.detail} loading={retrievedMemoryDetail.isLoading} onClose={() => setRetrievedMemoryMessageId(null)} />}
       {decisionTreeOpen && <DecisionTreeVisualizer messages={allConversationMessages} events={agentStreamEvents.data?.events ?? []} isLoadingEvents={agentStreamEvents.isLoading} onClose={() => setDecisionTreeOpen(false)} />}
-      {feedbackTarget && <SessionFeedbackPrompt onSubmit={async (rating: SessionFeedbackRating) => { await api.createSessionFeedback({ ...feedbackTarget, rating }); setFeedbackTarget(null); await queryClient.invalidateQueries({ queryKey: ['session-feedback'] }); }} />}
     </main>
   );
 }
