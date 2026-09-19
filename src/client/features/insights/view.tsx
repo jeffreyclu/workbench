@@ -6,6 +6,8 @@ import { InsightsSkeleton } from '../../components/skeleton/skeleton';
 import type { InsightsTimeframe, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../../../shared/contracts';
 import { MemoryDiagnosticsPanel } from './memory-diagnostics';
 import { McpQualityPanel } from './mcp-quality';
+import { Tabs } from '../../components/tabs/tabs';
+import { readInsightsTab, writeInsightsTab, type InsightsTab } from '../../lib/preferences';
 
 const INSIGHTS_TIMEFRAMES: readonly { value: InsightsTimeframe; label: string }[] = [
   { value: '15m', label: 'Last 15 minutes' },
@@ -14,6 +16,13 @@ const INSIGHTS_TIMEFRAMES: readonly { value: InsightsTimeframe; label: string }[
   { value: '7d', label: '7 days' },
   { value: '30d', label: '30 days' },
   { value: 'all', label: 'All Time' },
+];
+
+const INSIGHTS_TABS: readonly { value: InsightsTab; label: string }[] = [
+  { value: 'overview', label: 'Overview' },
+  { value: 'agents', label: 'Agents' },
+  { value: 'usage', label: 'Usage' },
+  { value: 'system', label: 'System' },
 ];
 
 function InfoTooltip({ children }: { children: string }) {
@@ -162,10 +171,15 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
 
 export function InsightsView() {
   const [timeframe, setTimeframe] = useState<InsightsTimeframe>('all');
-  const insights = useQuery({ queryKey: ['insights', timeframe], queryFn: () => api.getInsights(timeframe), refetchInterval: 10_000 });
-  const memoryDiagnostics = useQuery({ queryKey: ['memory-diagnostics'], queryFn: api.getMemoryDiagnostics, refetchInterval: 10_000 });
-  const mcpQuality = useQuery({ queryKey: ['mcp-quality'], queryFn: api.getMcpQualityHistory, refetchInterval: 10_000 });
+  const [selectedTab, setSelectedTab] = useState<InsightsTab>(readInsightsTab);
+  const insights = useQuery({ queryKey: ['insights', timeframe], queryFn: () => api.getInsights(timeframe), refetchInterval: 10_000, enabled: selectedTab !== 'system' });
+  const memoryDiagnostics = useQuery({ queryKey: ['memory-diagnostics'], queryFn: api.getMemoryDiagnostics, refetchInterval: 10_000, enabled: selectedTab === 'system' });
+  const mcpQuality = useQuery({ queryKey: ['mcp-quality'], queryFn: api.getMcpQualityHistory, refetchInterval: 10_000, enabled: selectedTab === 'system' });
   const data = insights.data;
+  const selectTab = (tab: InsightsTab) => {
+    setSelectedTab(tab);
+    writeInsightsTab(tab);
+  };
 
   return (
     <section className="artifact-workspace">
@@ -175,45 +189,38 @@ export function InsightsView() {
           <h2>Insights</h2>
           <p>How work moves through Workbench and which agent fits each task.</p>
         </div>
-        <div className="insight-window-toggle" role="group" aria-label="Time window">
+        {selectedTab !== 'system' && <div className="insight-window-toggle" role="group" aria-label="Time window">
           {INSIGHTS_TIMEFRAMES.map((option) => <button key={option.value} className={timeframe === option.value ? 'active' : ''} onClick={() => setTimeframe(option.value)}>{option.label}</button>)}
-        </div>
-        <label className="insight-window-select">
+        </div>}
+        {selectedTab !== 'system' && <label className="insight-window-select">
           <span className="visually-hidden">Time window</span>
           <select value={timeframe} onChange={(event) => setTimeframe(event.target.value as InsightsTimeframe)}>
             {INSIGHTS_TIMEFRAMES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-        </label>
+        </label>}
       </header>
 
-      <div className="memory-diagnostics-wrap">
-        <MemoryDiagnosticsPanel
-          data={memoryDiagnostics.data}
-          loading={memoryDiagnostics.isLoading}
-          error={memoryDiagnostics.isError}
-          onRetry={() => { void memoryDiagnostics.refetch(); }}
-        />
-        <McpQualityPanel
-          data={mcpQuality.data}
-          loading={mcpQuality.isLoading}
-          error={mcpQuality.isError}
-          onRetry={() => { void mcpQuality.refetch(); }}
-        />
-      </div>
-
-      {insights.isLoading && <InsightsSkeleton />}
-      {insights.isError && <div className="list-state error-message">Could not load insights. <button className="button secondary compact" onClick={() => insights.refetch()}>Retry</button></div>}
-
-      {!insights.isLoading && !insights.isError && data && (
-        <div className="insight-sections">
-          {data.byAgent.length === 0 && data.byKind.length === 0 && data.agentFit.length === 0 && data.tokenUsageByModel.length === 0 && data.cursing.messagesAnalyzed === 0 && (data.incompleteTokenTelemetryRuns ?? 0) === 0 ? (
-            <div className="discovery-empty">
-              <LineChart size={26} />
-              <h3>Nothing to show yet</h3>
-              <p>Once runs complete in this window, trends will show up here.</p>
-            </div>
-          ) : (
-            <>
+      <Tabs ariaLabel="Insights view" className="insight-view-tabs" panelClassName="insight-tab-panel" items={INSIGHTS_TABS} selected={selectedTab} onSelect={selectTab}>
+        {selectedTab === 'system' ? (
+          <div className="memory-diagnostics-wrap">
+            <MemoryDiagnosticsPanel
+              data={memoryDiagnostics.data}
+              loading={memoryDiagnostics.isLoading}
+              error={memoryDiagnostics.isError}
+              onRetry={() => { void memoryDiagnostics.refetch(); }}
+            />
+            <McpQualityPanel
+              data={mcpQuality.data}
+              loading={mcpQuality.isLoading}
+              error={mcpQuality.isError}
+              onRetry={() => { void mcpQuality.refetch(); }}
+            />
+          </div>
+        ) : <>
+          {insights.isLoading && <InsightsSkeleton />}
+          {insights.isError && <div className="list-state error-message">Could not load insights. <button className="button secondary compact" onClick={() => insights.refetch()}>Retry</button></div>}
+          {!insights.isLoading && !insights.isError && data && <div className="insight-sections">
+            {selectedTab === 'overview' && <>
               <div className="insight-overall-row">
                 <div className="insight-overall-stat"><span className="eyebrow">Agent work completed <InfoTooltip>Count of agent runs that reached the completed status in this window, counted by completed time.</InfoTooltip></span><strong>{data.completedRuns ?? 0}</strong><small>Successful agent runs completed in this window.</small></div>
                 <div className="insight-overall-stat"><span className="eyebrow">Tasks completed <InfoTooltip>Count of tasks with a completed_at timestamp inside this window. Not limited to tasks created in the window.</InfoTooltip></span><strong>{data.completedTasks ?? 0}</strong><small>Tasks you accepted and completed.</small></div>
@@ -223,6 +230,16 @@ export function InsightsView() {
 
               <CursingInsight data={data.cursing} />
 
+              <div className="insight-section insight-reliability">
+                <h3>System reliability <InfoTooltip>Computed across every agent run in this window, regardless of agent or task type.</InfoTooltip></h3>
+                <div className="insight-reliability-grid">
+                  <div><span>Retry events <InfoTooltip>Retry events per 100 terminal agent runs. It includes canceled and failed runs; the event count comes from the lifecycle ledger, including chat-era history.</InfoTooltip></span><strong>{formatEventsPerHundredRuns(data.retryRate)}</strong><small>{data.retryCount} retry event{data.retryCount === 1 ? '' : 's'} recorded in this window.</small></div>
+                  <div><span>Agent handoffs <InfoTooltip>Handoffs per 100 terminal agent runs. Events record when an agent switched to its counterpart after the first provider became unavailable, including chat-era history.</InfoTooltip></span><strong>{formatEventsPerHundredRuns(data.fallbackRate)}</strong><small>{data.handoffCount} handoff{data.handoffCount === 1 ? '' : 's'} recorded in this window.</small></div>
+                </div>
+              </div>
+            </>}
+
+            {selectedTab === 'agents' && <>
               <div className="insight-section">
                 <h3>Best agent by task type <InfoTooltip>For each task type, agents are ranked by success rate: completed runs ÷ all terminal runs (completed, failed, and canceled) for that agent. The agent with the higher rate is marked "recommended" only when both agents have run history to compare.</InfoTooltip></h3>
                 <p className="insight-section-intro">Use this to improve automatic routing. The stronger result is highlighted when both agents have history.</p>
@@ -246,7 +263,9 @@ export function InsightsView() {
                   </div>
                 )}
               </div>
+            </>}
 
+            {selectedTab === 'usage' && <>
               <div className="insight-section">
                 <h3>Token usage <InfoTooltip>Cost is the provider's billed amount where it reports one, otherwise a list-price estimate from the recorded tokens. Only runs with a provider-reported cache split are included. Fresh input, cache writes, cache reads, and output stay separate so the source of traffic remains visible. Rows group usage by provider and model.</InfoTooltip></h3>
                 {data.tokenUsageByModel.length === 0 ? <>
@@ -266,19 +285,10 @@ export function InsightsView() {
                   {(data.incompleteTokenTelemetryRuns ?? 0) > 0 && <p className="insight-empty-note">{data.incompleteTokenTelemetryRuns} run{data.incompleteTokenTelemetryRuns === 1 ? '' : 's'} lacked a cache split and are excluded from token totals rather than guessed.</p>}
                 </>}
               </div>
-
-              <div className="insight-section insight-reliability">
-                <h3>System reliability <InfoTooltip>Computed across every agent run in this window, regardless of agent or task type.</InfoTooltip></h3>
-                <div className="insight-reliability-grid">
-                  <div><span>Retry events <InfoTooltip>Retry events per 100 terminal agent runs. It includes canceled and failed runs; the event count comes from the lifecycle ledger, including chat-era history.</InfoTooltip></span><strong>{formatEventsPerHundredRuns(data.retryRate)}</strong><small>{data.retryCount} retry event{data.retryCount === 1 ? '' : 's'} recorded in this window.</small></div>
-                  <div><span>Agent handoffs <InfoTooltip>Handoffs per 100 terminal agent runs. Events record when an agent switched to its counterpart after the first provider became unavailable, including chat-era history.</InfoTooltip></span><strong>{formatEventsPerHundredRuns(data.fallbackRate)}</strong><small>{data.handoffCount} handoff{data.handoffCount === 1 ? '' : 's'} recorded in this window.</small></div>
-                </div>
-              </div>
-
-            </>
-          )}
-        </div>
-      )}
+            </>}
+          </div>}
+        </>}
+      </Tabs>
     </section>
   );
 }

@@ -18,7 +18,11 @@ describe('MCP quality history', () => {
   it('returns an empty state before the first check', () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-mcp-history-'));
     directories.push(directory);
-    expect(readMcpQualityHistory(join(directory, 'history.jsonl'))).toEqual({ status: 'empty', latest: null, runs: [] });
+    expect(readMcpQualityHistory(join(directory, 'history.jsonl'))).toEqual({
+      status: 'empty', latest: null, runs: [],
+      automation: { enabled: false, running: false, cadenceHours: 24, nextRunAt: null, lastError: null },
+      details: { hosts: [], tools: [], checks: [] },
+    });
   });
 
   it('keeps newest checks first and reports the latest failure', () => {

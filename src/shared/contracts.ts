@@ -1461,7 +1461,7 @@ export interface McpQualityRun {
   id: string;
   checkedAt: string;
   status: 'passed' | 'failed';
-  source: 'local' | 'promotion' | 'ci';
+  source: 'local' | 'promotion' | 'scheduled' | 'ci';
   revision: string | null;
   durationMs: number;
   protocolScore: number | null;
@@ -1475,10 +1475,26 @@ export interface McpQualityRun {
   subscriptionChecks?: { passed: number; notApplicable: number; total: number } | null;
 }
 
+export interface McpQualityAutomationStatus {
+  enabled: boolean;
+  running: boolean;
+  cadenceHours: number;
+  nextRunAt: string | null;
+  lastError: string | null;
+}
+
+export interface McpQualityDetails {
+  hosts: Array<{ id: string; label: string; verdict: 'works' | 'degraded' | 'blocked' | 'unknown'; provenance: string }>;
+  tools: Array<{ name: string; expected: 'success' | 'error'; passed: boolean; durationMs: number }>;
+  checks: Array<{ id: string; title: string; category: string; status: 'passed' | 'failed' | 'skipped' | 'pending' | 'unknown' }>;
+}
+
 export interface McpQualityHistory {
   status: 'healthy' | 'degraded' | 'empty';
   latest: McpQualityRun | null;
   runs: McpQualityRun[];
+  automation: McpQualityAutomationStatus;
+  details: McpQualityDetails;
 }
 
 export interface RunInsights {

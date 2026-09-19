@@ -1,5 +1,20 @@
 ## Workbench product decisions
 
+### MCPJam is Workbench automation, not a terminal workflow
+
+*Decision from Jeffrey, 2026-09-18.* Jeffrey must never need to run MCPJam commands manually.
+Keep the full MCPJam compatibility gate in every runtime promotion, run it automatically once per
+day while Workbench is idle against an isolated database, and surface its schedule, failures, client
+compatibility, tool probes, protocol checks, and recent runs directly in the Insights System tab.
+
+### Insights is tabbed, never one stacked dashboard
+
+*Decision from Jeffrey, 2026-09-18.* Insights must not stack operational diagnostics, agent quality,
+usage, and outcome metrics into one dense page. Keep four focused tabs — **Overview**, **Agents**,
+**Usage**, and **System** — render only the selected tab, and remember that selection across reloads.
+The time-window selector applies to Overview, Agents, and Usage; hide it on System, where memory and
+MCP health are current-state diagnostics rather than historical metrics.
+
 ### Notifications belong under Settings
 
 *Decision from Jeffrey, 2026-09-01.* Settings is a navigation destination. Notification preferences

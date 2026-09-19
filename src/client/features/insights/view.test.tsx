@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InsightsView } from './view';
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); window.localStorage.clear(); vi.unstubAllGlobals(); });
 
 const healthyMemoryDiagnostics = {
   status: 'healthy', summary: 'The memory graph is synced and live traversal passed.', checkedAt: '2026-09-09T12:00:00.000Z', migrationApplied: true,
@@ -20,7 +20,13 @@ const healthyMcpQuality = {
     { id: 'check-2', checkedAt: '2026-09-18T12:00:00.000Z', status: 'passed', source: 'promotion', revision: 'abc1234', durationMs: 12_400, protocolScore: 100, compatibleHosts: 18, toolProbes: 50, totalTools: 50, breakingChanges: 0, failure: null, tasksWire: 'none', taskScore: 100, subscriptionChecks: { passed: 0, notApplicable: 3, total: 3 } },
     { id: 'check-1', checkedAt: '2026-09-18T11:00:00.000Z', status: 'failed', source: 'local', revision: 'def5678', durationMs: 2_500, protocolScore: 100, compatibleHosts: 2, toolProbes: null, totalTools: 50, breakingChanges: 0, failure: 'Tool probe failed.' },
   ],
+  automation: { enabled: true, running: false, cadenceHours: 24, nextRunAt: '2026-09-19T12:00:00.000Z', lastError: null },
+  details: { hosts: [{ id: 'codex', label: 'Codex', verdict: 'works', provenance: 'probe' }], tools: [{ name: 'list_projects', expected: 'success', passed: true, durationMs: 20 }], checks: [{ id: 'ping', title: 'Ping', category: 'core', status: 'passed' }] },
 };
+
+function selectTab(name: 'Overview' | 'Agents' | 'Usage' | 'System') {
+  fireEvent.click(screen.getByRole('tab', { name }));
+}
 
 function stubInsightsFetch(insightsPayload: unknown, memoryPayload: unknown = healthyMemoryDiagnostics, mcpPayload: unknown = healthyMcpQuality) {
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
@@ -33,6 +39,19 @@ function stubInsightsFetch(insightsPayload: unknown, memoryPayload: unknown = he
 }
 
 describe('InsightsView', () => {
+  it('restores the selected Insights tab and keeps System focused', async () => {
+    window.localStorage.setItem('workbench:insights-tab', 'system');
+    stubInsightsFetch({});
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(screen.getByRole('tab', { name: 'System' }).getAttribute('aria-selected')).toBe('true');
+    expect(await screen.findByRole('heading', { name: 'Working' })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Time window' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /system reliability/i })).toBeNull();
+  });
+
   it('offers the six approved timeframes and requests the selected one', async () => {
     stubInsightsFetch({
       retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
@@ -67,6 +86,7 @@ describe('InsightsView', () => {
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
+    selectTab('Usage');
     expect(await screen.findByRole('heading', { name: /token usage/i })).toBeTruthy();
     expect(screen.getByText('gpt-5.6-terra')).toBeTruthy();
     expect(screen.getByText('codex')).toBeTruthy();
@@ -84,6 +104,7 @@ describe('InsightsView', () => {
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
+    selectTab('Usage');
     expect(await screen.findAllByText('Cache read')).toHaveLength(2);
     expect(screen.getAllByText('57.5M')).toHaveLength(2);
     expect(screen.getAllByText('Fresh input')).toHaveLength(2);
@@ -104,6 +125,7 @@ describe('InsightsView', () => {
 
     const { container } = render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
+    selectTab('Agents');
     await screen.findByRole('heading', { name: /best agent by task type/i });
     expect(container.querySelector('.insight-fit-row .recommended')).toBeNull();
   });
@@ -120,6 +142,7 @@ describe('InsightsView', () => {
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
+    selectTab('Agents');
     expect(await screen.findAllByText('Bug fix')).toHaveLength(2);
     expect(screen.queryByText('bugfix')).toBeNull();
   });
@@ -136,9 +159,9 @@ describe('InsightsView', () => {
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
-    expect(await screen.findAllByText('Retry events')).toHaveLength(2);
-    expect(screen.getAllByText('250 per 100')).toHaveLength(2);
-    expect(screen.getAllByText('150 per 100')).toHaveLength(2);
+    expect(await screen.findAllByText('Retry events')).toHaveLength(1);
+    expect(screen.getAllByText('250 per 100')).toHaveLength(1);
+    expect(screen.getAllByText('150 per 100')).toHaveLength(1);
     expect(screen.getByText('5 retry events recorded in this window.')).toBeTruthy();
   });
 
@@ -194,10 +217,12 @@ describe('InsightsView', () => {
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
+    selectTab('System');
     expect(await screen.findByRole('heading', { name: 'Working' })).toBeTruthy();
     expect(screen.getByText('Live traversal passed')).toBeTruthy();
     expect(screen.getByText('20/20')).toBeTruthy();
-    expect(screen.getByText('Nothing to show yet')).toBeTruthy();
+    expect(screen.queryByText('Nothing to show yet')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Time window' })).toBeNull();
   });
 
   it('shows the latest MCP quality result and recent regression history', async () => {
@@ -210,9 +235,10 @@ describe('InsightsView', () => {
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
+    selectTab('System');
     expect(await screen.findByRole('heading', { name: 'Latest check passed' })).toBeTruthy();
     expect(screen.getByText('50/50')).toBeTruthy();
-    expect(screen.getByText(/No model calls\./)).toBeTruthy();
+    expect(screen.getByText(/no model calls/i)).toBeTruthy();
     expect(screen.getByText('none wire · 100 conformance')).toBeTruthy();
     expect(screen.getByText('0/3 active · 3 not applicable')).toBeTruthy();
     expect(screen.getByLabelText('Recent MCP quality checks').textContent).toContain('Failed');
@@ -231,6 +257,7 @@ describe('InsightsView', () => {
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
+    selectTab('System');
     expect(await screen.findByText('Staff promotion history')).toBeTruthy();
     expect(screen.getByText('palmyra · 2 retrieved · 1 via graph')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open conversation' }).getAttribute('href')).toBe('/conversations/conversation-1');
@@ -243,6 +270,7 @@ describe('InsightsView', () => {
 
     render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
 
+    selectTab('System');
     expect(await screen.findByRole('heading', { name: 'Needs attention' })).toBeTruthy();
     expect(screen.getByText('19/20')).toBeTruthy();
     expect(screen.getByText('Live traversal failed')).toBeTruthy();

@@ -15,6 +15,8 @@ import { shutdownTurnGroundingClassifier, warmTurnGroundingClassifier } from './
 import { configureRuntimeRetirement } from './runtime-retirement.js';
 import { shutdownMemorySemanticWorker } from './memory-semantic-worker.js';
 import { requestMemoryIndexRefresh, shutdownMemoryIndexMaintenance } from './memory-index-maintenance.js';
+import { readMcpQualityHistory } from './mcp-quality-history.js';
+import { startMcpQualityMonitor } from './mcp-quality-monitor.js';
 
 const port = Number(process.env.PORT ?? 4317);
 const database = openDatabase();
@@ -26,9 +28,13 @@ const app = createApp(database, liveRuntimeCapabilities);
 const repository = new WorkItemRepository(database);
 const scheduler = liveRuntimeCapabilities.ownScheduler ? startScheduler(repository) : null;
 const promotionWorker = liveRuntimeCapabilities.promoteRuntime ? startRuntimePromotionWorker(repository) : null;
+const mcpQualityMonitor = liveRuntimeCapabilities.ownScheduler ? startMcpQualityMonitor(repository, {
+  latest: () => readMcpQualityHistory().latest,
+}) : null;
 configureRuntimeRetirement(() => {
   scheduler?.stop();
   promotionWorker?.stop();
+  mcpQualityMonitor?.stop();
   retireRealtimeClients();
 });
 warmDiffConfidenceModel();
@@ -57,6 +63,7 @@ const shutdown = () => {
   shutdownFastTaskDraftModel();
   shutdownMemorySemanticWorker();
   shutdownMemoryIndexMaintenance();
+  mcpQualityMonitor?.stop();
   // Do not exit immediately after the graceful signal: provider CLIs create
   // detached process groups, so the owning runtime must remain alive long
   // enough to escalate any group that ignores SIGTERM. This is also used when

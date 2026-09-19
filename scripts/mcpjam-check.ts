@@ -311,7 +311,18 @@ async function runStandalone(): Promise<void> {
     await waitForHealth(port, child);
     const url = `http://127.0.0.1:${port}/mcp`;
     if (process.argv.includes('--update-baseline')) captureBaseline(url, testAccessToken);
-    else runMcpJamGate({ url, accessToken: testAccessToken });
+    else {
+      const requestedSource = process.env.MCP_QUALITY_SOURCE;
+      const source: McpQualityRun['source'] = requestedSource === 'scheduled' || requestedSource === 'promotion' || requestedSource === 'ci'
+        ? requestedSource
+        : 'local';
+      runMcpJamGate({
+        url,
+        accessToken: testAccessToken,
+        source,
+        artifactDirectory: process.env.MCP_QUALITY_ARTIFACT_DIRECTORY?.trim() || undefined,
+      });
+    }
   } catch (error) {
     if (serverOutput.trim()) console.error(`Isolated Workbench output:\n${serverOutput.trim()}`);
     throw error;

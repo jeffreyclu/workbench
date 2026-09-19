@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { readReviewStackReadingMode, writeReviewStackReadingMode } from './preferences.js';
+import { readInsightsTab, readReviewStackReadingMode, writeInsightsTab, writeReviewStackReadingMode } from './preferences.js';
 
 describe('review stack reading mode preference', () => {
   beforeEach(() => window.localStorage.clear());
@@ -25,5 +25,20 @@ describe('review stack reading mode preference', () => {
     writeReviewStackReadingMode('diff');
     expect(window.localStorage.getItem('workbench:review-stack-reading-mode')).toBe('diff');
     expect(window.localStorage.getItem('workbench:review-stack-selections')).toBeNull();
+  });
+});
+
+describe('insights tab preference', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('defaults to overview and remembers a valid selection', () => {
+    expect(readInsightsTab()).toBe('overview');
+    writeInsightsTab('system');
+    expect(readInsightsTab()).toBe('system');
+  });
+
+  it('ignores an invalid stored tab', () => {
+    window.localStorage.setItem('workbench:insights-tab', 'everything');
+    expect(readInsightsTab()).toBe('overview');
   });
 });

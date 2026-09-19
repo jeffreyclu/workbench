@@ -19,6 +19,7 @@ const reviewStackSelectionsStorageKey = 'workbench:review-stack-selections';
  * silently put the code pane back into interleaved diff. */
 const reviewStackReadingModeStorageKey = 'workbench:review-stack-reading-mode';
 const desktopNotificationsEnabledStorageKey = 'workbench:desktop-notifications-enabled';
+const insightsTabStorageKey = 'workbench:insights-tab';
 const lastOpenedItemStorageKeys = {
   conversation: 'workbench:last-opened-conversation',
   attention: 'workbench:last-opened-attention-item',
@@ -90,6 +91,25 @@ export function writeDesktopNotificationsEnabled(enabled: boolean): void {
     window.localStorage.setItem(desktopNotificationsEnabledStorageKey, String(enabled));
   } catch {
     // The preference still applies to this session even if it cannot be remembered.
+  }
+}
+
+export type InsightsTab = 'overview' | 'agents' | 'usage' | 'system';
+
+export function readInsightsTab(): InsightsTab {
+  try {
+    const value = window.localStorage.getItem(insightsTabStorageKey);
+    return value === 'overview' || value === 'agents' || value === 'usage' || value === 'system' ? value : 'overview';
+  } catch {
+    return 'overview';
+  }
+}
+
+export function writeInsightsTab(tab: InsightsTab): void {
+  try {
+    window.localStorage.setItem(insightsTabStorageKey, tab);
+  } catch {
+    // The selected tab still applies until the page is reloaded.
   }
 }
 
