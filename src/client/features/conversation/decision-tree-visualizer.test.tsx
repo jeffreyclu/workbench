@@ -115,4 +115,18 @@ describe('DecisionTreeVisualizer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close decision tree' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it('shows MCP outcome and payload directly in the debugger', () => {
+    render(<DecisionTreeVisualizer messages={messages} events={[{
+      id: 'mcp-response', messageId: 'stream', runId: null, kind: 'tool', detail: 'workbench.list_projects', createdAt: '2026-08-25T12:00:02.000Z',
+      trace: { phase: 'response', outcome: 'success', durationMs: 14, payload: { data: { projects: ['Workbench'] } } },
+    }]} isLoadingEvents={false} onClose={vi.fn()} />);
+
+    expect(screen.getByText('MCP trace')).toBeInTheDocument();
+    expect(screen.getByText('Response received · 14ms')).toBeInTheDocument();
+    const card = screen.getByText('workbench.list_projects returned.').closest('article')!;
+    fireEvent.mouseEnter(card);
+    expect(screen.getByText('success · 14ms')).toBeInTheDocument();
+    expect(screen.getByText(/"projects": \[/)).toBeInTheDocument();
+  });
 });

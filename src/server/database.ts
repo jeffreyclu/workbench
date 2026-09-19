@@ -2396,6 +2396,19 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Provider MCP events already belong to one reply. Preserve their bounded
+    // request/result payload and timing beside the existing human-readable
+    // detail so the agent debugger can show the actual exchange.
+    id: '082_agent_stream_event_traces',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_stream_events)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'trace_phase')) database.exec('ALTER TABLE agent_stream_events ADD COLUMN trace_phase TEXT;');
+      if (!columns.some((column) => column.name === 'trace_outcome')) database.exec('ALTER TABLE agent_stream_events ADD COLUMN trace_outcome TEXT;');
+      if (!columns.some((column) => column.name === 'duration_ms')) database.exec('ALTER TABLE agent_stream_events ADD COLUMN duration_ms INTEGER;');
+      if (!columns.some((column) => column.name === 'payload_json')) database.exec('ALTER TABLE agent_stream_events ADD COLUMN payload_json TEXT;');
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

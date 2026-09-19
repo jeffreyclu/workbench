@@ -1245,6 +1245,12 @@ export interface AgentStreamEvent {
   runId: string | null;
   kind: 'decision' | 'tool' | 'file_read' | 'file_write';
   detail: string;
+  trace?: {
+    phase: 'request' | 'response';
+    outcome: 'running' | 'success' | 'error';
+    durationMs: number | null;
+    payload: unknown;
+  } | null;
   createdAt: string;
 }
 
@@ -1449,6 +1455,30 @@ export interface MemoryDiagnostics {
     lastRetrievedAt: string | null;
     recent: MemoryDiagnosticsRecentRetrieval[];
   };
+}
+
+export interface McpQualityRun {
+  id: string;
+  checkedAt: string;
+  status: 'passed' | 'failed';
+  source: 'local' | 'promotion' | 'ci';
+  revision: string | null;
+  durationMs: number;
+  protocolScore: number | null;
+  compatibleHosts: number | null;
+  toolProbes: number | null;
+  totalTools: number;
+  breakingChanges: number | null;
+  failure: string | null;
+  tasksWire?: 'none' | 'legacy' | 'extension' | null;
+  taskScore?: number | null;
+  subscriptionChecks?: { passed: number; notApplicable: number; total: number } | null;
+}
+
+export interface McpQualityHistory {
+  status: 'healthy' | 'degraded' | 'empty';
+  latest: McpQualityRun | null;
+  runs: McpQualityRun[];
 }
 
 export interface RunInsights {

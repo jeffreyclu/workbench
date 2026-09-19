@@ -63,8 +63,9 @@ excluded from activity memory and the knowledge graph. This generic request reco
 rather than replaces, the task-specific activity entries above.
 
 The `/mcp` surface is release-gated by a pinned local MCPJam check. Every candidate must pass
-Streamable HTTP initialization, protocol conformance, offline Claude/Codex compatibility, the
-reviewed tool-contract baseline, and one real read-only `list_projects` call before promotion can
+Streamable HTTP initialization, protocol conformance, offline compatibility across MCPJam's complete
+pinned client catalog, explicit task-wire and subscription conformance posture, the reviewed
+tool-contract baseline, and one real read-only `list_projects` call before promotion can
 switch the runtime. MCP browser Origins are limited to loopback and explicitly configured trusted
 origins; native clients may omit Origin. The gate uses no public tunnel, hosted upload, or model call.
 

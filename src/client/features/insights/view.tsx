@@ -5,6 +5,7 @@ import { api } from '../../data/api';
 import { InsightsSkeleton } from '../../components/skeleton/skeleton';
 import type { InsightsTimeframe, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../../../shared/contracts';
 import { MemoryDiagnosticsPanel } from './memory-diagnostics';
+import { McpQualityPanel } from './mcp-quality';
 
 const INSIGHTS_TIMEFRAMES: readonly { value: InsightsTimeframe; label: string }[] = [
   { value: '15m', label: 'Last 15 minutes' },
@@ -163,6 +164,7 @@ export function InsightsView() {
   const [timeframe, setTimeframe] = useState<InsightsTimeframe>('all');
   const insights = useQuery({ queryKey: ['insights', timeframe], queryFn: () => api.getInsights(timeframe), refetchInterval: 10_000 });
   const memoryDiagnostics = useQuery({ queryKey: ['memory-diagnostics'], queryFn: api.getMemoryDiagnostics, refetchInterval: 10_000 });
+  const mcpQuality = useQuery({ queryKey: ['mcp-quality'], queryFn: api.getMcpQualityHistory, refetchInterval: 10_000 });
   const data = insights.data;
 
   return (
@@ -190,6 +192,12 @@ export function InsightsView() {
           loading={memoryDiagnostics.isLoading}
           error={memoryDiagnostics.isError}
           onRetry={() => { void memoryDiagnostics.refetch(); }}
+        />
+        <McpQualityPanel
+          data={mcpQuality.data}
+          loading={mcpQuality.isLoading}
+          error={mcpQuality.isError}
+          onRetry={() => { void mcpQuality.refetch(); }}
         />
       </div>
 

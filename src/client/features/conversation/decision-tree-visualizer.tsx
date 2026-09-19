@@ -38,10 +38,13 @@ function eventBranches(events: DecisionTreeEvent[]): EventBranch[] {
 }
 
 function ToolCall({ event, onHoverEvent }: { event: DecisionTreeEvent; onHoverEvent: (event: DecisionTreeEvent | null) => void }) {
+  const traceLabel = event.trace
+    ? `${event.trace.phase === 'request' ? 'Request sent' : event.trace.outcome === 'error' ? 'Failed' : 'Response received'}${event.trace.durationMs == null ? '' : ` · ${event.trace.durationMs}ms`}`
+    : null;
   return <li className="decision-tree-tool-call">
     <span className="decision-tree-tool-connector" aria-hidden="true"><ChevronDown size={13} /></span>
     <EventCard event={event} onHoverEvent={onHoverEvent}>
-      <div className="decision-tree-event-type"><Terminal size={12} /><span>Tool call</span></div>
+      <div className="decision-tree-event-type"><Terminal size={12} /><span>{event.trace ? 'MCP trace' : 'Tool call'}</span>{traceLabel && <em className={`decision-tree-trace-status is-${event.trace?.outcome}`}>{traceLabel}</em>}</div>
       <p>{event.action}</p>
     </EventCard>
   </li>;
@@ -75,6 +78,6 @@ export function DecisionTreeVisualizer({ messages, events, isLoadingEvents, onCl
       <button type="button" className="icon-button" onClick={onClose} aria-label="Close decision tree"><X size={15} /></button>
     </header>
     {tree.length === 0 && !isLoadingEvents ? <p className="decision-tree-empty">No agent streams have been recorded in this conversation yet.</p>
-      : <div className="decision-tree-layout"><ol className="decision-tree-roots" aria-label="Agent decision tree">{tree.map((request) => <li key={request.id} className="decision-tree-root"><div className="decision-tree-root-card"><span><GitBranch size={13} /> Request</span><strong>{request.label}</strong><small><b>Brief</b>{request.detail}</small>{request.meta && <em>{request.meta}</em>}</div>{request.children.length > 0 && <details className="decision-tree-branches"><summary>{request.children.length} agent {request.children.length === 1 ? 'branch' : 'branches'}</summary><ol className="decision-tree-streams">{request.children.map((stream) => <StreamBranch key={stream.id} stream={stream} onHoverEvent={(event) => setHoveredEventId(event?.id ?? null)} />)}</ol></details>}</li>)}</ol><aside id="decision-tree-details-panel" className="decision-tree-details-panel" aria-live="polite">{activeEvent ? <><span>{activeEvent.kind === 'decision' ? 'Recorded decision' : `${activeEvent.stream.label} tool call`}</span><code>{activeEvent.detail}</code></> : <span>Hover or focus a decision or tool call to inspect the recorded detail.</span>}</aside>{isLoadingEvents && <p className="decision-tree-loading">Loading agent events…</p>}</div>}
+      : <div className="decision-tree-layout"><ol className="decision-tree-roots" aria-label="Agent decision tree">{tree.map((request) => <li key={request.id} className="decision-tree-root"><div className="decision-tree-root-card"><span><GitBranch size={13} /> Request</span><strong>{request.label}</strong><small><b>Brief</b>{request.detail}</small>{request.meta && <em>{request.meta}</em>}</div>{request.children.length > 0 && <details className="decision-tree-branches"><summary>{request.children.length} agent {request.children.length === 1 ? 'branch' : 'branches'}</summary><ol className="decision-tree-streams">{request.children.map((stream) => <StreamBranch key={stream.id} stream={stream} onHoverEvent={(event) => setHoveredEventId(event?.id ?? null)} />)}</ol></details>}</li>)}</ol><aside id="decision-tree-details-panel" className="decision-tree-details-panel" aria-live="polite">{activeEvent ? <><span>{activeEvent.kind === 'decision' ? 'Recorded decision' : activeEvent.trace ? `MCP ${activeEvent.trace.phase}` : `${activeEvent.stream.label} tool call`}</span><code>{activeEvent.detail}</code>{activeEvent.trace && <><small>{activeEvent.trace.outcome}{activeEvent.trace.durationMs == null ? '' : ` · ${activeEvent.trace.durationMs}ms`}</small><pre>{JSON.stringify(activeEvent.trace.payload, null, 2)}</pre></>}</> : <span>Hover or focus a decision or tool call to inspect the recorded detail.</span>}</aside>{isLoadingEvents && <p className="decision-tree-loading">Loading agent events…</p>}</div>}
   </ModalDialog>;
 }

@@ -43,8 +43,10 @@ export function formatDecisionTreeEvents(events: AgentStreamEvent[]): DecisionTr
       latestDecisionId = event.id;
       return { ...event, action: 'Recorded the approach.', rationale: null, decisionId: null };
     }
-    const action = event.kind === 'file_read' ? `Read ${event.detail}.`
-      : event.kind === 'file_write' ? `Updated ${event.detail.replace(/^(?:update|create|delete):\s*/i, '')}.`
+    const action = event.trace?.phase === 'request' ? `Called ${event.detail}.`
+      : event.trace?.phase === 'response' ? `${event.detail} ${event.trace.outcome === 'error' ? 'failed' : 'returned'}.`
+        : event.kind === 'file_read' ? `Read ${event.detail}.`
+          : event.kind === 'file_write' ? `Updated ${event.detail.replace(/^(?:update|create|delete):\s*/i, '')}.`
         : event.detail.startsWith('command_execution: ')
           ? readableCommand(event.detail.slice('command_execution: '.length))
           : `Used ${event.detail}.`;

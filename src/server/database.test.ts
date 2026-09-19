@@ -95,6 +95,7 @@ const EXPECTED_MIGRATIONS = [
   '079_conversation_external_action_grants',
   '080_external_evidence_snapshots',
   '081_audit_store_and_conversation_reads',
+  '082_agent_stream_event_traces',
 ];
 
 describe('openDatabase', () => {
@@ -793,6 +794,23 @@ describe('openDatabase', () => {
     const columns = (upgraded.prepare('PRAGMA table_info(agent_stream_events)').all() as Array<{ name: string }>).map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(['message_id', 'run_id', 'kind', 'detail', 'created_at']));
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_stream_events_message_created'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds structured MCP traces on upgrade from migration 081', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    for (const column of ['payload_json', 'duration_ms', 'trace_outcome', 'trace_phase']) {
+      current.exec(`ALTER TABLE agent_stream_events DROP COLUMN ${column};`);
+    }
+    current.prepare("DELETE FROM schema_migrations WHERE id = '082_agent_stream_event_traces'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(agent_stream_events)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['trace_phase', 'trace_outcome', 'duration_ms', 'payload_json']));
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '082_agent_stream_event_traces'").get()).toBeTruthy();
     upgraded.close();
   });
 

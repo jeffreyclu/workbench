@@ -78,10 +78,29 @@ describe('classifyExecution', () => {
     const codex = readableAgentEvent('codex', JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'pnpm typecheck', exit_code: 0 } }));
     expect(codex.audit).toEqual([expect.objectContaining({ command: 'pnpm typecheck', exitCode: 0 })]);
 
-    const context = { subagents: new Map<string, string>(), pendingBash: new Map<string, string>() };
+    const context = { subagents: new Map<string, string>(), pendingBash: new Map<string, string>(), pendingMcp: new Map() };
     readableAgentEvent('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'bash-1', name: 'Bash', input: { command: 'pytest -q' } }] } }), context);
     const claude = readableAgentEvent('claude', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'bash-1', is_error: false }] } }), context);
     expect(claude.audit).toEqual([expect.objectContaining({ command: 'pytest -q', exitCode: 0 })]);
+  });
+
+  it('records Claude MCP request and response payloads without secrets', () => {
+    const context = { subagents: new Map<string, string>(), pendingBash: new Map<string, string>(), pendingMcp: new Map() };
+    const request = readableAgentEvent('claude', JSON.stringify({
+      type: 'assistant', message: { content: [{ type: 'tool_use', id: 'mcp-1', name: 'mcp__workbench__list_work_items', input: { stack: 'attention', apiKey: 'hidden' } }] },
+    }), context);
+    const response = readableAgentEvent('claude', JSON.stringify({
+      type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'mcp-1', is_error: false, content: [{ type: 'text', text: '{"items":[]}' }] }] },
+    }), context);
+
+    expect(request.audit).toEqual([expect.objectContaining({
+      detail: 'workbench.list_work_items',
+      trace: expect.objectContaining({ phase: 'request', payload: { stack: 'attention', apiKey: '[redacted]' } }),
+    })]);
+    expect(response.audit).toEqual([expect.objectContaining({
+      detail: 'workbench.list_work_items',
+      trace: expect.objectContaining({ phase: 'response', outcome: 'success' }),
+    })]);
   });
 
   it('includes durable task attachment paths in the execution prompt', () => {

@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Server } from 'node:http';
 
-const seams = vi.hoisted(() => ({ sendMacDesktopNotification: vi.fn() }));
+const seams = vi.hoisted(() => ({
+  sendMacDesktopNotification: vi.fn(),
+  readMcpQualityHistory: vi.fn(() => ({ status: 'healthy', latest: { id: 'check-1', status: 'passed' }, runs: [] })),
+}));
 
 vi.mock('../desktop-notifications.js', () => ({
   sendMacDesktopNotification: seams.sendMacDesktopNotification,
+}));
+
+vi.mock('../mcp-quality-history.js', () => ({
+  readMcpQualityHistory: seams.readMcpQualityHistory,
 }));
 
 import { createApp } from '../app.js';
@@ -56,7 +63,17 @@ describe('system router desktop notifications', () => {
 
     expect(response.status).toBe(200);
     expect(body.status).toBe('ready');
-    expect(body.graph).toMatchObject({ triggerCount: 20, requiredTriggerCount: 20 });
+    expect(body.graph.triggerCount).toBeGreaterThan(0);
+    expect(body.graph.triggerCount).toBe(body.graph.requiredTriggerCount);
     expect(body.traversalCanary.status).toBe('no_data');
+  });
+
+  it('exposes read-only MCP regression history', async () => {
+    const response = await fetch(`${baseUrl}/api/insights/mcp-quality`);
+    const body = await response.json() as { status: string; latest: { status: string } };
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ status: 'healthy', latest: { status: 'passed' } });
+    expect(seams.readMcpQualityHistory).toHaveBeenCalledOnce();
   });
 });

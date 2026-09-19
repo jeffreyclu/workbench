@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
-import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type WorkItem } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type AgentStreamEvent, type WorkItem } from '../shared/contracts.js';
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
@@ -984,6 +984,48 @@ export interface AgentAuditCandidate {
   /** Set only for a completed shell command, making it admissible as evidence. */
   command?: string;
   exitCode?: number | null;
+  trace?: AgentStreamEvent['trace'];
+}
+
+const sensitiveTraceKey = /(?:authorization|cookie|password|secret|token|api[_-]?key)/i;
+
+function sanitizedTracePayload(value: unknown, depth = 0): unknown {
+  if (depth > 5) return '[nested payload omitted]';
+  if (Array.isArray(value)) return value.slice(0, 50).map((entry) => sanitizedTracePayload(entry, depth + 1));
+  if (!value || typeof value !== 'object') return typeof value === 'string' && value.length > 2_000 ? `${value.slice(0, 2_000)}…` : value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([key, entry]) => [
+    key,
+    sensitiveTraceKey.test(key) ? '[redacted]' : sanitizedTracePayload(entry, depth + 1),
+  ]));
+}
+
+function boundedTracePayload(value: unknown): unknown {
+  const sanitized = sanitizedTracePayload(value);
+  const serialized = JSON.stringify(sanitized);
+  return serialized.length <= 6_000 ? sanitized : { truncated: true, preview: serialized.slice(0, 5_900) };
+}
+
+/** Converts a provider-authored MCP item into one request/response trace. */
+export function mcpTraceEventForProviderItem(eventName: string, item: Record<string, unknown> | undefined): AgentAuditCandidate | null {
+  if (!item || !['mcpToolCall', 'mcp_tool_call'].includes(String(item.type ?? ''))) return null;
+  const phase = /completed$/i.test(eventName) ? 'response' as const : 'request' as const;
+  const status = String(item.status ?? '');
+  const failed = status === 'failed' || Boolean(item.error);
+  const detail = `${String(item.server ?? 'mcp')}.${String(item.tool ?? 'tool')}`.slice(0, 500);
+  const payload = phase === 'request'
+    ? boundedTracePayload(item.arguments ?? {})
+    : boundedTracePayload(failed ? { error: item.error ?? 'Tool call failed.' } : item.result ?? {});
+  return {
+    category: 'agent_tool_use',
+    streamKind: 'tool',
+    detail,
+    trace: {
+      phase,
+      outcome: phase === 'request' ? 'running' : failed ? 'error' : 'success',
+      durationMs: typeof item.durationMs === 'number' ? item.durationMs : null,
+      payload,
+    },
+  };
 }
 
 /**
@@ -1010,7 +1052,12 @@ function terminateAgentProcessTree(child: ReturnType<typeof spawn>, signal: Node
  * traced back to the worker that produced it, so the runner keeps this for the
  * life of one invocation and hands it to each parsed event.
  */
-export interface AgentEventContext { subagents: Map<string, string>; pendingBash: Map<string, string>; sessionId?: string }
+export interface AgentEventContext {
+  subagents: Map<string, string>;
+  pendingBash: Map<string, string>;
+  pendingMcp: Map<string, { detail: string; arguments: unknown; startedAt: number }>;
+  sessionId?: string;
+}
 
 const activeAgentProcesses = new Set<ReturnType<typeof spawn>>();
 
@@ -1103,6 +1150,12 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
         const audit = event.type === 'item.completed' ? [{ category: 'agent_tool_use' as const, streamKind: 'decision' as const, detail: item.text.slice(0, 2_000) }] : [];
         return { progress: `Reasoning summary: ${item.text}`, final: null, audit };
       }
+      const mcpTrace = mcpTraceEventForProviderItem(String(event.type ?? ''), item);
+      if (mcpTrace) return {
+        progress: mcpTrace.trace?.phase === 'request' ? `● ${mcpTrace.detail}` : '',
+        final: null,
+        audit: [mcpTrace],
+      };
       if (item?.type === 'command_execution') {
         const command = typeof item.command === 'string' ? item.command : 'command';
         const label = /(?:npm|pnpm|yarn) (?:test|run test)|vitest/.test(command) ? 'Running tests'
@@ -1188,8 +1241,17 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
             audit.push({ category: 'agent_tool_use', detail: attribute(`delegated to ${worker}${assignment ? `: ${assignment}` : ''}`) });
             return [attribute(`● Delegating to ${worker}${assignment ? `: ${assignment}` : ''}`)];
           }
+          const mcpName = name.match(/^mcp__(.+?)__(.+)$/);
           if (name === 'Read') audit.push({ category: 'agent_file_read', streamKind: 'file_read', detail: attribute(filePath || 'unknown file') });
           else if (name === 'Edit' || name === 'Write') audit.push({ category: 'agent_file_write', streamKind: 'file_write', detail: attribute(filePath || 'unknown file') });
+          else if (mcpName) {
+            const detail = `${mcpName[1]}.${mcpName[2]}`;
+            audit.push({
+              category: 'agent_tool_use', streamKind: 'tool', detail: attribute(detail),
+              trace: { phase: 'request', outcome: 'running', durationMs: null, payload: boundedTracePayload(input) },
+            });
+            if (typeof content.id === 'string') context?.pendingMcp.set(content.id, { detail: attribute(detail), arguments: input, startedAt: Date.now() });
+          }
           else audit.push({ category: 'agent_tool_use', streamKind: 'tool', detail: attribute(description ? `${name}: ${description}` : name) });
           if (name === 'Bash' && typeof content.id === 'string') {
             const command = typeof input.command === 'string' ? input.command : '';
@@ -1225,6 +1287,18 @@ export function readableAgentEvent(agent: AgentRun['agent'], line: string, conte
       const audit: AgentAuditCandidate[] = [];
       for (const content of message?.content ?? []) {
         if (content.type !== 'tool_result' || typeof content.tool_use_id !== 'string') continue;
+        const pendingMcp = context.pendingMcp.get(content.tool_use_id);
+        if (pendingMcp) {
+          context.pendingMcp.delete(content.tool_use_id);
+          audit.push({
+            category: 'agent_tool_use', streamKind: 'tool', detail: pendingMcp.detail,
+            trace: {
+              phase: 'response', outcome: content.is_error === true ? 'error' : 'success',
+              durationMs: Math.max(0, Date.now() - pendingMcp.startedAt),
+              payload: boundedTracePayload(content.content ?? content),
+            },
+          });
+        }
         const command = context.pendingBash.get(content.tool_use_id);
         if (!command) continue;
         context.pendingBash.delete(content.tool_use_id);
@@ -1358,7 +1432,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
     const setFinal = (text: string) => {
       if (text) finalOutput = text;
     };
-    const eventContext: AgentEventContext = { subagents: new Map(), pendingBash: new Map() };
+    const eventContext: AgentEventContext = { subagents: new Map(), pendingBash: new Map(), pendingMcp: new Map() };
     let reportedUsage: { inputTokens: number | null; cacheCreationInputTokens: number | null; cacheReadInputTokens: number | null; outputTokens: number | null } = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
     let estimatedOutputTokens = 0;
     // High-water mark of a single provider request's context. Per-message usage
@@ -2024,6 +2098,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
         if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+          trace: entry.trace,
         })));
       } })
       : await runAgentCommandWithFallback(run.agent, cwd, run.agent === 'claude' ? claudeScopeRecoveryPrompt(prompt, cwd) : prompt, (partialOutput) => {
@@ -2048,6 +2123,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
       if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+        trace: entry.trace,
       })));
     }, run.kind, run.accountProfile, undefined, undefined, resumeSessionId, !resumesSession);
     const attemptedAuthorizedAction = () => externalActionAttempted(
@@ -2073,6 +2149,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
         if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+          trace: entry.trace,
         })));
       }, run.kind, run.accountProfile);
       if (hasUnsupportedCapabilityDenial(recovered.output) && !attemptedAuthorizedAction()) throw new Error(reason);
@@ -2119,6 +2196,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
         if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+          trace: entry.trace,
         })));
       }, run.kind, run.accountProfile);
       result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
@@ -2150,6 +2228,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
           if (run.messageId) repository.addAgentStreamEvents(run.messageId, run.id, entries.map((entry) => ({
             kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+            trace: entry.trace,
           })));
         };
         if (retryAgent === 'palmyra') {

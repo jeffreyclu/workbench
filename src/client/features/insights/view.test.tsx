@@ -13,9 +13,21 @@ const healthyMemoryDiagnostics = {
   retrievals: { totalReplies: 8, graphExpandedReplies: 1, lastRetrievedAt: '2026-09-09T12:00:00.000Z', recent: [] },
 };
 
-function stubInsightsFetch(insightsPayload: unknown, memoryPayload: unknown = healthyMemoryDiagnostics) {
+const healthyMcpQuality = {
+  status: 'healthy',
+  latest: { id: 'check-2', checkedAt: '2026-09-18T12:00:00.000Z', status: 'passed', source: 'promotion', revision: 'abc1234', durationMs: 12_400, protocolScore: 100, compatibleHosts: 18, toolProbes: 50, totalTools: 50, breakingChanges: 0, failure: null, tasksWire: 'none', taskScore: 100, subscriptionChecks: { passed: 0, notApplicable: 3, total: 3 } },
+  runs: [
+    { id: 'check-2', checkedAt: '2026-09-18T12:00:00.000Z', status: 'passed', source: 'promotion', revision: 'abc1234', durationMs: 12_400, protocolScore: 100, compatibleHosts: 18, toolProbes: 50, totalTools: 50, breakingChanges: 0, failure: null, tasksWire: 'none', taskScore: 100, subscriptionChecks: { passed: 0, notApplicable: 3, total: 3 } },
+    { id: 'check-1', checkedAt: '2026-09-18T11:00:00.000Z', status: 'failed', source: 'local', revision: 'def5678', durationMs: 2_500, protocolScore: 100, compatibleHosts: 2, toolProbes: null, totalTools: 50, breakingChanges: 0, failure: 'Tool probe failed.' },
+  ],
+};
+
+function stubInsightsFetch(insightsPayload: unknown, memoryPayload: unknown = healthyMemoryDiagnostics, mcpPayload: unknown = healthyMcpQuality) {
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-    const payload = String(input).includes('/api/insights/memory') ? memoryPayload : insightsPayload;
+    const url = String(input);
+    const payload = url.includes('/api/insights/memory') ? memoryPayload
+      : url.includes('/api/insights/mcp-quality') ? mcpPayload
+        : insightsPayload;
     return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }));
 }
@@ -186,6 +198,24 @@ describe('InsightsView', () => {
     expect(screen.getByText('Live traversal passed')).toBeTruthy();
     expect(screen.getByText('20/20')).toBeTruthy();
     expect(screen.getByText('Nothing to show yet')).toBeTruthy();
+  });
+
+  it('shows the latest MCP quality result and recent regression history', async () => {
+    stubInsightsFetch({
+      retryRate: null, fallbackRate: null, byAgent: [], byKind: [], completedRuns: 0, completedTasks: 0,
+      medianTaskCycleMs: null, followUpsCreated: 0, agentFit: [], inputTokens: 0, outputTokens: 0, tokenUsageByModel: [],
+      cursing: { total: 0, messagesAnalyzed: 0, messagesWithCurses: 0, instancesPer100Messages: 0, byTerm: [], byDay: [] },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><InsightsView /></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: 'Latest check passed' })).toBeTruthy();
+    expect(screen.getByText('50/50')).toBeTruthy();
+    expect(screen.getByText(/No model calls\./)).toBeTruthy();
+    expect(screen.getByText('none wire · 100 conformance')).toBeTruthy();
+    expect(screen.getByText('0/3 active · 3 not applicable')).toBeTruthy();
+    expect(screen.getByLabelText('Recent MCP quality checks').textContent).toContain('Failed');
   });
 
   it('links recent graph-expanded retrieval evidence to its conversation', async () => {

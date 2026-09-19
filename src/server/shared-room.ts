@@ -2,8 +2,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DEFAULT_ACCOUNT_PROFILE, SUPERVISOR_EVIDENCE_REASON_PREFIX, defaultAccountProfileForTask, type AgentRun, type GitHubPullRequestDiff, type SharedMessage, type WorkItem, type WorkspaceDiff } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { DEFAULT_ACCOUNT_PROFILE, SUPERVISOR_EVIDENCE_REASON_PREFIX, defaultAccountProfileForTask, type AgentRun, type AgentStreamEvent, type GitHubPullRequestDiff, type SharedMessage, type WorkItem, type WorkspaceDiff } from '../shared/contracts.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, mcpTraceEventForProviderItem, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -143,16 +143,13 @@ function updateLiveSharedBody(repository: WorkItemRepository, messageId: string,
   });
 }
 
-export function agentStreamEventForCodexAppServerItem(method: string, item: Record<string, unknown> | undefined): { kind: 'decision' | 'tool'; detail: string } | null {
+export function agentStreamEventForCodexAppServerItem(method: string, item: Record<string, unknown> | undefined): Pick<AgentStreamEvent, 'kind' | 'detail'> & { trace?: AgentStreamEvent['trace'] } | null {
   if (!item) return null;
   const type = String(item.type ?? '');
+  const mcpTrace = mcpTraceEventForProviderItem(method, item);
+  if (mcpTrace) return { kind: 'tool', detail: mcpTrace.detail, trace: mcpTrace.trace };
   if (method === 'item/started' && (type === 'commandExecution' || type === 'command_execution')) {
     return { kind: 'tool', detail: `command_execution: ${String(item.command ?? 'command').slice(0, 500)}` };
-  }
-  if (method === 'item/started' && (type === 'mcpToolCall' || type === 'mcp_tool_call')) {
-    const server = String(item.server ?? 'mcp');
-    const tool = String(item.tool ?? 'tool');
-    return { kind: 'tool', detail: `${server}.${tool}`.slice(0, 500) };
   }
   if (method === 'item/completed' && type === 'reasoning') {
     // App-server emits the requested reasoning summary as `summary[]`, while
@@ -608,7 +605,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
           // Agent-message decisions already arrive in delta form. Reasoning
           // summaries and tool starts do not, so surface those explicitly.
           const itemType = String(item?.type ?? '');
-          if (itemType === 'reasoning' || agentEvent.kind === 'tool') {
+          if (itemType === 'reasoning' || (agentEvent.kind === 'tool' && agentEvent.trace?.phase !== 'response')) {
             appendLiveEvent(agentEvent.kind === 'tool' ? `● ${agentEvent.detail}` : agentEvent.detail);
           }
         }
@@ -1733,6 +1730,7 @@ export async function replyInSharedRoom(
       onAudit: (entries) => persistNonTerminalAgentUpdate(() => {
         repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+          trace: entry.trace,
         })));
         if (runId) for (const entry of entries) repository.addAgentRunDiagnostic(runId, messageId, 'palmyra', 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
       }),
@@ -1763,6 +1761,7 @@ export async function replyInSharedRoom(
       });
     }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
       kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+      trace: entry.trace,
     })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
@@ -1790,6 +1789,7 @@ export async function replyInSharedRoom(
         });
       }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+        trace: entry.trace,
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
         registerActiveReplySteering(messageId, steer);
         void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
@@ -1817,6 +1817,7 @@ export async function replyInSharedRoom(
           });
         }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+          trace: entry.trace,
         })))), runKind, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
           registerActiveReplySteering(messageId, steer);
           void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
@@ -1854,6 +1855,7 @@ export async function replyInSharedRoom(
         });
       }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
+        trace: entry.trace,
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
         registerActiveReplySteering(messageId, steer);
         void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });

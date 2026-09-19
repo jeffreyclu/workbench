@@ -707,8 +707,19 @@ describe('compactConversationHistory', () => {
 describe('agentStreamEventForCodexAppServerItem', () => {
   it('records Workbench MCP calls in the decision graph', () => {
     expect(agentStreamEventForCodexAppServerItem('item/started', {
-      type: 'mcpToolCall', server: 'workbench', tool: 'create_linear_issue',
-    })).toEqual({ kind: 'tool', detail: 'workbench.create_linear_issue' });
+      type: 'mcpToolCall', server: 'workbench', tool: 'create_linear_issue', arguments: { teamKey: 'CON', token: 'hidden' }, status: 'inProgress',
+    })).toEqual(expect.objectContaining({
+      kind: 'tool', detail: 'workbench.create_linear_issue',
+      trace: expect.objectContaining({ phase: 'request', outcome: 'running', payload: { teamKey: 'CON', token: '[redacted]' } }),
+    }));
+
+    expect(agentStreamEventForCodexAppServerItem('item/completed', {
+      type: 'mcpToolCall', server: 'workbench', tool: 'create_linear_issue', arguments: {}, status: 'completed', durationMs: 37,
+      result: { structuredContent: { data: { identifier: 'CON-999' } }, content: [] },
+    })).toEqual(expect.objectContaining({
+      kind: 'tool', detail: 'workbench.create_linear_issue',
+      trace: expect.objectContaining({ phase: 'response', outcome: 'success', durationMs: 37 }),
+    }));
   });
 
   it('records the completed provider reasoning summary before the next tool call', () => {

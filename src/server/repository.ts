@@ -1005,13 +1005,22 @@ export class WorkItemRepository {
     return this.getSharedMessageById(id);
   }
 
-  addAgentStreamEvents(messageId: string, runId: string | null, events: Array<{ kind: AgentStreamEvent['kind']; detail: string }>): void {
+  addAgentStreamEvents(messageId: string, runId: string | null, events: Array<{
+    kind: AgentStreamEvent['kind'];
+    detail: string;
+    trace?: AgentStreamEvent['trace'];
+  }>): void {
     if (!events.length) return;
-    const insert = this.database.prepare(`INSERT INTO agent_stream_events (id, message_id, run_id, kind, detail, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)`);
+    const insert = this.database.prepare(`INSERT INTO agent_stream_events
+      (id, message_id, run_id, kind, detail, trace_phase, trace_outcome, duration_ms, payload_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const createdAt = new Date().toISOString();
     this.unitOfWork.transaction(() => {
-      for (const event of events) insert.run(randomUUID(), messageId, runId, event.kind, event.detail.slice(0, 2_000), createdAt);
+      for (const event of events) insert.run(
+        randomUUID(), messageId, runId, event.kind, event.detail.slice(0, 2_000),
+        event.trace?.phase ?? null, event.trace?.outcome ?? null, event.trace?.durationMs ?? null,
+        event.trace ? JSON.stringify(event.trace.payload ?? null).slice(0, 8_000) : null, createdAt,
+      );
     });
   }
 
@@ -1021,11 +1030,22 @@ export class WorkItemRepository {
   }
 
   listAgentStreamEvents(conversationId: string): AgentStreamEvent[] {
-    return (this.database.prepare(`SELECT events.id, events.message_id, events.run_id, events.kind, events.detail, events.created_at
+    return (this.database.prepare(`SELECT events.id, events.message_id, events.run_id, events.kind, events.detail,
+        events.trace_phase, events.trace_outcome, events.duration_ms, events.payload_json, events.created_at
       FROM agent_stream_events AS events
       JOIN shared_messages AS messages ON messages.id = events.message_id
       WHERE messages.conversation_id = ? ORDER BY events.created_at ASC, events.rowid ASC`).all(conversationId) as Array<Record<string, string | null>>)
-      .map((row) => ({ id: row.id!, messageId: row.message_id!, runId: row.run_id, kind: row.kind as AgentStreamEvent['kind'], detail: row.detail!, createdAt: row.created_at! }));
+      .map((row) => ({
+        id: row.id!, messageId: row.message_id!, runId: row.run_id,
+        kind: row.kind as AgentStreamEvent['kind'], detail: row.detail!,
+        trace: row.trace_phase && row.trace_outcome ? {
+          phase: row.trace_phase as NonNullable<AgentStreamEvent['trace']>['phase'],
+          outcome: row.trace_outcome as NonNullable<AgentStreamEvent['trace']>['outcome'],
+          durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
+          payload: row.payload_json ? JSON.parse(row.payload_json) as unknown : null,
+        } : null,
+        createdAt: row.created_at!,
+      }));
   }
 
   getExternalEvidenceSnapshot(dispatchGroupId: string, requestKey: string): ExternalEvidenceSnapshot | null {

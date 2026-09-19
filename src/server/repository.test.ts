@@ -444,7 +444,16 @@ describe('WorkItemRepository', () => {
     const reply = repository.createSharedMessage('codex', 'I will inspect the completion path.', 'completed', conversation.id);
     repository.addAgentStreamEvents(reply.id, null, [
       { kind: 'decision', detail: 'Inspect the completion path before changing code.' },
-      { kind: 'tool', detail: 'rg completion path' },
+      {
+        kind: 'tool',
+        detail: 'workbench.list_projects returned.',
+        trace: {
+          phase: 'response',
+          outcome: 'success',
+          durationMs: 42,
+          payload: { projects: ['Workbench'] },
+        },
+      },
     ]);
 
     const recorded = repository.createSessionFeedback({ conversationId: conversation.id, workItemId: task.id, rating: 'positive' });
@@ -453,7 +462,17 @@ describe('WorkItemRepository', () => {
     expect(recorded).toMatchObject({ rating: 'positive', conversationId: conversation.id, workItemId: task.id });
     expect(recorded?.decisionTree.events).toEqual(expect.arrayContaining([
       expect.objectContaining({ messageId: reply.id, kind: 'decision', detail: 'Inspect the completion path before changing code.' }),
-      expect.objectContaining({ messageId: reply.id, kind: 'tool', detail: 'rg completion path' }),
+      expect.objectContaining({
+        messageId: reply.id,
+        kind: 'tool',
+        detail: 'workbench.list_projects returned.',
+        trace: {
+          phase: 'response',
+          outcome: 'success',
+          durationMs: 42,
+          payload: { projects: ['Workbench'] },
+        },
+      }),
     ]));
     expect(repeated).toEqual(recorded);
     expect(repository.getSessionFeedback(conversation.id, task.id)).toEqual(recorded);

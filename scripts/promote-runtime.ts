@@ -151,6 +151,7 @@ async function preflightCandidate(): Promise<void> {
       url: `http://127.0.0.1:${port}/mcp`,
       artifactDirectory: join(root, 'data', 'mcpjam', 'promotion-latest'),
       accessToken: 'loopback',
+      source: 'promotion',
     });
   } finally {
     child.kill('SIGTERM');
