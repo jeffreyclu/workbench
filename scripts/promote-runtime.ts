@@ -147,7 +147,7 @@ async function preflightCandidate(): Promise<void> {
   });
   try {
     await waitForCandidateHealth(port, child);
-    runMcpJamGate({
+    await runMcpJamGate({
       url: `http://127.0.0.1:${port}/mcp`,
       artifactDirectory: join(root, 'data', 'mcpjam', 'promotion-latest'),
       accessToken: 'loopback',

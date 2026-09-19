@@ -26,6 +26,26 @@ export interface McpJamGateOptions {
 
 interface JsonObject { [key: string]: unknown }
 interface ToolMatrixEntry { name: string; expected: 'success' | 'error'; arguments: Record<string, unknown> }
+interface AsyncProcessResult { stdout: string; stderr: string; status: number | null; error: Error | null }
+interface ToolProbeSummary { name: string; expected: ToolMatrixEntry['expected']; passed: boolean; durationMs: number }
+
+const defaultToolProbeConcurrency = 6;
+
+export function mapWithConcurrency<Input, Output>(
+  items: readonly Input[],
+  concurrency: number,
+  worker: (item: Input, index: number) => Promise<Output>,
+): Promise<Output[]> {
+  const limit = Math.max(1, Math.min(Math.floor(concurrency) || 1, items.length || 1));
+  const results = new Array<Output>(items.length);
+  let nextIndex = 0;
+  return Promise.all(Array.from({ length: limit }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await worker(items[index], index);
+    }
+  })).then(() => results);
+}
 
 function parseLastJson(output: string, label: string): JsonObject {
   const lines = output.trim().split('\n').map((line) => line.trim()).filter(Boolean);
@@ -77,6 +97,33 @@ function runMcpJam(label: string, args: string[], outputPath: string): JsonObjec
   return payload;
 }
 
+function runMcpJamAsync(args: string[]): Promise<AsyncProcessResult> {
+  return new Promise((resolveProcess) => {
+    const child = spawn(mcpjam, ['--no-telemetry', '--quiet', '--format', 'json', ...args], {
+      cwd: root,
+      env: { ...process.env, MCPJAM_TELEMETRY_DISABLED: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let outputError: Error | null = null;
+    let spawnError: Error | null = null;
+    const collect = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
+      if (outputError) return;
+      if (stream === 'stdout') stdout += chunk.toString();
+      else stderr += chunk.toString();
+      if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > maxOutput) {
+        outputError = new Error('MCPJam tool probe exceeded the 30 MB output limit.');
+        child.kill('SIGTERM');
+      }
+    };
+    child.stdout.on('data', (chunk: Buffer) => collect('stdout', chunk));
+    child.stderr.on('data', (chunk: Buffer) => collect('stderr', chunk));
+    child.once('error', (error) => { spawnError = error; });
+    child.once('close', (status) => resolveProcess({ stdout, stderr, status, error: outputError ?? spawnError }));
+  });
+}
+
 function targetArgs(url: string, accessToken: string): string[] {
   return ['--url', url, '--access-token', accessToken];
 }
@@ -98,7 +145,7 @@ function baselineToolNames(): string[] {
   return parsed.tools.map((tool) => String(tool.name)).sort();
 }
 
-function runToolMatrix(url: string, accessToken: string, artifactDirectory: string): number {
+async function runToolMatrix(url: string, accessToken: string, artifactDirectory: string): Promise<number> {
   const matrix = readToolMatrix();
   const matrixNames = matrix.map((entry) => entry.name).sort();
   const advertisedNames = baselineToolNames();
@@ -109,29 +156,36 @@ function runToolMatrix(url: string, accessToken: string, artifactDirectory: stri
   }
   const resultDirectory = join(artifactDirectory, 'tools');
   mkdirSync(resultDirectory, { recursive: true });
-  const summary: Array<{ name: string; expected: ToolMatrixEntry['expected']; passed: boolean; durationMs: number }> = [];
-  for (const entry of matrix) {
+  const requestedConcurrency = Number(process.env.MCPJAM_TOOL_CONCURRENCY ?? defaultToolProbeConcurrency);
+  const concurrency = Math.max(1, Math.min(Number.isFinite(requestedConcurrency) ? Math.floor(requestedConcurrency) : defaultToolProbeConcurrency, 12));
+  const outcomes = await mapWithConcurrency(matrix, concurrency, async (entry) => {
     const startedAt = Date.now();
-    const result = spawnSync(mcpjam, [
-      '--no-telemetry', '--quiet', '--format', 'json', 'tools', 'call',
+    const result = await runMcpJamAsync([
+      'tools', 'call',
       '--tool-name', entry.name, '--tool-args', JSON.stringify(entry.arguments), '--validate-response',
       ...targetArgs(url, accessToken),
-    ], {
-      cwd: root,
-      env: { ...process.env, MCPJAM_TELEMETRY_DISABLED: '1' },
-      encoding: 'utf8',
-      maxBuffer: maxOutput,
-    });
+    ]);
     const combined = [result.stdout, result.stderr].filter(Boolean).join('\n');
-    const payload = parseLastJson(result.stdout || combined, `MCPJam ${entry.name} tool probe`);
+    let payload: JsonObject;
+    try { payload = parseLastJson(result.stdout || combined, `MCPJam ${entry.name} tool probe`); }
+    catch (error) {
+      writeFileSync(join(resultDirectory, `${entry.name}.log`), combined);
+      return { summary: null, failure: error instanceof Error ? error.message : String(error) };
+    }
     writeFileSync(join(resultDirectory, `${entry.name}.json`), `${JSON.stringify(payload, null, 2)}\n`);
     const returnedError = payload.isError === true;
     const passed = entry.expected === 'success'
       ? result.status === 0 && !returnedError
       : result.status !== 0 && returnedError;
-    summary.push({ name: entry.name, expected: entry.expected, passed, durationMs: Date.now() - startedAt });
-    if (!passed) throw new Error(`MCPJam tool probe ${entry.name} expected ${entry.expected} but exited ${result.status ?? 'without status'} with isError=${String(payload.isError)}.`);
-  }
+    const summary: ToolProbeSummary = { name: entry.name, expected: entry.expected, passed, durationMs: Date.now() - startedAt };
+    const failure = result.error
+      ? `MCPJam tool probe ${entry.name} could not complete: ${result.error.message}`
+      : !passed ? `MCPJam tool probe ${entry.name} expected ${entry.expected} but exited ${result.status ?? 'without status'} with isError=${String(payload.isError)}.` : null;
+    return { summary, failure };
+  });
+  const failure = outcomes.find((outcome) => outcome.failure)?.failure;
+  if (failure) throw new Error(failure);
+  const summary = outcomes.flatMap((outcome) => outcome.summary ? [outcome.summary] : []);
   writeFileSync(join(artifactDirectory, 'tool-matrix-summary.json'), `${JSON.stringify({ passed: true, covered: summary.length, tools: summary }, null, 2)}\n`);
   return summary.length;
 }
@@ -140,7 +194,7 @@ function runToolMatrix(url: string, accessToken: string, artifactDirectory: stri
  * Deterministic MCP release gate. It never invokes a language model or uploads
  * Workbench data: every check runs locally against one candidate endpoint.
  */
-export function runMcpJamGate(options: McpJamGateOptions): void {
+export async function runMcpJamGate(options: McpJamGateOptions): Promise<void> {
   const startedAt = Date.now();
   const artifacts = resolve(options.artifactDirectory ?? defaultArtifactsPath);
   const accessToken = options.accessToken ?? testAccessToken;
@@ -226,7 +280,7 @@ export function runMcpJamGate(options: McpJamGateOptions): void {
       ...targetArgs(options.url, accessToken),
     ], join(artifacts, 'list-projects-summary.json'));
 
-    toolProbes = runToolMatrix(options.url, accessToken, artifacts);
+    toolProbes = await runToolMatrix(options.url, accessToken, artifacts);
     record('passed', null);
     console.log(`MCPJam gate passed: doctor=${String(doctor.status ?? 'ready')}; protocol=${protocolScore ?? 'passing'}; compatible-hosts=${compatibleHosts}; breaking-contract-changes=0; tool-probes=${toolProbes}/${totalTools}; tasks=${tasksWire}:${taskScore ?? 'passing'}; subscriptions=${subscriptionChecks.passed}/${subscriptionChecks.total} active (${subscriptionChecks.notApplicable} not applicable).`);
     console.log(`MCPJam traces: ${artifacts}`);
@@ -316,7 +370,7 @@ async function runStandalone(): Promise<void> {
       const source: McpQualityRun['source'] = requestedSource === 'scheduled' || requestedSource === 'promotion' || requestedSource === 'ci'
         ? requestedSource
         : 'local';
-      runMcpJamGate({
+      await runMcpJamGate({
         url,
         accessToken: testAccessToken,
         source,

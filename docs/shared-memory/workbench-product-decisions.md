@@ -6,6 +6,8 @@
 Keep the full MCPJam compatibility gate in every runtime promotion, run it automatically once per
 day while Workbench is idle against an isolated database, and surface its schedule, failures, client
 compatibility, tool probes, protocol checks, and recent runs directly in the Insights System tab.
+Promotion must keep all 50 tool probes while running independent probes with bounded concurrency so
+the safety gate does not turn every release into a long serial wait.
 
 ### Insights is tabbed, never one stacked dashboard
 
