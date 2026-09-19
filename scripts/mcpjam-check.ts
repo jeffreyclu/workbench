@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createServer, get as httpGet } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ const root = resolve(new URL('..', import.meta.url).pathname);
 const mcpjam = join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'mcpjam.cmd' : 'mcpjam');
 const baselinePath = join(root, '.mcpjam', 'workbench-baseline.json');
 const fixturesPath = join(root, '.mcpjam', 'fixtures.json');
+const toolMatrixPath = join(root, '.mcpjam', 'tool-matrix.json');
 const defaultArtifactsPath = join(root, 'data', 'mcpjam', 'local-latest');
 const testAccessToken = 'loopback';
 const maxOutput = 30 * 1024 * 1024;
@@ -20,6 +21,7 @@ export interface McpJamGateOptions {
 }
 
 interface JsonObject { [key: string]: unknown }
+interface ToolMatrixEntry { name: string; expected: 'success' | 'error'; arguments: Record<string, unknown> }
 
 function parseLastJson(output: string, label: string): JsonObject {
   const lines = output.trim().split('\n').map((line) => line.trim()).filter(Boolean);
@@ -80,6 +82,56 @@ function prepareArtifacts(directory: string): void {
   mkdirSync(directory, { recursive: true });
 }
 
+function readToolMatrix(): ToolMatrixEntry[] {
+  const parsed = JSON.parse(readFileSync(toolMatrixPath, 'utf8')) as { tools?: ToolMatrixEntry[] };
+  if (!Array.isArray(parsed.tools)) throw new Error('MCPJam tool matrix must contain a tools array.');
+  return parsed.tools;
+}
+
+function baselineToolNames(): string[] {
+  const parsed = JSON.parse(readFileSync(baselinePath, 'utf8')) as { tools?: Array<{ name?: unknown }> };
+  if (!Array.isArray(parsed.tools)) throw new Error('MCPJam baseline does not contain a tool catalog.');
+  return parsed.tools.map((tool) => String(tool.name)).sort();
+}
+
+function runToolMatrix(url: string, accessToken: string, artifactDirectory: string): number {
+  const matrix = readToolMatrix();
+  const matrixNames = matrix.map((entry) => entry.name).sort();
+  const advertisedNames = baselineToolNames();
+  if (new Set(matrixNames).size !== matrixNames.length || JSON.stringify(matrixNames) !== JSON.stringify(advertisedNames)) {
+    const missing = advertisedNames.filter((name) => !matrixNames.includes(name));
+    const stale = matrixNames.filter((name) => !advertisedNames.includes(name));
+    throw new Error(`MCPJam tool matrix must cover every advertised tool exactly once. Missing: ${missing.join(', ') || 'none'}. Stale: ${stale.join(', ') || 'none'}.`);
+  }
+  const resultDirectory = join(artifactDirectory, 'tools');
+  mkdirSync(resultDirectory, { recursive: true });
+  const summary: Array<{ name: string; expected: ToolMatrixEntry['expected']; passed: boolean; durationMs: number }> = [];
+  for (const entry of matrix) {
+    const startedAt = Date.now();
+    const result = spawnSync(mcpjam, [
+      '--no-telemetry', '--quiet', '--format', 'json', 'tools', 'call',
+      '--tool-name', entry.name, '--tool-args', JSON.stringify(entry.arguments), '--validate-response',
+      ...targetArgs(url, accessToken),
+    ], {
+      cwd: root,
+      env: { ...process.env, MCPJAM_TELEMETRY_DISABLED: '1' },
+      encoding: 'utf8',
+      maxBuffer: maxOutput,
+    });
+    const combined = [result.stdout, result.stderr].filter(Boolean).join('\n');
+    const payload = parseLastJson(result.stdout || combined, `MCPJam ${entry.name} tool probe`);
+    writeFileSync(join(resultDirectory, `${entry.name}.json`), `${JSON.stringify(payload, null, 2)}\n`);
+    const returnedError = payload.isError === true;
+    const passed = entry.expected === 'success'
+      ? result.status === 0 && !returnedError
+      : result.status !== 0 && returnedError;
+    summary.push({ name: entry.name, expected: entry.expected, passed, durationMs: Date.now() - startedAt });
+    if (!passed) throw new Error(`MCPJam tool probe ${entry.name} expected ${entry.expected} but exited ${result.status ?? 'without status'} with isError=${String(payload.isError)}.`);
+  }
+  writeFileSync(join(artifactDirectory, 'tool-matrix-summary.json'), `${JSON.stringify({ passed: true, covered: summary.length, tools: summary }, null, 2)}\n`);
+  return summary.length;
+}
+
 /**
  * Deterministic MCP release gate. It never invokes a language model or uploads
  * Workbench data: every check runs locally against one candidate endpoint.
@@ -88,6 +140,7 @@ export function runMcpJamGate(options: McpJamGateOptions): void {
   if (!existsSync(mcpjam)) throw new Error('MCPJam is not installed. Run npm install before promotion.');
   if (!existsSync(baselinePath)) throw new Error('Missing .mcpjam/workbench-baseline.json. Run npm run mcp:baseline intentionally after reviewing the tool-contract change.');
   if (!existsSync(fixturesPath)) throw new Error('Missing .mcpjam/fixtures.json.');
+  if (!existsSync(toolMatrixPath)) throw new Error('Missing .mcpjam/tool-matrix.json.');
   const artifacts = resolve(options.artifactDirectory ?? defaultArtifactsPath);
   const accessToken = options.accessToken ?? testAccessToken;
   prepareArtifacts(artifacts);
@@ -120,11 +173,13 @@ export function runMcpJamGate(options: McpJamGateOptions): void {
     ...targetArgs(options.url, accessToken),
   ], join(artifacts, 'list-projects-summary.json'));
 
+  const coveredTools = runToolMatrix(options.url, accessToken, artifacts);
+
   const score = conformance.score && typeof conformance.score === 'object' && 'score' in conformance.score
     ? String(conformance.score.score)
     : 'passing';
   const summary = compatibility.summary && typeof compatibility.summary === 'object' ? compatibility.summary as { works?: unknown } : {};
-  console.log(`MCPJam gate passed: doctor=${String(doctor.status ?? 'ready')}; protocol=${score}; compatible-hosts=${String(summary.works ?? 2)}; breaking-contract-changes=0; safe-tool-call=passed.`);
+  console.log(`MCPJam gate passed: doctor=${String(doctor.status ?? 'ready')}; protocol=${score}; compatible-hosts=${String(summary.works ?? 2)}; breaking-contract-changes=0; tool-probes=${coveredTools}/${coveredTools}.`);
   console.log(`MCPJam traces: ${artifacts}`);
 }
 

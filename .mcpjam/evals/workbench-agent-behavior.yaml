@@ -1,0 +1,87 @@
+schemaVersion: "1"
+mode: agentWorkflow
+reportingMode: standard
+suite:
+  id: workbench_agent_behavior
+  name: Workbench agent tool selection
+target:
+  servers:
+    - name: Workbench
+defaults:
+  model: anthropic/claude-sonnet-4-6
+  repetitions: 1
+  passThreshold: 1
+  validity: {}
+cases:
+  - id: canonical_project_vocabulary
+    title: Reads the canonical project vocabulary instead of guessing
+    steps:
+      - id: ask-projects
+        kind: prompt
+        prompt: What project names does Workbench currently recognize? Read the canonical vocabulary instead of guessing.
+    assertions:
+      - type: toolCalledAtLeastOnce
+        toolName: list_projects
+      - type: noToolErrors
+      - type: finalAssistantMessageNonEmpty
+      - type: turnCountUnder
+        turns: 6
+
+  - id: durable_context_retrieval
+    title: Uses durable context when prior Workbench decisions matter
+    steps:
+      - id: ask-memory
+        kind: prompt
+        prompt: Find the durable Workbench decision about the MCPJam release gate and summarize it. Use the available context retrieval tool rather than relying on memory.
+    assertions:
+      - type: toolCalledAtLeastOnce
+        toolName: recall_context
+      - type: noToolErrors
+      - type: finalAssistantMessageNonEmpty
+      - type: turnCountUnder
+        turns: 6
+
+  - id: active_work_lookup
+    title: Reads active work through Workbench
+    steps:
+      - id: ask-active-work
+        kind: prompt
+        prompt: List the active Workbench tasks that currently need attention. Use the authoritative Workbench task tool.
+    assertions:
+      - type: toolCalledAtLeastOnce
+        toolName: list_work_items
+      - type: noToolErrors
+      - type: finalAssistantMessageNonEmpty
+      - type: turnCountUnder
+        turns: 6
+
+  - id: managed_command_recovery
+    title: Checks saved long-running jobs before restarting work
+    steps:
+      - id: ask-managed-jobs
+        kind: prompt
+        prompt: Check whether Workbench has any managed commands whose saved output can be resumed. Do not start a new command.
+    assertions:
+      - type: toolCalledAtLeastOnce
+        toolName: list_managed_commands
+      - type: toolNeverCalled
+        toolName: start_managed_command
+      - type: noToolErrors
+      - type: finalAssistantMessageNonEmpty
+      - type: turnCountUnder
+        turns: 6
+
+  - id: conversation_lookup
+    title: Searches Workbench conversations through the canonical tool
+    steps:
+      - id: ask-conversations
+        kind: prompt
+        prompt: Find the most recent active Workbench conversations. Use the Workbench conversation tool and report what it returns.
+    assertions:
+      - type: toolCalledAtLeastOnce
+        toolName: list_conversations
+      - type: noToolErrors
+      - type: finalAssistantMessageNonEmpty
+      - type: turnCountUnder
+        turns: 6
+

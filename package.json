@@ -29,6 +29,7 @@
     "e2e:serve": "concurrently -k -n e2e-api,e2e-web -c cyan,magenta \"npm:e2e:api\" \"npm:e2e:web\"",
     "mcp:check": "tsx scripts/mcpjam-check.ts",
     "mcp:baseline": "tsx scripts/mcpjam-check.ts --update-baseline",
+    "mcp:evals": "tsx scripts/mcpjam-evals.ts",
     "mcp:inspect": "tsx scripts/mcpjam-inspect.ts",
     "mcp:inspect:stop": "mcpjam --no-telemetry inspector stop",
     "memory:index": "tsx scripts/index-memory.ts",
