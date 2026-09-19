@@ -43,7 +43,7 @@
     { "name": "resolve_external_source", "expected": "error", "arguments": { "conversationId": "00000000-0000-4000-8000-000000000001", "messageId": "00000000-0000-4000-8000-000000000002", "url": "https://example.com/mcpjam-probe" } },
     { "name": "retry_agent_run", "expected": "error", "arguments": { "runId": "00000000-0000-4000-8000-000000000001" } },
     { "name": "search_external_sources", "expected": "error", "arguments": { "conversationId": "00000000-0000-4000-8000-000000000001", "messageId": "00000000-0000-4000-8000-000000000002", "query": "MCPJam probe", "sources": ["github"] } },
-    { "name": "set_figma_discovery_scope", "expected": "error", "arguments": { "roots": [] } },
+    { "name": "set_figma_discovery_scope", "expected": "error", "arguments": { "roots": ["https://example.com/not-figma"] } },
     { "name": "set_work_item_lifecycle", "expected": "error", "arguments": { "action": "archive", "workItemId": "00000000-0000-4000-8000-000000000001" } },
     { "name": "start_managed_command", "expected": "error", "arguments": { "command": "printf mcpjam-probe", "cwd": "/definitely/missing/workbench-mcpjam" } },
     { "name": "stop_managed_command", "expected": "error", "arguments": { "jobId": "000000000000000000000000" } },
