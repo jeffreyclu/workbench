@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
 import { SUPERVISOR_EVIDENCE_REASON_PREFIX, type AgentRunReviewHandoff, type DiffHunkReviewState, type WorkspaceDiffFile } from '../../../shared/contracts.js';
-import { createReviewDirectorPlan, deferDelegatedReviewDecisions, nextReviewDirectorDecisionId } from '../../../shared/review-director.js';
+import { AUTOMATIC_PROOF_REVIEW_NOTE, createReviewDirectorPlan, DELEGATED_REVIEW_NOTE, deferDelegatedReviewDecisions, nextReviewDirectorDecisionId } from '../../../shared/review-director.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
 import { conversationClient } from '../../data/conversation-client.js';
 import { sourceClient } from '../../data/source-client.js';
@@ -289,7 +289,34 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // Review Director owns the queue end to end: decision creation, attention
   // tiers, ordering, delegated work, and critical enrichment all come from the
   // same plan the server uses for its background pass.
-  const reviewPlan = useMemo(() => createReviewDirectorPlan(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? []), [displayedDiff?.files, hunkReviews.data?.reviews]);
+  const baseReviewPlan = useMemo(() => createReviewDirectorPlan(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? []), [displayedDiff?.files, hunkReviews.data?.reviews]);
+  // Scores computed by the background pass that starts when an agent comes to
+  // rest. Nothing here requests them; they stream in and populate whichever
+  // decision panel the reviewer opens.
+  const autoScores = useAutoReviewScores({ workItemId, conversationId }, reviewRevision);
+  // The server can reconstruct and enrich the live workspace diff on its own.
+  // Every other source exists only in this pane, so the client completes the
+  // same Director plan for PRs, saved reviews, branches, and commits.
+  const directorEnrichment = useReviewDirectorEnrichment({
+    entries: baseReviewPlan.entries,
+    decisions: baseReviewPlan.decisions,
+    taskIntent: taskIntent ?? null,
+    revision: reviewRevision,
+    enabled: Boolean(reviewRevision) && (reviewSource !== 'workspace' || Boolean(selectedSnapshot)),
+  });
+  const riskScoreResults = useMemo(() => {
+    const results = new Map(autoScores.results);
+    for (const [decisionId, answer] of directorEnrichment.riskScores) results.set(decisionId, { answer, error: null });
+    return results;
+  }, [autoScores.results, directorEnrichment.riskScores]);
+  const routingScores = useMemo(() => new Map([...riskScoreResults].flatMap(([decisionId, result]) => {
+    const parsed = parseAiRiskScore(result.answer);
+    return parsed ? [[decisionId, parsed.score] as const] : [];
+  })), [riskScoreResults]);
+  const reviewPlan = useMemo(
+    () => createReviewDirectorPlan(displayedDiff?.files ?? [], hunkReviews.data?.reviews ?? [], routingScores),
+    [displayedDiff?.files, hunkReviews.data?.reviews, routingScores],
+  );
   const { decisions, changeMap, orderedDecisions } = reviewPlan;
   // The tier each decision is priced at — and the key its assist answers are
   // bought and read back under. The detail card has to be handed the same one
@@ -306,36 +333,27 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // actually answers. Named changes collapse to their header, so reading time
   // is spent on what is still open.
   const handledDecisions = useMemo(() => new Map(decisions.flatMap((decision) => {
-    if (decision.state !== null) return [[decision.id, reviewStateLabel(decision.state)] as const];
-    return decisionRouting.get(decision.id)?.tier === 'T0' ? [[decision.id, REVIEW_TIER_LABELS.T0] as const] : [];
+    const automatic = decisionRouting.get(decision.id)?.autoSettled && (decision.state === null || decision.note === AUTOMATIC_PROOF_REVIEW_NOTE);
+    if (automatic) return [[decision.id, REVIEW_TIER_LABELS.T0] as const];
+    return decision.state !== null ? [[decision.id, reviewStateLabel(decision.state)] as const] : [];
   })), [decisionRouting, decisions]);
+  const automaticDecisionIds = useMemo(() => new Set(reviewPlan.entries
+    .filter((entry) => entry.routing.autoSettled && (entry.decision.state === null || entry.decision.note === AUTOMATIC_PROOF_REVIEW_NOTE))
+    .map((entry) => entry.decision.id)), [reviewPlan]);
   const reviewProgress = useMemo(() => {
     let settled = 0;
     let judged = 0;
     let remaining = 0;
     for (const decision of decisions) {
-      const autoSettled = decisionRouting.get(decision.id)?.autoSettled ?? false;
+      const autoSettled = (decisionRouting.get(decision.id)?.autoSettled ?? false)
+        && (decision.state === null || decision.note === AUTOMATIC_PROOF_REVIEW_NOTE);
       if (autoSettled) settled += 1;
-      if (decision.state !== null) judged += 1;
-      else if (!autoSettled) remaining += 1;
+      else if (decision.state !== null) judged += 1;
+      else remaining += 1;
     }
     return { total: decisions.length, settled, judged, remaining };
   }, [decisionRouting, decisions]);
   const delegationTargets = reviewPlan.delegationTargets;
-  // Scores computed by the background pass that starts when an agent comes to
-  // rest. Nothing here requests them; they stream in and populate whichever
-  // decision panel the reviewer opens.
-  const autoScores = useAutoReviewScores({ workItemId, conversationId }, reviewRevision);
-  // The server can reconstruct and enrich the live workspace diff on its own.
-  // Every other source exists only in this pane, so the client completes the
-  // same Director plan for PRs, saved reviews, branches, and commits.
-  const directorEnrichment = useReviewDirectorEnrichment({
-    entries: reviewPlan.entries,
-    decisions,
-    taskIntent: taskIntent ?? null,
-    revision: reviewRevision,
-    enabled: Boolean(reviewRevision) && (reviewSource !== 'workspace' || Boolean(selectedSnapshot)),
-  });
   // The only review check that reads outside the patch, so the only one that
   // needs the server. Keyed on the revision because its answer is invalidated
   // by any edit to the working tree, and disabled outside work-item scope
@@ -366,12 +384,12 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // opening each decision.
   const riskBands = useMemo(() => {
     const bands = new Map<string, string>();
-    for (const [decisionId, result] of autoScores.results) {
+    for (const [decisionId, result] of riskScoreResults) {
       const parsed = parseAiRiskScore(result.answer);
       if (parsed) bands.set(decisionId, aiRiskBand(parsed.score));
     }
     return bands;
-  }, [autoScores.results]);
+  }, [riskScoreResults]);
   // GitHub review comments are keyed by file path; a decision can span several
   // files, so its badge sums whichever of those paths carry loaded comments.
   const commentCounts = useMemo(() => {
@@ -445,11 +463,32 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   );
   const fileSourceQuery = isPullRequestSource ? githubFileSourceQuery : workspaceFileSourceQuery;
 
-  const recordDecisionState = useCallback((decision: ReviewDecision, state: DiffHunkReviewState) =>
+  const recordDecisionState = useCallback((decision: ReviewDecision, state: DiffHunkReviewState, note?: string) =>
     upsertHunkReview.mutateAsync({
       hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange, contentHash: hunk.contentHash })),
       state,
+      note,
     }), [upsertHunkReview]);
+
+  // `Automatic` is a completed verdict, not a display hint. Write one batch
+  // as soon as the existing review rows are known, so the queue count,
+  // navigation, reload, and every other review surface all see it as approved.
+  const automaticApprovalAttempt = useRef('');
+  useEffect(() => {
+    if (!reviewRevision || !hunkReviews.isSuccess) return;
+    const automatic = reviewPlan.entries.filter((entry) => entry.routing.autoSettled && entry.decision.state === null);
+    if (automatic.length === 0) return;
+    const key = `${reviewRevision}:${automatic.map((entry) => entry.decision.id).join('|')}`;
+    if (automaticApprovalAttempt.current === key) return;
+    automaticApprovalAttempt.current = key;
+    void upsertHunkReview.mutateAsync({
+      hunks: automatic.flatMap((entry) => entry.decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange, contentHash: hunk.contentHash }))),
+      state: 'reviewed',
+      note: AUTOMATIC_PROOF_REVIEW_NOTE,
+    }).catch(() => {
+      if (automaticApprovalAttempt.current === key) automaticApprovalAttempt.current = '';
+    });
+  }, [hunkReviews.isSuccess, reviewPlan, reviewRevision, upsertHunkReview]);
 
   // The same delegation Review runs, against the hunk decisions Changes owns.
   // A confident T1 answer records the reviewed verdict through the identical
@@ -471,7 +510,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     onAutoReview: (target) => {
       // The mutation surfaces its own error state; a rejected auto-verdict
       // leaves the decision owed rather than tearing down the pane.
-      void recordDecisionState(target.decision, 'reviewed').catch(() => {});
+      void recordDecisionState(target.decision, 'reviewed', DELEGATED_REVIEW_NOTE).catch(() => {});
     },
   });
   // A claimed decision belongs to the Director until its delegated turn
@@ -823,7 +862,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 </p>}
                 {activeEscalations.size > 0 && <p className="review-director-escalation-status" role="alert">{activeEscalations.size} delegated {activeEscalations.size === 1 ? 'decision needs' : 'decisions need'} your review.</p>}
                 {selectedDecision && <>
-                  <DiffReviewDecisionQueue decisions={queueDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} delegating={delegation.pending} escalations={activeEscalations} />
+                  <DiffReviewDecisionQueue decisions={queueDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} delegating={delegation.pending} escalations={activeEscalations} automatic={automaticDecisionIds} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">
                     {readingMode === 'file' && selectedFile
@@ -842,7 +881,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={detailAnchor.simple ? undefined : <>
                       <DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />
                     </>} onClose={() => setDetailAnchor(null)}>
-                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={autoScores.results.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null} critical={reviewPlan.criticalDecisionIds.has(popoverDecision.id)} escalation={activeEscalations.get(popoverDecision.id)} hideJudging={detailAnchor.simple}>
+                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={riskScoreResults.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null} critical={reviewPlan.criticalDecisionIds.has(popoverDecision.id)} escalation={activeEscalations.get(popoverDecision.id)} hideJudging={detailAnchor.simple}>
                         <DiffReviewActions key={popoverDecision.id} saving={false} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => saveDecision(popoverDecision, state)} onFix={onFixRequest ? () => requestFix(popoverDecision) : undefined} onSkip={() => skipDecision(popoverDecision)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}

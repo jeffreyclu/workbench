@@ -731,6 +731,55 @@ describe('WorkspaceDiffView pull-request source', () => {
     expect(screen.getByText('Review Director — 1 of 1 critical decisions fully enriched.')).toBeInTheDocument();
   });
 
+  it('routes a 2/100 PR decision to delegation and persists Automatic decisions as approved', async () => {
+    const scoredPullRequest = {
+      ...pullRequestDiff(1, null),
+      files: [
+        {
+          path: 'src/server/auth.ts', previousPath: null, status: 'modified' as const, additions: 1, deletions: 1, isBinary: false,
+          patch: '@@ -1 +1 @@ authorize\n-return deny(request);\n+return authorize(request);',
+        },
+        {
+          path: 'src/format.ts', previousPath: null, status: 'modified' as const, additions: 1, deletions: 1, isBinary: false,
+          patch: '@@ -1 +1 @@ format\n-const value = 1;\n+const value=1;',
+        },
+      ],
+      changedFiles: 2,
+    };
+    const writes: Array<{ note?: string; hunks: Array<{ filePath: string; hunkRange: string; contentHash: string }> }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench' }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([], 'clean-revision') });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      if (url.includes('/workspace-diff/hunk-reviews/batch')) {
+        const body = JSON.parse(String(init?.body)) as { revision: string; state: DiffHunkReview['state']; note?: string; hunks: Array<{ filePath: string; hunkRange: string; contentHash: string }> };
+        writes.push(body);
+        return json({ reviews: body.hunks.map((hunk, index) => ({ id: `saved-${writes.length}-${index}`, revision: body.revision, ...hunk, state: body.state, note: body.note ?? null, updatedAt: '2026-09-21T15:00:00.000Z' })) });
+      }
+      if (url.includes('/api/github/pull-request-diff')) return json({ diff: scoredPullRequest });
+      if (url.includes('/api/review-auto-score')) return json({ snapshot: null });
+      if (url.endsWith('/api/review-assist/critical')) return json({ answers: {
+        score_risk: 'SCORE: 2\nMechanical and safe.',
+        explain: 'The change is bounded.',
+        what_could_break: 'No concrete breakage is visible.',
+      } });
+      if (url.endsWith('/api/review-assist')) return json({ answer: 'The change is bounded.\nCONFIDENCE: high' });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock, false, null, [pullRequestUrl]);
+
+    await waitFor(() => expect(writes).toHaveLength(2));
+    expect(writes.map((write) => write.note)).toEqual(expect.arrayContaining([
+      'Reviewed automatically by Review Director: deterministic proof.',
+      'Reviewed automatically by Review Director.',
+    ]));
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/review-assist'))).toBe(true);
+    expect(screen.getByText('2 of 2 reviewed')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Approved automatically/ })).toHaveLength(1);
+  });
+
   it('restores the selected decision while reopening on the relevant pull request', async () => {
     const persistedPullRequestDiff = {
       ...pullRequestDiff(1, null),

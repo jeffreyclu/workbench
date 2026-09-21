@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import type { ReviewChangeType } from '../shared/change-type.js';
 import { reviewAssistDecisionPayload, type ReviewDecision } from '../shared/review-decisions.js';
-import { createReviewDirectorPlan, type ReviewDirectorEntry } from '../shared/review-director.js';
-import { delegationOutcome } from '../shared/review-delegation.js';
+import { AUTOMATIC_PROOF_REVIEW_NOTE, createReviewDirectorPlan, DELEGATED_REVIEW_NOTE, routeWithAiRisk, type ReviewDirectorEntry } from '../shared/review-director.js';
+import { delegationOutcome, isDelegatedTier } from '../shared/review-delegation.js';
+import { parseAiRiskScore } from '../shared/review-risk-score.js';
 import { publishRealtimeEvent, publishRealtimeReviewScore } from './realtime.js';
 import { lookupReviewAssist, requestCriticalReviewAssist, requestReviewAssist, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist-ai.js';
 import type { WorkItemRepository } from './repository.js';
@@ -68,8 +69,6 @@ type ScoreJob = {
   criticalTotal: number;
   entries: Map<string, ReviewScoreEntry>;
 };
-
-const AUTOMATED_REVIEW_NOTE = 'Reviewed automatically by Review Director.';
 
 const jobs = new Map<string, ScoreJob>();
 const inFlight = new Map<string, Promise<void>>();
@@ -140,6 +139,18 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
   }
   const taskIntent = resolveTaskIntent(repository, scope);
   const plan = createReviewDirectorPlan(diff.files, repository.listDiffHunkReviews(scope, diff.revision));
+  // Automatic means approved, not merely hidden. Persist the same reviewed
+  // verdict the UI buttons write so counts, navigation, reopen, and every
+  // other surface agree that proof-settled work is finished.
+  for (const entry of plan.entries) {
+    if (!entry.routing.autoSettled || entry.decision.state !== null) continue;
+    repository.upsertDiffHunkReviews(scope, {
+      revision: diff.revision,
+      hunks: entry.decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange, contentHash: hunk.contentHash })),
+      state: 'reviewed',
+      note: AUTOMATIC_PROOF_REVIEW_NOTE,
+    });
+  }
   // T0 is already settled by proof. Spending model turns on it would add cost
   // without changing the queue or producing information Jeffrey needs.
   const reviewable = plan.orderedDecisions
@@ -167,6 +178,7 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
       const entry = reviewable[index];
       const { decision } = entry;
       let answer: string | null = null;
+      let delegatedAnswer: string | null = null;
       let error: string | null = null;
       try {
         if (entry.critical) {
@@ -179,6 +191,7 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
                 taskIntent,
               );
               answer = answers.score_risk;
+              delegatedAnswer = answers.explain;
               criticalFailure = null;
               break;
             } catch (failure) {
@@ -192,15 +205,18 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
           answer = await requestWithRetry(repository, 'score_risk', entry, plan.decisions, taskIntent);
         }
 
-        if (entry.delegated && decision.state === null) {
-          const delegatedAnswer = await requestWithRetry(repository, 'explain', entry, plan.decisions, taskIntent);
-          if (entry.autoReview && delegationOutcome(entry.tier, delegatedAnswer).autoReview) {
+        const scored = parseAiRiskScore(answer);
+        const effectiveRouting = routeWithAiRisk(entry.routing, scored?.score);
+        const delegated = isDelegatedTier(effectiveRouting.tier);
+        if (delegated && decision.state === null) {
+          delegatedAnswer ??= await requestWithRetry(repository, 'explain', { ...entry, tier: effectiveRouting.tier, routing: effectiveRouting }, plan.decisions, taskIntent);
+          if (delegationOutcome(effectiveRouting.tier, delegatedAnswer).autoReview) {
             try {
               repository.upsertDiffHunkReviews(scope, {
                 revision: diff.revision,
                 hunks: decision.hunks.map((hunk) => ({ filePath: hunk.filePath, hunkRange: hunk.hunkRange, contentHash: hunk.contentHash })),
                 state: 'reviewed',
-                note: AUTOMATED_REVIEW_NOTE,
+                note: DELEGATED_REVIEW_NOTE,
               });
               job.autoReviewed += 1;
               publishRealtimeEvent('workItemId' in scope ? 'work-items' : 'shared');
@@ -341,7 +357,7 @@ async function cachedDirectorCounts(repository: WorkItemRepository, scope: Revie
       entry.tier,
     ))).length;
   return {
-    autoReviewed: plan.decisions.filter((decision) => decision.note === AUTOMATED_REVIEW_NOTE).length,
+    autoReviewed: plan.decisions.filter((decision) => decision.note === DELEGATED_REVIEW_NOTE).length,
     criticalCompleted,
     criticalTotal: critical.length,
   };

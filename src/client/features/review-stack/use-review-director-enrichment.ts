@@ -13,9 +13,12 @@ export interface ReviewDirectorEnrichmentProgress {
   completed: number;
   total: number;
   failed: number;
+  /** Scores returned by the same critical pass. The queue consumes them as
+   * routing input instead of rendering them as decorative metadata. */
+  riskScores: ReadonlyMap<string, string>;
 }
 
-const IDLE: ReviewDirectorEnrichmentProgress = { running: false, completed: 0, total: 0, failed: 0 };
+const IDLE: ReviewDirectorEnrichmentProgress = { running: false, completed: 0, total: 0, failed: 0, riskScores: new Map() };
 
 /**
  * Completes the Review Director's critical analysis for diff sources the
@@ -45,7 +48,7 @@ export function useReviewDirectorEnrichment(input: {
 
     let cancelled = false;
     let cursor = 0;
-    setProgress({ running: true, completed: 0, total: critical.length, failed: 0 });
+    setProgress({ running: true, completed: 0, total: critical.length, failed: 0, riskScores: new Map() });
 
     const enrichNext = async (): Promise<void> => {
       for (;;) {
@@ -55,9 +58,11 @@ export function useReviewDirectorEnrichment(input: {
         if (!entry || cancelled) return;
 
         let failed = false;
+        let score: string | null = null;
         const payload = reviewAssistDecisionPayload(entry.decision, input.decisions);
         try {
-          await sourceClient.requestCriticalReviewAssist({ decision: payload, taskIntent: input.taskIntent, provider });
+          const response = await sourceClient.requestCriticalReviewAssist({ decision: payload, taskIntent: input.taskIntent, provider });
+          score = response.answers.score_risk ?? null;
           if (cancelled) return;
           await queryClient.invalidateQueries({ queryKey: ['review-assist-cache', entry.decision.id] });
         } catch {
@@ -69,6 +74,7 @@ export function useReviewDirectorEnrichment(input: {
           completed: current.completed + 1,
           failed: current.failed + Number(failed),
           running: current.completed + 1 < current.total,
+          riskScores: score ? new Map(current.riskScores).set(entry.decision.id, score) : current.riskScores,
         }));
       }
     };

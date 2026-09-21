@@ -5,6 +5,7 @@ import { isDependencyLockfilePath } from './change-type.js';
 import { isDelegatedTier, delegationAutoReviews, type DelegationTarget } from './review-delegation.js';
 import { blockObligations } from './review-obligations.js';
 import { routeReviewBlock, tierRank, type ReviewRouting, type ReviewTier } from './review-routing.js';
+import { LOW_RISK_DELEGATION_MAX } from './review-risk-score.js';
 
 /** The model-backed fields the Review Director prepares before Jeffrey opens a
  * critical decision. The deterministic heuristic is already derived from the
@@ -35,6 +36,21 @@ export interface ReviewDirectorPlan {
   criticalDecisionIds: ReadonlySet<string>;
 }
 
+export const AUTOMATIC_PROOF_REVIEW_NOTE = 'Reviewed automatically by Review Director: deterministic proof.';
+export const DELEGATED_REVIEW_NOTE = 'Reviewed automatically by Review Director.';
+
+/** The deterministic router runs before model work. Once a score exists, it
+ * must feed the same plan rather than remain a decorative badge. A very low
+ * score buys one delegated read; it never asks Jeffrey to inspect the change. */
+export function routeWithAiRisk(routing: ReviewRouting, score: number | null | undefined): ReviewRouting {
+  if (routing.autoSettled || score === null || score === undefined || score > LOW_RISK_DELEGATION_MAX) return routing;
+  return {
+    tier: 'T1',
+    reason: `AI risk score ${score}/100 — delegated instead of consuming human review time.`,
+    autoSettled: false,
+  };
+}
+
 const REVIEW_STATE_ORDER: Record<NonNullable<ReviewDecision['state']>, number> = {
   needs_changes: 1,
   commented: 2,
@@ -48,7 +64,11 @@ const REVIEW_STATE_ORDER: Record<NonNullable<ReviewDecision['state']>, number> =
  * delegated review rather than a blind settlement, ranks production risk ahead
  * of graph complexity, and declares which decisions need full enrichment.
  */
-export function createReviewDirectorPlan(files: WorkspaceDiffFile[], reviews: DiffHunkReview[]): ReviewDirectorPlan {
+export function createReviewDirectorPlan(
+  files: WorkspaceDiffFile[],
+  reviews: DiffHunkReview[],
+  aiRiskScores: ReadonlyMap<string, number> = new Map(),
+): ReviewDirectorPlan {
   const decisions = buildReviewDecisions(files, reviews);
   const changeMap = buildChangeMap(decisions);
   const nodes = new Map(changeMap.nodes.map((node) => [node.id, node]));
@@ -56,7 +76,7 @@ export function createReviewDirectorPlan(files: WorkspaceDiffFile[], reviews: Di
   for (const edge of changeMap.edges) outgoing.set(edge.fromId, (outgoing.get(edge.fromId) ?? 0) + 1);
 
   const entries = decisions.map((decision): ReviewDirectorEntry => {
-    const routing = routeReviewBlock(decision, blockObligations(decision));
+    const routing = routeWithAiRisk(routeReviewBlock(decision, blockObligations(decision)), aiRiskScores.get(decision.id));
     const delegated = isDelegatedTier(routing.tier);
     const critical = routing.tier === 'T3';
     return {
@@ -72,12 +92,13 @@ export function createReviewDirectorPlan(files: WorkspaceDiffFile[], reviews: Di
   });
 
   const orderedEntries = [...entries].sort((left, right) => {
+    const leftHandled = left.decision.state !== null || left.routing.autoSettled;
+    const rightHandled = right.decision.state !== null || right.routing.autoSettled;
+    if (leftHandled !== rightHandled) return Number(leftHandled) - Number(rightHandled);
+
     const leftState = left.decision.state ? REVIEW_STATE_ORDER[left.decision.state] : 0;
     const rightState = right.decision.state ? REVIEW_STATE_ORDER[right.decision.state] : 0;
     if (leftState !== rightState) return leftState - rightState;
-
-    const settled = Number(left.routing.autoSettled) - Number(right.routing.autoSettled);
-    if (settled !== 0) return settled;
 
     // Lockfiles are generated dependency bookkeeping: one delegated decision
     // per file, always after source and tests rather than mixed into either.
@@ -143,7 +164,5 @@ export function nextReviewDirectorDecisionId(
     .sort((left, right) => orderedDecisions.indexOf(left.decision) - orderedDecisions.indexOf(right.decision));
   const currentIndex = pending.findIndex((entry) => entry.decision.id === currentId);
   const next = pending[currentIndex + 1] ?? pending.find((entry) => entry.decision.id !== currentId);
-  return next?.decision.id
-    ?? orderedDecisions.find((decision) => decision.id !== currentId)?.id
-    ?? null;
+  return next?.decision.id ?? null;
 }

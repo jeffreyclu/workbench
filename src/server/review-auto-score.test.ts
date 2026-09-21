@@ -185,6 +185,52 @@ describe('background review scoring', () => {
     expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')).toMatchObject({ autoReviewed: 1 });
   });
 
+  it('persists proof-settled Automatic work as reviewed without spending a model turn', async () => {
+    const repository = newRepository();
+    const item = repository.create({ title: 'Automatic review', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
+    getWorkspaceDiff.mockResolvedValue({
+      ...diffWith(1),
+      files: [{
+        path: 'src/format.ts', status: 'modified' as const, additions: 1, deletions: 1, isBinary: false,
+        patch: '@@ -1 +1 @@ format\n-const value = 1;\n+const value=1;',
+      }],
+    });
+
+    await scheduleReviewAutoScore(repository, { workItemId: item.id }, process.cwd());
+
+    expect(requestReviewAssist).not.toHaveBeenCalled();
+    expect(requestCriticalReviewAssist).not.toHaveBeenCalled();
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([
+      expect.objectContaining({ state: 'reviewed', note: 'Reviewed automatically by Review Director: deterministic proof.' }),
+    ]);
+  });
+
+  it('delegates and auto-reviews a critical decision when its completed score is 2', async () => {
+    const repository = newRepository();
+    const item = repository.create({ title: 'Low scored critical review', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
+    getWorkspaceDiff.mockResolvedValue({
+      ...diffWith(1),
+      files: [{
+        path: 'src/server/auth.ts', status: 'modified' as const, additions: 1, deletions: 1, isBinary: false,
+        patch: '@@ -1 +1 @@ authorize\n-return deny(request);\n+return authorize(request);',
+      }],
+    });
+    requestCriticalReviewAssist.mockResolvedValue({
+      score_risk: 'SCORE: 2\nMechanical and safe.',
+      explain: 'The change is safe and bounded.',
+      what_could_break: 'No concrete breakage is visible.',
+      compare_task_intent: 'Aligned.',
+    });
+
+    await scheduleReviewAutoScore(repository, { workItemId: item.id }, process.cwd());
+
+    expect(requestCriticalReviewAssist).toHaveBeenCalledTimes(1);
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([
+      expect.objectContaining({ state: 'reviewed', note: 'Reviewed automatically by Review Director.' }),
+    ]);
+    expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')).toMatchObject({ autoReviewed: 1 });
+  });
+
   it('prepares every critical field instead of stopping after the risk score', async () => {
     const repository = newRepository();
     const item = repository.create({ title: 'Protect authorization', description: 'Keep denied requests denied.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });

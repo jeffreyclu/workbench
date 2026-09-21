@@ -38,6 +38,32 @@ describe('Review Director', () => {
     expect(plan.criticalDecisionIds.has(critical.decision.id)).toBe(true);
   });
 
+  it('delegates a human-owned decision once its AI risk score is 20 or lower', () => {
+    const initial = createReviewDirectorPlan([
+      file('src/auth.ts', '@@ -1 +1 @@ authorize\n-return deny(request);\n+return authorize(request);'),
+    ], []);
+    const decision = initial.decisions[0];
+    const rescored = createReviewDirectorPlan([
+      file('src/auth.ts', '@@ -1 +1 @@ authorize\n-return deny(request);\n+return authorize(request);'),
+    ], [], new Map([[decision.id, 2]]));
+
+    expect(initial.entries[0]).toMatchObject({ tier: 'T3', delegated: false });
+    expect(rescored.entries[0]).toMatchObject({ tier: 'T1', delegated: true, autoReview: true, critical: false });
+    expect(rescored.entries[0].routing.reason).toContain('2/100');
+  });
+
+  it('keeps proof-settled work behind unfinished work and never navigates back into it', () => {
+    const plan = createReviewDirectorPlan([
+      file('src/live.ts', '@@ -1 +1 @@ live\n-before\n+after'),
+      file('src/format.ts', '@@ -1 +1 @@ format\n-const value = 1;\n+const value=1;'),
+    ], []);
+    const active = plan.entries.find((entry) => !entry.routing.autoSettled)!;
+    const automatic = plan.entries.find((entry) => entry.routing.autoSettled)!;
+
+    expect(plan.orderedDecisions.map((decision) => decision.id)).toEqual([active.decision.id, automatic.decision.id]);
+    expect(nextReviewDirectorDecisionId(plan, active.decision.id)).toBeNull();
+  });
+
   it('puts every decision claimed by delegation behind human-owned work without disturbing either priority order', () => {
     const plan = createReviewDirectorPlan([
       file('src/first.ts', '@@ -1 +1 @@ first\n-before\n+after'),

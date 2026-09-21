@@ -24,7 +24,7 @@ function StateIcon({ state }: { state: ReviewDecision['state'] }) {
  * state-coloured fill, a distinct icon, and the written state in its accessible
  * name — because colour alone is not readable for everyone.
  */
-export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ decisions, selectedId, onSelect, commentCounts, delegating, escalations }: {
+export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ decisions, selectedId, onSelect, commentCounts, delegating, escalations, automatic }: {
   decisions: ReviewDecision[];
   selectedId: string;
   onSelect: (decisionId: string) => void;
@@ -37,12 +37,19 @@ export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ d
   /** A completed delegated turn that asked for human judgment, with the exact
    * evidence it said was missing. */
   escalations?: ReadonlyMap<string, string>;
+  /** Proof-settled decisions count as approved immediately, including during
+   * the brief optimistic write that persists their reviewed verdict. */
+  automatic?: ReadonlySet<string>;
 }) {
-  const settled = decisions.filter((decision) => decision.state !== null).length;
+  const settled = decisions.filter((decision) => decision.state !== null || automatic?.has(decision.id)).length;
   // Enforce the supervisor boundary at the rendering edge too. Callers use
   // the same order for navigation, but the visible queue must remain correct
   // even if a new surface passes the Director's base priority order directly.
-  const orderedDecisions = deferDelegatedReviewDecisions(decisions, delegating ?? new Set());
+  const handledLast = [
+    ...decisions.filter((decision) => decision.state === null && !automatic?.has(decision.id)),
+    ...decisions.filter((decision) => decision.state !== null || automatic?.has(decision.id)),
+  ];
+  const orderedDecisions = deferDelegatedReviewDecisions(handledLast, delegating ?? new Set());
   const selectedButton = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -64,17 +71,19 @@ export const DiffReviewDecisionQueue = memo(function DiffReviewDecisionQueue({ d
         const commentCount = commentCounts?.get(decision.id) ?? 0;
         const awaiting = decision.state === null && Boolean(delegating?.has(decision.id));
         const escalation = decision.state === null ? escalations?.get(decision.id) : undefined;
+        const approvedAutomatically = Boolean(automatic?.has(decision.id));
+        const visibleState = decision.state ?? (approvedAutomatically ? 'reviewed' : null);
         return <li key={decision.id}>
           <button
             type="button"
             ref={selected ? selectedButton : undefined}
-            className={`state-${decision.state ?? 'pending'}${decision.state === null ? '' : ' settled'}${awaiting ? ' delegating' : ''}${escalation ? ' escalated' : ''}${selected ? ' selected' : ''}`}
+            className={`state-${visibleState ?? 'pending'}${visibleState === null ? '' : ' settled'}${awaiting ? ' delegating' : ''}${escalation ? ' escalated' : ''}${selected ? ' selected' : ''}`}
             aria-current={selected ? 'step' : undefined}
-            aria-label={`Decision ${decision.ordinal}: ${decision.behavior} — ${reviewStateLabel(decision.state)}${risks.length > 0 ? ` · ${risks.length} risk signals` : ''}${commentCount > 0 ? ` · ${commentCount} review comments` : ''}${awaiting ? ' · awaiting delegated review' : ''}${escalation ? ` · delegated review needs human review: ${escalation}` : ''}`}
+            aria-label={`Decision ${decision.ordinal}: ${decision.behavior} — ${approvedAutomatically ? 'Approved automatically' : reviewStateLabel(decision.state)}${risks.length > 0 ? ` · ${risks.length} risk signals` : ''}${commentCount > 0 ? ` · ${commentCount} review comments` : ''}${awaiting ? ' · awaiting delegated review' : ''}${escalation ? ` · delegated review needs human review: ${escalation}` : ''}`}
             onClick={() => onSelect(decision.id)}
           >
             <b>{decision.ordinal}</b>
-            <StateIcon state={decision.state} />
+            <StateIcon state={visibleState} />
             {awaiting && <LoaderCircle className="spin diff-review-queue-delegating" size={10} aria-hidden="true" />}
             {escalation && <TriangleAlert className="diff-review-queue-escalated" size={10} aria-hidden="true" />}
             {risks.length > 0 && <span className="diff-review-queue-risk-dot" title={risks.join(', ')} aria-hidden="true" />}

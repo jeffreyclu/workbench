@@ -417,6 +417,15 @@ silent non-verdict. Review Director moves it back into the human-owned queue,
 marks it as needing review, and shows the evidence or context the delegated
 model said was missing.
 
+AI risk is routing input, not a decorative badge. Once a completed score is
+20/100 or lower, Review Director delegates that decision even if the earlier
+text heuristic priced it for human review. `Automatic` is likewise a completed
+verdict, not a visual label: proof-settled decisions are persisted as reviewed,
+count as approved immediately, stay behind unfinished work, and are never
+selected by next-decision navigation. This was corrected after PR #1255 showed
+a 2/100 documentation decision remaining human-owned while 22 Automatic
+decisions still appeared pending.
+
 *Presentation and latency correction from Jeffrey, 2026-09-17.* A critical
 decision's AI risk, explanation, breakage analysis, and task alignment are
 produced in one bounded structured model turn, then stored in their existing

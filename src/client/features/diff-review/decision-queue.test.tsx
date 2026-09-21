@@ -73,6 +73,22 @@ describe('diff review decision queue', () => {
     expect(screen.getByText('3 of 4 reviewed')).toBeInTheDocument();
   });
 
+  it('counts an Automatic decision as approved and keeps it behind unfinished work', () => {
+    render(<DiffReviewDecisionQueue
+      decisions={[decisions[0], decision(5, null)]}
+      selectedId={decisions[0].id}
+      onSelect={vi.fn()}
+      automatic={new Set([decisions[0].id])}
+    />);
+
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.map((button) => button.querySelector('b')?.textContent)).toEqual(['5', '1']);
+    expect(buttons[1]).toHaveAccessibleName(/Approved automatically/);
+    expect(buttons[1].className).toContain('state-reviewed');
+    expect(buttons[1].className).toContain('settled');
+    expect(screen.getByText('1 of 2 reviewed')).toBeInTheDocument();
+  });
+
   it('marks a completed delegation that explicitly asks for human review', () => {
     render(<DiffReviewDecisionQueue decisions={decisions} selectedId={decisions[0].id} onSelect={vi.fn()} escalations={new Map([[decisions[0].id, 'Call sites outside this diff were unavailable.']])} />);
 

@@ -18,6 +18,7 @@ export type { StaleReference, StaleReferenceReport } from '../../../shared/stale
 export type { CoverageEvidence, ReferenceEvidence } from '../../../shared/coverage-evidence.js';
 import { countChangedLines, hunkContext, hunkLocation, splitPatchHunks } from '../../../shared/review-decisions.js';
 import type { ReviewDecision, ReviewRiskSignal } from '../../../shared/review-decisions.js';
+import { parseAiRiskScore } from '../../../shared/review-risk-score.js';
 
 
 const STATE_ORDER: Record<DiffHunkReviewState, number> = { needs_changes: 1, commented: 2, reviewed: 3 };
@@ -140,14 +141,7 @@ export function buildFileDiffHunks(file: Pick<WorkspaceDiffFile, 'path' | 'patch
  * reason. Parsing is strict on purpose: an answer that ignores the format is
  * shown as plain text instead of being coerced into a number the model never
  * committed to, so a bad turn is visible rather than silently neutral. */
-export function parseAiRiskScore(answer: string | undefined | null): { score: number; reason: string } | null {
-  if (!answer) return null;
-  const match = /^\s*SCORE:\s*(\d{1,3})\s*$/im.exec(answer);
-  if (!match) return null;
-  const score = Number(match[1]);
-  if (score > 100) return null;
-  return { score, reason: answer.slice(match.index + match[0].length).trim() };
-}
+export { parseAiRiskScore };
 
 /** Three bands, because a bare number carries no judgement: the reviewer should
  * be able to read severity from the colour without doing arithmetic. */
