@@ -1326,6 +1326,8 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
       // This diagnostic drives the fresh-session recovery path below; retain
       // it verbatim while keeping ordinary handoff prose out of the error.
       if (/no conversation found with session id/i.test(resultText)) return resultText;
+      const providerFailure = providerFailureSignal(resultText);
+      if (providerFailure) return providerFailure;
       const subtype = typeof event.subtype === 'string' ? event.subtype : null;
       return subtype ? `Claude ended the turn with ${subtype}.` : 'Claude reported a terminal error.';
     }

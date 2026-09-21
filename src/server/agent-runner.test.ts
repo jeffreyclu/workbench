@@ -515,6 +515,18 @@ describe('classifyExecution', () => {
       .rejects.toThrow('Claude ended the turn with error_max_turns.');
   });
 
+  it('preserves a Claude subscription denial and falls back to Codex', async () => {
+    const denied = JSON.stringify({
+      type: 'result', subtype: 'success', is_error: true,
+      result: 'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead',
+    });
+    const completed = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Codex completed the synthesis.' } });
+    const fixture = fakeAgentDirectory(`printf '%s\n' '${completed}'`, `printf '%s\n' '${denied}'`);
+
+    await expect(runAgentCommandWithFallback('claude', fixture.directory, 'Synthesize the reports.'))
+      .resolves.toMatchObject({ output: 'Codex completed the synthesis.', agent: 'codex', fallbackFrom: 'claude' });
+  });
+
   it('recovers an expired Claude session through the same supervised fresh-session lifecycle', async () => {
     const countFile = join(tmpdir(), `workbench-expired-session-${Date.now()}`);
     const promptFile = join(tmpdir(), `workbench-expired-session-prompts-${Date.now()}`);
