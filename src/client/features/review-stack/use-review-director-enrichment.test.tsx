@@ -62,4 +62,16 @@ describe('useReviewDirectorEnrichment', () => {
     await waitFor(() => expect(screen.getByText('1/1/0')).toBeInTheDocument());
     expect(requests).toEqual([{ url: '/api/review-assist/critical', taskIntent: null }]);
   });
+
+  it('does not count a failed request as fully enriched', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'provider unavailable' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>);
+
+    await waitFor(() => expect(screen.getByText('0/1/1')).toBeInTheDocument());
+  });
 });

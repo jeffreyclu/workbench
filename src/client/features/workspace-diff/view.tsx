@@ -857,7 +857,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 {(delegation.running || delegation.failed > 0 || delegation.skipped > 0) && <p className="muted" role="status">
                   {delegation.running
                     ? `Delegating — ${delegation.completed} of ${delegation.total} decisions answered.`
-                    : `${delegation.completed} of ${delegation.total} decisions delegated.`}
+                    : `${delegation.completed} of ${delegation.total} delegated decisions answered.`}
                   {delegation.failed > 0 && ` ${delegation.failed} could not be answered and are still owed.`}
                 </p>}
                 {activeEscalations.size > 0 && <p className="review-director-escalation-status" role="alert">{activeEscalations.size} delegated {activeEscalations.size === 1 ? 'decision needs' : 'decisions need'} your review.</p>}

@@ -97,6 +97,11 @@ function EscalationHarness({ targets, onEscalations }: { targets: DelegationTarg
   return null;
 }
 
+function ProgressHarness({ targets }: { targets: DelegationTarget[] }) {
+  const progress = useDelegatedReview({ targets, siblings: [], taskIntent: null, revision: 'rev-1', enabled: true });
+  return <output>{progress.completed}/{progress.total}/{progress.failed}</output>;
+}
+
 describe('useDelegatedReview', () => {
   // A running count told a reviewer that some sweep was working; it never told
   // them whether the change they were looking at was the one still waiting.
@@ -217,5 +222,17 @@ describe('useDelegatedReview', () => {
     render(<EscalationHarness targets={[{ decisionId: decision.id, decision, tier: 'T1' }]} onEscalations={(escalations) => seen.push(escalations)} />);
 
     await waitFor(() => expect(seen.at(-1)?.get(decision.id)).toContain('call sites outside this diff'));
+  });
+
+  it('does not report a failed request as an answered decision', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'provider unavailable' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const [decision] = decisions();
+
+    const view = render(<ProgressHarness targets={[{ decisionId: decision.id, decision, tier: 'T1' }]} />);
+
+    await waitFor(() => expect(view.getByText('0/1/1')).toBeTruthy());
   });
 });

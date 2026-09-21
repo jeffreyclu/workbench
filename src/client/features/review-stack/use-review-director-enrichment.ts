@@ -71,9 +71,9 @@ export function useReviewDirectorEnrichment(input: {
 
         if (!cancelled) setProgress((current) => ({
           ...current,
-          completed: current.completed + 1,
+          completed: current.completed + Number(!failed),
           failed: current.failed + Number(failed),
-          running: current.completed + 1 < current.total,
+          running: current.completed + current.failed + 1 < current.total,
           riskScores: score ? new Map(current.riskScores).set(entry.decision.id, score) : current.riskScores,
         }));
       }

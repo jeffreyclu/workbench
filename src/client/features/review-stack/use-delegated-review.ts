@@ -199,7 +199,7 @@ export function useDelegatedReview(input: {
         // revision: the reviewer can still ask about it directly, and a
         // retry loop against a broken endpoint spends without informing.
         settlePending(pendingCounts.current, target.decisionId);
-        setProgress((current) => ({ ...current, completed: current.completed + 1, failed: current.failed + 1, pending: pendingSnapshot(pendingCounts.current) }));
+        setProgress((current) => ({ ...current, failed: current.failed + 1, pending: pendingSnapshot(pendingCounts.current) }));
       }
     }
     run.workers -= 1;

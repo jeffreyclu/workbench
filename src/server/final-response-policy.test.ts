@@ -38,6 +38,12 @@ describe('final response policy', () => {
     expect(responseStyleViolation(long, { verbose: true })).toBeNull();
   });
 
+  it('does not reject a concise review because one evidence bullet is long', () => {
+    const review = `## Problem\nOne blocking issue was found.\n\n## Solution\n- The migration writes both old and new records before switching readers, but the linked rollback path still reads only the old record and needs to be updated before merge: [src/server/migrate.ts:42](https://github.com/example/repository/blob/abcdef/src/server/migrate.ts#L42).\n\n## Context\nThe rest of the diff is non-blocking.`;
+
+    expect(responseStyleViolation(review, { review: true })).toBeNull();
+  });
+
   it('removes a decision preamble without flattening section lists', () => {
     const draft = `Decision: answer directly.\n\n## Problem\nHardware roles are buried in software listings.\n\n## Solution\nUse targeted sources:\n\n1. [IEEE Job Site](https://jobs.ieee.org)\n2. [iHireEngineering](https://www.ihireengineering.com)\n\n## Context\nPrioritize the specialist boards.`;
     const normalized = normalizeFinalResponse(draft);

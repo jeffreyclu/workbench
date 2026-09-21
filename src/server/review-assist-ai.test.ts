@@ -164,7 +164,7 @@ describe('requestReviewAssist caching', () => {
       .find((prompt) => typeof prompt === 'string');
     expect(systemPrompt).toContain('*.test.*');
     expect(systemPrompt).toContain('Read the path before judging the lines.');
-    expect(systemPrompt).toContain('Global brevity rule');
+    expect(systemPrompt).not.toContain('Global brevity rule');
   });
 
   it('reports a failed turn instead of silently caching a neutral placeholder', async () => {
@@ -253,6 +253,62 @@ describe('Palmyra review-assist parity', () => {
     } finally {
       if (previousKey === undefined) delete process.env.WRITER_API_KEY;
       else process.env.WRITER_API_KEY = previousKey;
+      vi.doUnmock('./providers/palmyra.js');
+    }
+  });
+
+  it('falls back to Palmyra when Claude subscription access is disabled and caches the answer', async () => {
+    vi.resetModules();
+    const previousKey = process.env.WRITER_API_KEY;
+    process.env.WRITER_API_KEY = 'test-key';
+    const spawn = vi.fn(() => {
+      const emitter = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter & { setEncoding?: (encoding: string) => void };
+        stderr: EventEmitter;
+        stdin: EventEmitter & { write: (chunk: string) => void };
+        kill: () => void;
+      };
+      emitter.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+      emitter.stderr = new EventEmitter();
+      let turns = 0;
+      emitter.stdin = Object.assign(new EventEmitter(), {
+        write: () => {
+          const priming = turns++ === 0;
+          queueMicrotask(() => emitter.stdout.emit('data', `${JSON.stringify({
+            type: 'result',
+            is_error: !priming,
+            result: priming ? 'ready' : 'Your organization has disabled Claude subscription access for Claude Code.',
+          })}\n`));
+        },
+      });
+      emitter.kill = () => {};
+      return emitter;
+    });
+    const streamChatWithPalmyra = vi.fn(async () => ({
+      content: 'Palmyra recovered the delegated review.',
+      toolCalls: [],
+      usage: { inputTokens: 10, outputTokens: 5 },
+      finishReason: 'stop',
+    }));
+    vi.doMock('node:child_process', () => ({ spawn }));
+    vi.doMock('./providers/palmyra.js', async () => ({
+      ...(await vi.importActual<typeof import('./providers/palmyra.js')>('./providers/palmyra.js')),
+      streamChatWithPalmyra,
+    }));
+    try {
+      const { requestReviewAssist } = await import('./review-assist-ai.js');
+      const database = openDatabase(':memory:');
+
+      await expect(requestReviewAssist(database, 'score_risk', decision, null, undefined, null, 'claude'))
+        .resolves.toBe('Palmyra recovered the delegated review.');
+      await expect(requestReviewAssist(database, 'score_risk', decision, null, undefined, null, 'claude'))
+        .resolves.toBe('Palmyra recovered the delegated review.');
+      expect(streamChatWithPalmyra).toHaveBeenCalledTimes(1);
+      database.close();
+    } finally {
+      if (previousKey === undefined) delete process.env.WRITER_API_KEY;
+      else process.env.WRITER_API_KEY = previousKey;
+      vi.doUnmock('node:child_process');
       vi.doUnmock('./providers/palmyra.js');
     }
   });

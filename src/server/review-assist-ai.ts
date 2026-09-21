@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { AiProviderChoice, ResolvedAiProvider } from '../shared/ai-providers.js';
-import { palmyraMaxOutputTokens, streamChatWithPalmyra } from './providers/palmyra.js';
+import { isPalmyraConfigured, palmyraMaxOutputTokens, streamChatWithPalmyra } from './providers/palmyra.js';
 import { resolveAiProvider } from './providers/provider-choice.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkbenchDatabase } from './database.js';
@@ -8,7 +8,6 @@ import { changeTypeLabel, isReviewChangeType, type ReviewChangeType } from '../s
 import { REVIEW_ASSIST_CONFIDENCE_PREFIX, REVIEW_ASSIST_MISSING_PREFIX, type ReviewAssistTier } from '../shared/contracts.js';
 import { auditCitations, auditReferenceClaims, citationAuditNote, referenceClaimNote, type CoverageEvidence, type ReferenceEvidence } from '../shared/coverage-evidence.js';
 import { auditParityTable, parityAuditNote, parityTableApplies, PARITY_DIRECTIVE } from '../shared/parity-table.js';
-import { GLOBAL_BREVITY_CONTRACT } from './final-response-policy.js';
 
 export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent' | 'score_risk';
 
@@ -40,7 +39,6 @@ export type ReviewAssistTaskIntent = { title: string; description: string } | nu
  * only ever keep one of them warm for the button a reviewer actually clicks. */
 const CHANGES_AGENT_SYSTEM_PROMPT = [
   'You assist a code reviewer reading one diff decision at a time in Workbench.',
-  GLOBAL_BREVITY_CONTRACT,
   'Every user message is self-contained: answer only from that message and ignore anything earlier in this session.',
   // Judging a changed assertion as production risk was the single most common
   // wrong answer this surface produced: the model read the lines and never the
@@ -74,7 +72,7 @@ const CHANGES_AGENT_SYSTEM_PROMPT = [
  * handed the whole queue back to the reviewer with extra steps. Those answers
  * are cached judgements made against the wrong question and must not survive
  * the fix. */
-const ASSIST_PROMPT_VERSION = 10;
+const ASSIST_PROMPT_VERSION = 11;
 
 // Answer length is the dominant latency term once the session is primed:
 // measured on this machine a warm turn spends ~0.9s on session overhead and the
@@ -473,25 +471,43 @@ function dispatchTurn(worker: AssistWorker, prompt: string, timeoutMs: number, o
   });
 }
 
-/** An answer plus which model actually produced it, so a Palmyra request that
- * fell back to Claude is never written under the Palmyra cache key. */
+/** An answer plus which model actually produced it for fallback diagnostics. */
 type AssistAnswer = { answer: string; provider: ResolvedAiProvider };
+
+async function runPalmyraOnly(prompt: string, spend: AssistSpend, onDelta?: (text: string) => void): Promise<string> {
+  const result = await streamChatWithPalmyra({
+    messages: [{ role: 'system', content: CHANGES_AGENT_SYSTEM_PROMPT }, { role: 'user', content: prompt }],
+    maxTokens: palmyraMaxOutputTokens(),
+    timeoutMs: spend.timeoutMs,
+  }, { onContent: (delta) => onDelta?.(delta) });
+  const answer = result.content?.trim() ?? '';
+  if (!answer) throw new Error('Palmyra returned no answer.');
+  return answer;
+}
 
 /** Palmyra uses the same incremental answer contract as Claude so the slowest
  * review tier never leaves the reviewer staring at a spinner. */
 async function runPalmyraTurn(prompt: string, spend: AssistSpend, onDelta?: (text: string) => void): Promise<AssistAnswer> {
   try {
-    const result = await streamChatWithPalmyra({
-      messages: [{ role: 'system', content: CHANGES_AGENT_SYSTEM_PROMPT }, { role: 'user', content: prompt }],
-      maxTokens: palmyraMaxOutputTokens(),
-      timeoutMs: spend.timeoutMs,
-    }, { onContent: (delta) => onDelta?.(delta) });
-    const answer = result.content?.trim() ?? '';
-    if (!answer) throw new Error('Palmyra returned no answer.');
-    return { answer, provider: 'palmyra' };
+    return { answer: await runPalmyraOnly(prompt, spend, onDelta), provider: 'palmyra' };
   } catch (error) {
     console.warn(`[palmyra] review assist fell back to Claude: ${error instanceof Error ? error.message : String(error)}`);
     return { answer: await runClaudeTurn(prompt, spend, onDelta), provider: 'claude' };
+  }
+}
+
+/** Review assistance is infrastructure, not a provider loyalty surface. A
+ * disabled Claude subscription used to fail every delegated and critical
+ * decision even while the configured Writer model was available. Try the
+ * selected provider first, then the other configured provider exactly once. */
+async function runProviderTurn(provider: ResolvedAiProvider, prompt: string, spend: AssistSpend, onDelta?: (text: string) => void): Promise<AssistAnswer> {
+  if (provider === 'palmyra') return runPalmyraTurn(prompt, spend, onDelta);
+  try {
+    return { answer: await runClaudeTurn(prompt, spend, onDelta), provider: 'claude' };
+  } catch (error) {
+    if (!isPalmyraConfigured()) throw error;
+    console.warn(`[claude] review assist fell back to Palmyra: ${error instanceof Error ? error.message : String(error)}`);
+    return { answer: await runPalmyraOnly(prompt, spend, onDelta), provider: 'palmyra' };
   }
 }
 
@@ -602,13 +618,12 @@ export async function requestReviewAssist(
   const request = (async () => {
     const prompt = buildPrompt(action, decision, taskIntent, tier);
     const spend = spendFor(tier);
-    const turn = resolvedProvider === 'palmyra'
-      ? await runPalmyraTurn(prompt, spend, onDelta)
-      : { answer: await runClaudeTurn(prompt, spend, onDelta), provider: 'claude' as const };
+    const turn = await runProviderTurn(resolvedProvider, prompt, spend, onDelta);
     const answer = withAnswerAudits(action, decision, turn.answer);
-    // A fallback answer came from the other model; caching it under this key
-    // would serve it back the next time this provider is asked.
-    if (turn.provider === resolvedProvider) writeCached(database, hash, answer);
+    // The question is provider-independent. Cache a successful fallback under
+    // the requested key too, or every render retries the provider known to be
+    // unavailable before returning the same usable answer.
+    writeCached(database, hash, answer);
     return answer;
   })();
   inFlightRequests.set(hash, request);
@@ -699,17 +714,13 @@ export async function requestCriticalReviewAssist(
   const request = (async () => {
     const prompt = criticalReviewPrompt(decision, taskIntent);
     const spend = spendFor('T3');
-    const turn = resolvedProvider === 'palmyra'
-      ? await runPalmyraTurn(prompt, spend)
-      : { answer: await runClaudeTurn(prompt, spend), provider: 'claude' as const };
+    const turn = await runProviderTurn(resolvedProvider, prompt, spend);
     const parsed = parseCriticalReview(turn.answer, taskIntent);
     const audited = Object.fromEntries(Object.entries(parsed).map(([action, answer]) => [
       action,
       withAnswerAudits(action as ReviewAssistAction, decision, answer),
     ])) as CriticalReviewAnswers;
-    if (turn.provider === resolvedProvider) {
-      for (const action of actions) writeCached(database, hashes.get(action)!, audited[action]!);
-    }
+    for (const action of actions) writeCached(database, hashes.get(action)!, audited[action]!);
     return audited;
   })();
   inFlightCriticalReviews.set(batchHash, request);

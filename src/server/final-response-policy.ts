@@ -6,7 +6,6 @@ Final response: use exactly three Markdown sections in this order: ## Problem, #
 
 const NORMAL_RESPONSE_HARD_LIMIT = 180;
 const REVIEW_RESPONSE_HARD_LIMIT = 350;
-const LINE_WORD_LIMIT = 48;
 
 const STRUCTURED_SECTIONS = /^## Problem\r?\n[\s\S]+?\r?\n\r?\n## Solution\r?\n[\s\S]+?\r?\n\r?\n## Context\r?\n[\s\S]+$/;
 const INLINE_SECTIONS = /^Problem:\s+([\s\S]+?)\s+Solution:\s+([\s\S]+?)\s+Context:\s+([\s\S]+)$/;
@@ -48,10 +47,6 @@ export function responseStyleViolation(output: string, options: { verbose?: bool
   const words = visibleWordCount(output);
   const limit = options.review ? REVIEW_RESPONSE_HARD_LIMIT : NORMAL_RESPONSE_HARD_LIMIT;
   if (words > limit) return `The response is ${words} words; the non-verbose limit is ${limit}.`;
-  const denseLine = output.split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line && !/^#{1,6}\s/.test(line) && visibleWordCount(line) > LINE_WORD_LIMIT);
-  if (denseLine) return `One paragraph is longer than ${LINE_WORD_LIMIT} words and is not immediately scannable.`;
   return null;
 }
 
