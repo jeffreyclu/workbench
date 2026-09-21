@@ -4,7 +4,7 @@ import { buildReviewDecisions, contentHashOfLines } from '../shared/review-decis
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
-import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, isSharedReplyActive, registerActiveReplySteering, runSharedBackgroundJob, superviseConversationAfterReply, synthesisSource } from './shared-room.js';
+import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, isRetryableSynthesisMessage, isSharedReplyActive, registerActiveReplySteering, runSharedBackgroundJob, superviseConversationAfterReply, synthesisSource } from './shared-room.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
@@ -1504,6 +1504,15 @@ describe('WorkItemRepository', () => {
     expect(source?.prompt).not.toContain('Earlier Codex answer');
     expect(source?.requestId).toBe(request.id);
     expect(source?.verbose).toBe(true);
+  });
+
+  it('recognizes a failed synthesis after provider text replaced its placeholder body', () => {
+    const conversation = repository.createConversation('Retry synthesis');
+    const request = repository.createSharedMessage('jeffrey', 'Review it', 'completed', conversation.id, [], 'both');
+    const failed = repository.createSharedMessage('system', 'Your organization has disabled Claude subscription access.', 'failed', conversation.id, [], 'none', null, null, request.id);
+
+    expect(isRetryableSynthesisMessage(failed)).toBe(true);
+    expect(isRetryableSynthesisMessage(repository.createSharedMessage('system', 'Unrelated failure', 'failed', conversation.id))).toBe(false);
   });
 
   it('supervises dual task replies, including two canceled replies, and claims synthesis exactly once', () => {

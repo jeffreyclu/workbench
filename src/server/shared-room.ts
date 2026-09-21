@@ -2170,9 +2170,16 @@ export async function superviseConversationAfterReply(repository: WorkItemReposi
 }
 
 /** Retry a failed system handoff without re-running either underlying agent. */
+export function isRetryableSynthesisMessage(message: SharedMessage | null | undefined): message is SharedMessage {
+  return Boolean(message && message.author === 'system' && message.status === 'failed' && message.dispatchGroupId);
+}
+
 export async function retrySharedSynthesis(repository: WorkItemRepository, failedMessageId: string): Promise<SharedMessage | null> {
   const failed = repository.getSharedMessageById(failedMessageId);
-  if (!failed || failed.author !== 'system' || failed.status !== 'failed' || !failed.body.startsWith('Synthesis:')) return null;
+  // Provider failures replace the live "Synthesis:" placeholder with their
+  // error text. The dispatch-group identity survives and is the durable proof
+  // that this system message belongs to a dual-turn synthesis.
+  if (!isRetryableSynthesisMessage(failed)) return null;
   const candidates = repository.listAllSharedMessages(failed.conversationId)
     .filter((message) => (message.author === 'codex' || message.author === 'claude') && Boolean(message.dispatchGroupId) && message.createdAt <= failed.createdAt)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
