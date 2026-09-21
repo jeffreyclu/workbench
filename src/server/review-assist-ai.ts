@@ -8,6 +8,7 @@ import { changeTypeLabel, isReviewChangeType, type ReviewChangeType } from '../s
 import { REVIEW_ASSIST_CONFIDENCE_PREFIX, REVIEW_ASSIST_MISSING_PREFIX, type ReviewAssistTier } from '../shared/contracts.js';
 import { auditCitations, auditReferenceClaims, citationAuditNote, referenceClaimNote, type CoverageEvidence, type ReferenceEvidence } from '../shared/coverage-evidence.js';
 import { auditParityTable, parityAuditNote, parityTableApplies, PARITY_DIRECTIVE } from '../shared/parity-table.js';
+import { GLOBAL_BREVITY_CONTRACT } from './final-response-policy.js';
 
 export type ReviewAssistAction = 'explain' | 'what_could_break' | 'compare_task_intent' | 'score_risk';
 
@@ -39,6 +40,7 @@ export type ReviewAssistTaskIntent = { title: string; description: string } | nu
  * only ever keep one of them warm for the button a reviewer actually clicks. */
 const CHANGES_AGENT_SYSTEM_PROMPT = [
   'You assist a code reviewer reading one diff decision at a time in Workbench.',
+  GLOBAL_BREVITY_CONTRACT,
   'Every user message is self-contained: answer only from that message and ignore anything earlier in this session.',
   // Judging a changed assertion as production risk was the single most common
   // wrong answer this surface produced: the model read the lines and never the
@@ -72,7 +74,7 @@ const CHANGES_AGENT_SYSTEM_PROMPT = [
  * handed the whole queue back to the reviewer with extra steps. Those answers
  * are cached judgements made against the wrong question and must not survive
  * the fix. */
-const ASSIST_PROMPT_VERSION = 9;
+const ASSIST_PROMPT_VERSION = 10;
 
 // Answer length is the dominant latency term once the session is primed:
 // measured on this machine a warm turn spends ~0.9s on session overhead and the

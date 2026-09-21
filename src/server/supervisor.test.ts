@@ -30,6 +30,8 @@ describe('Workbench supervisor', () => {
 
     expect(prompt).toContain('### Pass 1');
     expect(prompt).toContain('### Pass 5');
+    expect(prompt).toContain('Does it work?');
+    expect(prompt).toContain('never exceed 350 words');
     expect(prompt).toContain('No material issues.');
     expect(prompt).toContain('base and head commit SHAs');
     expect(prompt).toContain('https://github.com/WriterColab/writer-monorepo/pull/16623');
@@ -63,6 +65,22 @@ describe('Workbench supervisor', () => {
       .toEqual({ accepted: true });
   });
 
+  it('enforces global brevity on every category unless this turn explicitly requested verbosity', () => {
+    const longDraft = Array.from({ length: 190 }, (_, index) => `word${index}`).join(' ');
+    for (const kind of kinds.filter((candidate) => candidate !== 'review')) {
+      expect(superviseDraft(kind, longDraft, { investigated: true, executed: true }))
+        .toMatchObject({ accepted: false, code: 'response_style' });
+      expect(superviseDraft(kind, longDraft, { investigated: true, executed: true }, { verbose: true }))
+        .toEqual({ accepted: true });
+    }
+  });
+
+  it('keeps complete five-pass reviews but rejects dense review prose', () => {
+    const dense = `${completeReview}\n\n${Array.from({ length: 360 }, (_, index) => `detail${index}`).join(' ')}`;
+    expect(superviseDraft('review', dense, { investigated: true, executed: false }))
+      .toMatchObject({ accepted: false, code: 'response_style' });
+  });
+
   it('preserves complete review passes through final formatting', async () => {
     const output = await finalizeSupervisedOutput({
       kind: 'review',
@@ -78,6 +96,7 @@ describe('Workbench supervisor', () => {
   it('gives review synthesis the same five-pass contract', () => {
     expect(supervisorSynthesisContract('review')).toContain('### Pass 1');
     expect(supervisorSynthesisContract('review')).toContain('### Pass 5');
+    expect(supervisorSynthesisContract('review')).toContain('never exceed 350 words');
     expect(supervisorSynthesisContract('analysis')).not.toContain('five-pass');
   });
 

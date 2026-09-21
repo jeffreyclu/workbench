@@ -6,6 +6,7 @@ import {
   finalResponseEditingEnabled,
   finalResponsePolicyViolation,
   normalizeFinalResponse,
+  responseStyleViolation,
 } from './final-response-policy.js';
 
 export const FRONTEND_REVIEWER_PERSONA = `
@@ -23,9 +24,10 @@ This is a read-only review. All five passes are static:
   3. Conventions and existing patterns: repository rules, nearby implementations, shared abstractions, API contracts, naming, and consistency with established architecture. Prefer local conventions; recommend a different pattern only when the diff adds avoidable complexity or breaks correctness.
   4. UX issues and bugs: user flows, loading/empty/error/permission states, accessibility, responsive behavior, feedback, recovery, stale UI, races, and confusing or broken interactions.
   5. Security: authentication, authorization, trust boundaries, validation, injection, secrets, privacy, data exposure, and abuse cases.
-- Finish each pass before starting the next. The final review must contain five sections headed exactly "### Pass 1" through "### Pass 5", in order. Inside each section, write every actual finding from that pass with its Blocking or Non-blocking severity, file/line evidence, impact, and recommended change. If a pass found nothing, write exactly "No material issues." Never replace findings with counts or a statement that the pass ran. Deduplicate a cross-cutting finding by placing it in its primary pass and cross-referencing it from another pass only when that adds useful context.
+- Finish each pass before starting the next. Use these plain-English headings in order: "### Pass 1 — Does it work?", "### Pass 2 — Will it stay fast?", "### Pass 3 — Does it fit the codebase?", "### Pass 4 — Is it good for users?", and "### Pass 5 — Is it safe?" Inside each section, write every actual finding from that pass as one compact bullet. Start with Blocking or Non-blocking, say what breaks in plain English, state the fix, then put the file/line evidence in parentheses. Use at most two short sentences per finding. If a pass found nothing, write exactly "No material issues." Never replace findings with counts or a statement that the pass ran. Deduplicate a cross-cutting finding into its primary pass.
 - Label every finding or risk as Blocking or Non-blocking. Give a clear approve/reject conclusion tied to task fulfillment and blocking findings.
-- Keep investigation narration minimal. Return the review, not a transcript of file reads.
+- A finding is a concrete defect or risk with a real impact, not a style preference. Keep the whole review compact: target 120 words and never exceed 350 words unless Jeffrey explicitly requested a verbose response.
+- Return the review, not investigation narration, proof of each search, or a transcript of file reads. Replace phrases such as "parity divergence", "production consumer", "cross-field invariant", and "conflict update" with the concrete thing a person can do or the behavior that will break.
 `.trim();
 
 const CATEGORY_CONTRACTS: Record<AgentRun['kind'], string> = {
@@ -132,12 +134,12 @@ export function hasDeferredExecutionResponse(output: string): boolean {
 
 export type SupervisorDraftDecision = { accepted: true } | {
   accepted: false;
-  code: 'missing_review_passes' | 'premature_evidence_request' | 'deferred_execution' | 'unverified_completion';
+  code: 'missing_review_passes' | 'response_style' | 'premature_evidence_request' | 'deferred_execution' | 'unverified_completion';
   reason: string;
   recoveryRequirement: string;
 };
 
-export function superviseDraft(kind: AgentRun['kind'], output: string, evidence: { investigated: boolean; executed: boolean }): SupervisorDraftDecision {
+export function superviseDraft(kind: AgentRun['kind'], output: string, evidence: { investigated: boolean; executed: boolean }, options: { verbose?: boolean } = {}): SupervisorDraftDecision {
   if (kind === 'review') {
     const missing = missingReviewPasses(output);
     if (missing.length) return {
@@ -146,6 +148,12 @@ export function superviseDraft(kind: AgentRun['kind'], output: string, evidence:
       recoveryRequirement: reviewPassCompletionRequirement(output, missing),
     };
   }
+  const styleProblem = responseStyleViolation(output, { verbose: options.verbose, review: kind === 'review' });
+  if (styleProblem) return {
+    accepted: false, code: 'response_style',
+    reason: `Response broke the global brevity rule. ${styleProblem}`,
+    recoveryRequirement: `Response style retry: return one complete replacement answer. ${styleProblem} Apply the global brevity rule: lead with the result, use plain English and short sentences, remove investigation narration and unexplained engineering shorthand, and use compact bullets for multiple findings. Preserve material findings and exact evidence by shortening each item, not by dropping it. ${kind === 'review' ? 'Keep all five named pass sections. Use one compact bullet per actual finding with the impact, fix, and file/line in parentheses; never exceed 350 words.' : 'Target 120 words and never exceed 180 words.'} This is not a verbose turn.`,
+  };
   if (!evidence.investigated && hasPrematureEvidenceRequest(output)) return {
     accepted: false, code: 'premature_evidence_request',
     reason: 'Agent asked Jeffrey for inspectable evidence without investigating available sources first.',
@@ -192,6 +200,6 @@ export async function finalizeSupervisedOutput(input: {
 
 export function supervisorSynthesisContract(kind: AgentRun['kind'] | null | undefined): string {
   return kind === 'review'
-    ? 'Synthesize the two supplied code reviews into one complete five-pass review. Use exact headings `### Pass 1` through `### Pass 5` in order. Under each heading, retain and reconcile every actual finding from that pass with its `Blocking:` or `Non-blocking:` severity, concrete file/line evidence, impact, and recommended change. If neither reviewer found a material issue in a pass, write exactly `No material issues.` Do not replace findings with counts or a statement that a pass ran.'
+    ? 'Synthesize the two supplied code reviews into one short, plain-English five-pass review. Use these headings in order: `### Pass 1 — Does it work?`, `### Pass 2 — Will it stay fast?`, `### Pass 3 — Does it fit the codebase?`, `### Pass 4 — Is it good for users?`, and `### Pass 5 — Is it safe?` Deduplicate overlap. Under each heading, retain every unique actual finding as one compact bullet: severity, what breaks, the fix, then file/line evidence in parentheses. Use at most two short sentences per finding. If neither reviewer found a material issue in a pass, write exactly `No material issues.` Lead with approve or reject and the human consequence. Do not repeat investigation mechanics or unexplained engineering shorthand. Target 120 words and never exceed 350 words unless Jeffrey explicitly asked for a verbose response.'
     : 'Write a concise synthesis of the two supplied agent responses below.';
 }

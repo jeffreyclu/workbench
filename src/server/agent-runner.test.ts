@@ -1212,7 +1212,8 @@ fi`,
     expect(prompt).toContain('3. Conventions and existing patterns');
     expect(prompt).toContain('4. UX issues and bugs');
     expect(prompt).toContain('5. Security');
-    expect(prompt).toContain('five sections headed exactly "### Pass 1" through "### Pass 5"');
+    expect(prompt).toContain('### Pass 1 — Does it work?');
+    expect(prompt).toContain('### Pass 5 — Is it safe?');
     expect(prompt).toContain('Never replace findings with counts');
     expect(prompt).toContain('Label every finding or risk as Blocking or Non-blocking');
   });

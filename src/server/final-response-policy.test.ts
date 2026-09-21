@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { editFinalResponse, fallbackFinalResponse, FINAL_RESPONSE_CONTRACT, finalResponsePolicyViolation, normalizeFinalResponse, verboseResponseRequested } from './final-response-policy.js';
+import { editFinalResponse, fallbackFinalResponse, FINAL_RESPONSE_CONTRACT, finalResponsePolicyViolation, normalizeFinalResponse, responseStyleViolation, verboseResponseRequested } from './final-response-policy.js';
 
 describe('final response policy', () => {
   it('rejects inline labels that render as one long paragraph', () => {
@@ -30,6 +30,12 @@ describe('final response policy', () => {
     const editor = vi.fn(async () => verbose);
     await expect(editFinalResponse(verbose, 'Explain it verbosely.', { verbose: true }, editor)).resolves.toBe(verbose);
     expect(editor).not.toHaveBeenCalled();
+  });
+
+  it('makes brevity measurable while honoring only an explicit per-turn override', () => {
+    const long = Array.from({ length: 181 }, (_, index) => `word${index}`).join(' ');
+    expect(responseStyleViolation(long)).toContain('non-verbose limit is 180');
+    expect(responseStyleViolation(long, { verbose: true })).toBeNull();
   });
 
   it('removes a decision preamble without flattening section lists', () => {

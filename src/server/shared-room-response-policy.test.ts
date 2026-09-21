@@ -119,13 +119,13 @@ describe('shared-room final response supervision', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
     const conversation = repository.createConversation('Report all results');
-    repository.createSharedMessage('jeffrey', 'Report every result.', 'queued', conversation.id, [], 'claude', 'standard');
+    repository.createSharedMessage('jeffrey', 'Give me a verbose response that reports every result.', 'queued', conversation.id, [], 'claude', 'standard');
 
     const [reply] = dispatchNextSharedTurn(repository, conversation.id);
     await vi.waitFor(() => expect(repository.getSharedMessageById(reply.id)).toMatchObject({ status: 'completed' }));
     const body = repository.getSharedMessageById(reply.id)?.body ?? '';
 
-    expect(body).toContain('## Problem\nReport every result.');
+    expect(body).toContain('## Problem\nGive me a verbose response that reports every result.');
     expect(body).toContain('result-0');
     expect(body).toContain('result-159 FINAL-RESULT');
     expect(body).not.toContain('…');

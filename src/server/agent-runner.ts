@@ -2208,7 +2208,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       investigated: observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_read'),
       executed: observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_write'),
     });
-    const draftDecision = superviseDraft(run.kind, result.output, draftEvidence());
+    const verbose = verboseResponseRequested(`${item.title}\n${run.instructions}`);
+    const draftDecision = superviseDraft(run.kind, result.output, draftEvidence(), { verbose });
     if (!draftDecision.accepted) {
         const retryAgent = result.agent;
         const retryPrompt = `${prompt}\n\n${draftDecision.recoveryRequirement}`;
@@ -2255,7 +2256,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           const combinedCost = priorCost == null && repaired.costUsd == null ? null : (priorCost ?? 0) + (repaired.costUsd ?? 0);
           result = { ...repaired, costUsd: combinedCost };
         }
-        const retryDecision = superviseDraft(run.kind, result.output, draftEvidence());
+        const retryDecision = superviseDraft(run.kind, result.output, draftEvidence(), { verbose });
         if (!retryDecision.accepted) throw new Error(`${retryDecision.reason} The response was rejected after one automatic supervisor retry.`);
     }
     if (result.agent === 'palmyra' && run.conversationId && 'messages' in result && result.messages) {
@@ -2274,7 +2275,6 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         return { title: task.title, description: task.description, workspacePath: typeof task.workspacePath === 'string' ? task.workspacePath : null };
       }) };
     }
-    const verbose = verboseResponseRequested(`${item.title}\n${run.instructions}`);
     const output = await finalizeSupervisedOutput({
       kind: run.kind,
       rawOutput,

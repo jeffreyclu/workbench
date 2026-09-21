@@ -1458,6 +1458,16 @@ The review contract applies again on every resumed turn. Final-response formatti
 may wrap a review in Problem, Solution, and Context, but it may never flatten,
 summarize, or remove the five pass sections after they have been validated.
 
+Correction from Jeffrey, 2026-09-21: global brevity is an agent invariant, not
+optional prompt advice and not a chat-only formatter. The same plain-English,
+short-answer contract is embedded in Codex, Claude, and Palmyra and enforced by
+the conversation supervisor for every execution category, retry, five-pass
+review, and synthesis. Five-pass findings stay complete but use one compact
+bullet each; investigation narration and unexplained engineering shorthand do
+not enter the final answer. Only an explicit request for a verbose response in
+the current turn disables the brevity limit, and that override never persists
+to a later turn.
+
 ### The knowledge graph is a derived SQLite index, never a second source of truth
 
 *Decision from Jeffrey, 2026-09-09; corrected 2026-09-18.* Workbench's canonical

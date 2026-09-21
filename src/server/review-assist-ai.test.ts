@@ -164,6 +164,7 @@ describe('requestReviewAssist caching', () => {
       .find((prompt) => typeof prompt === 'string');
     expect(systemPrompt).toContain('*.test.*');
     expect(systemPrompt).toContain('Read the path before judging the lines.');
+    expect(systemPrompt).toContain('Global brevity rule');
   });
 
   it('reports a failed turn instead of silently caching a neutral placeholder', async () => {
