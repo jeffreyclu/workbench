@@ -135,6 +135,7 @@ describe('classifyExecution', () => {
     expect(isAgentCapacityError(new Error("You've hit your usage limit; resets at 1am"))).toBe(true);
     expect(isAgentCapacityError(new Error("You've hit your session limit · resets 12am (America/New_York)"))).toBe(true);
     expect(isAgentCapacityError(new Error('HTTP 429: too many requests'))).toBe(true);
+    expect(isAgentCapacityError(new Error('Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead'))).toBe(true);
     expect(isAgentCapacityError(new Error('Task implementation failed a test'))).toBe(false);
   });
 

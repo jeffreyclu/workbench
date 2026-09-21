@@ -631,7 +631,7 @@ export function terminalExitCheckpoint(finalOutput: string, progress: string): s
 }
 
 /** Kept in sync with `isTransientAgentError` and `isAgentCapacityError`: those decide retry, and they only see the message. */
-const PROVIDER_FAILURE_SIGNAL = /(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|socket hang up|network|timed out|timeout|5\d\d\b|temporarily unavailable|service unavailable|\b429\b|credit|usage limit|session limit|rate limit|quota|too many requests|hit (?:your|the) limit|limit resets?|capacity)/i;
+const PROVIDER_FAILURE_SIGNAL = /(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|socket hang up|network|timed out|timeout|5\d\d\b|temporarily unavailable|service unavailable|\b429\b|credit|usage limit|session limit|rate limit|quota|too many requests|hit (?:your|the) limit|limit resets?|capacity|subscription access|API key instead|admin to enable access)/i;
 
 function providerFailureSignal(...sources: string[]): string {
   for (const source of sources) {
@@ -1721,7 +1721,7 @@ export async function runAgentCommand(agent: CliAgent, cwd: string, prompt: stri
 
 export function isAgentCapacityError(value: unknown): boolean {
   const message = value instanceof Error ? value.message : String(value);
-  return /(?:\b429\b|credit|usage limit|session limit|rate limit|quota|too many requests|hit (?:your|the) limit|limit resets?|capacity)/i.test(message);
+  return /(?:\b429\b|credit|usage limit|session limit|rate limit|quota|too many requests|hit (?:your|the) limit|limit resets?|capacity|subscription access|API key instead|admin to enable access)/i.test(message);
 }
 
 /**

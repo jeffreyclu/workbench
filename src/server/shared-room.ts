@@ -2128,7 +2128,7 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
   await runSharedBackgroundJob(repository, message.id, async (signal, onProgress) => {
     const runSynthesis = (prompt: string) => runAgentCommandWithFallback(agent, process.cwd(), prompt, onProgress, signal, undefined, profile, (usage) => {
       repository.updateSharedMessage(message.id, { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens });
-    }, undefined, undefined, undefined, undefined, undefined, undefined, false, false);
+    }, undefined, undefined, undefined, undefined, undefined, undefined, false, true);
     let result = await runSynthesis(source.prompt);
     const decision = superviseDraft(source.kind, result.output, { investigated: true, executed: true }, { verbose: source.verbose });
     if (!decision.accepted) {
