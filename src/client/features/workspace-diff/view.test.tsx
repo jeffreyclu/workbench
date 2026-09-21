@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRunReviewHandoff, DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { contentHashOfLines } from '../../../shared/review-decisions.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
+import type { ReviewAssistTaskIntent } from '../diff-review/review-assist.js';
 import { WorkspaceDiffView } from './view.js';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -24,10 +25,10 @@ function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision')
 
 /** Review Director work is backgrounded by the source that owns each diff;
  * tests still reject obsolete `/api/diff-confidence` requests. */
-function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[], onFixRequest?: (prompt: string) => void, scope: WorkspaceDiffScope = { workItemId: 'work-item-1' }) {
+function renderView(fetchMock: ReturnType<typeof vi.fn>, isRunning = false, reviewHandoff?: AgentRunReviewHandoff | null, pullRequestUrlCandidates?: string[], onFixRequest?: (prompt: string) => void, scope: WorkspaceDiffScope = { workItemId: 'work-item-1' }, taskIntent: ReviewAssistTaskIntent = null) {
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={scope} isRunning={isRunning} reviewHandoff={reviewHandoff} pullRequestUrlCandidates={pullRequestUrlCandidates} onFixRequest={onFixRequest} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><WorkspaceDiffView scope={scope} isRunning={isRunning} reviewHandoff={reviewHandoff} taskIntent={taskIntent} pullRequestUrlCandidates={pullRequestUrlCandidates} onFixRequest={onFixRequest} /></QueryClientProvider>);
 }
 
 /**
@@ -720,15 +721,21 @@ describe('WorkspaceDiffView pull-request source', () => {
       if (url.includes('/api/review-auto-score')) return json({ snapshot: null });
       if (url.endsWith('/api/review-assist/critical')) {
         actions.push('critical_review');
-        return json({ answers: { score_risk: 'SCORE: 80\nAuthorization boundary.', explain: 'Prepared.', what_could_break: '- Denied requests could pass.' } });
+        return json({ answers: { score_risk: 'SCORE: 80\nAuthorization boundary.', explain: 'Prepared.', what_could_break: '- Denied requests could pass.', compare_task_intent: 'Matches the authorization task.' } });
       }
+      if (url.endsWith('/api/review-assist/lookup')) return json({ answer: null });
       throw new Error(`Unexpected request: ${url}`);
     });
-    renderView(fetchMock, false, null, [pullRequestUrl]);
+    renderView(fetchMock, false, null, [pullRequestUrl], undefined, undefined, { title: 'Protect authorization', description: 'Keep unauthorized callers out.' });
 
     await findSelectedDecision('authorize request');
     await waitFor(() => expect(actions).toEqual(['critical_review']));
     expect(screen.getByText('Review Director — 1 of 1 critical decisions fully enriched.')).toBeInTheDocument();
+    await openDecisionDetail(1);
+    expect(screen.getByLabelText('Review Director explanation')).toHaveTextContent('Prepared.');
+    expect(screen.getByLabelText('Review Director breakage analysis')).toHaveTextContent('Denied requests could pass.');
+    expect(screen.getByLabelText('Review Director task alignment')).toHaveTextContent('Matches the authorization task.');
+    expect(screen.queryByText('Preparing…')).not.toBeInTheDocument();
   });
 
   it('routes a 2/100 PR decision to delegation and persists Automatic decisions as approved', async () => {
@@ -765,7 +772,10 @@ describe('WorkspaceDiffView pull-request source', () => {
         explain: 'The change is bounded.',
         what_could_break: 'No concrete breakage is visible.',
       } });
-      if (url.endsWith('/api/review-assist')) return json({ answer: 'The change is bounded.\nCONFIDENCE: high' });
+      if (url.endsWith('/api/review-assist')) {
+        const action = (JSON.parse(String(init?.body)) as { action: string }).action;
+        return json({ answer: action === 'score_risk' ? 'SCORE: 2\nMechanical and safe.\nCONFIDENCE: high' : 'The change is bounded.\nCONFIDENCE: high' });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
     renderView(fetchMock, false, null, [pullRequestUrl]);
@@ -773,7 +783,7 @@ describe('WorkspaceDiffView pull-request source', () => {
     await waitFor(() => expect(writes).toHaveLength(2));
     expect(writes.map((write) => write.note)).toEqual(expect.arrayContaining([
       'Reviewed automatically by Review Director: deterministic proof.',
-      'Reviewed automatically by Review Director.',
+      'Reviewed automatically by Review Director: AI risk 20/100 or lower.',
     ]));
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/review-assist'))).toBe(true);
     expect(screen.getByText('2 of 2 reviewed')).toBeInTheDocument();

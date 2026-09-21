@@ -24,7 +24,10 @@ function Harness({ withTask = true }: { withTask?: boolean }) {
     revision: 'pr-revision',
     enabled: true,
   });
-  return <output data-score={[...progress.riskScores.values()][0] ?? ''}>{progress.completed}/{progress.total}/{progress.failed}</output>;
+  return <output
+    data-score={[...progress.riskScores.values()][0] ?? ''}
+    data-explanation={[...progress.answers.values()][0]?.explain ?? ''}
+  >{progress.completed}/{progress.total}/{progress.failed}</output>;
 }
 
 afterEach(() => {
@@ -47,6 +50,7 @@ describe('useReviewDirectorEnrichment', () => {
     await waitFor(() => expect(screen.getByText('1/1/0')).toBeInTheDocument());
     expect(requests).toEqual([{ url: '/api/review-assist/critical', taskIntent: { title: 'Protect authorization', description: 'Keep unauthorized callers out.' } }]);
     expect(screen.getByText('1/1/0')).toHaveAttribute('data-score', 'prepared');
+    expect(screen.getByText('1/1/0')).toHaveAttribute('data-explanation', 'prepared');
   });
 
   it('does not invent task alignment when no task is linked', async () => {
@@ -73,5 +77,17 @@ describe('useReviewDirectorEnrichment', () => {
     render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>);
 
     await waitFor(() => expect(screen.getByText('0/1/1')).toBeInTheDocument());
+  });
+
+  it('does not count a partial response as fully enriched', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      answers: { score_risk: 'SCORE: 10\nLow risk.', explain: 'Prepared.' },
+    }), { headers: { 'Content-Type': 'application/json' } })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>);
+
+    await waitFor(() => expect(screen.getByText('0/1/1')).toBeInTheDocument());
+    expect(screen.getByText('0/1/1')).toHaveAttribute('data-explanation', '');
   });
 });

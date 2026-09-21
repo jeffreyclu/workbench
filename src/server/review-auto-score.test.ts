@@ -169,7 +169,7 @@ describe('background review scoring', () => {
     expect(publishRealtimeReviewScore).toHaveBeenCalledTimes(4);
   });
 
-  it('persists a confident delegated verdict so the queue is already settled when opened', async () => {
+  it('keeps a confident delegated verdict owed when its risk score is above 20', async () => {
     const repository = newRepository();
     const item = repository.create({ title: 'Automated review', description: 'Review the change.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: process.cwd(), dueDate: null });
     getWorkspaceDiff.mockResolvedValue(diffWith(1));
@@ -179,10 +179,8 @@ describe('background review scoring', () => {
 
     await scheduleReviewAutoScore(repository, { workItemId: item.id }, process.cwd());
 
-    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([
-      expect.objectContaining({ state: 'reviewed', note: 'Reviewed automatically by Review Director.' }),
-    ]);
-    expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')).toMatchObject({ autoReviewed: 1 });
+    expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([]);
+    expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')).toMatchObject({ autoReviewed: 0 });
   });
 
   it('persists proof-settled Automatic work as reviewed without spending a model turn', async () => {
@@ -226,7 +224,7 @@ describe('background review scoring', () => {
 
     expect(requestCriticalReviewAssist).toHaveBeenCalledTimes(1);
     expect(repository.listDiffHunkReviews({ workItemId: item.id }, 'rev-1')).toEqual([
-      expect.objectContaining({ state: 'reviewed', note: 'Reviewed automatically by Review Director.' }),
+      expect.objectContaining({ state: 'reviewed', note: 'Reviewed automatically by Review Director: AI risk 20/100 or lower.' }),
     ]);
     expect(reviewAutoScoreSnapshot({ workItemId: item.id }, 'rev-1')).toMatchObject({ autoReviewed: 1 });
   });

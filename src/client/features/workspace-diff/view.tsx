@@ -491,10 +491,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   }, [hunkReviews.isSuccess, reviewPlan, reviewRevision, upsertHunkReview]);
 
   // The same delegation Review runs, against the hunk decisions Changes owns.
-  // A confident T1 answer records the reviewed verdict through the identical
-  // writer the buttons use, so it persists, reconciles, and can be reopened
-  // exactly like one Jeffrey gave. Every delegated tier may close itself when
-  // its answer is confident; critical T3 decisions never delegate.
+  // A valid score of 20 or lower plus a confident T1 explanation records the
+  // reviewed verdict through the identical writer the buttons use, so it
+  // persists, reconciles, and can be reopened exactly like one Jeffrey gave.
+  // Higher risk, missing scores, low confidence, and T2 stay owed.
   // This pane spends three kinds of AI turn — block scoring, the background
   // auto-score, and the delegated sweep — and until now offered no way to say
   // which model buys them. The selector writes the shared browser-local
@@ -881,7 +881,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={detailAnchor.simple ? undefined : <>
                       <DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />
                     </>} onClose={() => setDetailAnchor(null)}>
-                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={riskScoreResults.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null} critical={reviewPlan.criticalDecisionIds.has(popoverDecision.id)} escalation={activeEscalations.get(popoverDecision.id)} hideJudging={detailAnchor.simple}>
+                      <DiffReviewDecisionDetailCard key={popoverDecision.id} decision={popoverDecision} decisions={decisions} taskIntent={taskIntent} autoScore={riskScoreResults.get(popoverDecision.id)} preparedAnswers={directorEnrichment.answers.get(popoverDecision.id)} staleReferences={staleReferences.data?.report ?? null} tier={decisionTiers.get(popoverDecision.id) ?? null} critical={reviewPlan.criticalDecisionIds.has(popoverDecision.id)} escalation={activeEscalations.get(popoverDecision.id)} hideJudging={detailAnchor.simple}>
                         <DiffReviewActions key={popoverDecision.id} saving={false} error={upsertHunkReview.isError ? upsertHunkReview.error.message : null} onSave={(state) => saveDecision(popoverDecision, state)} onFix={onFixRequest ? () => requestFix(popoverDecision) : undefined} onSkip={() => skipDecision(popoverDecision)} />
                       </DiffReviewDecisionDetailCard>
                     </DecisionPopover>}

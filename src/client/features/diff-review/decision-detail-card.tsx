@@ -1,4 +1,4 @@
-import { memo, useState, type ReactNode } from 'react';
+import { memo, useMemo, useState, type ReactNode } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 import { sourceClient } from '../../data/source-client.js';
@@ -7,7 +7,7 @@ import { DiffReviewHeuristicPanel } from './heuristic-panel.js';
 import type { ReviewDecision, StaleReferenceReport } from './logic.js';
 import { aiRiskBand, parseAiRiskScore, reviewAssistDecisionPayload } from './logic.js';
 import type { AutoScoreResult } from './auto-score.js';
-import { ACTION_LABELS, EXPLAIN_ACTIONS, useCachedReviewAssistAnswers, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist.js';
+import { ACTION_LABELS, EXPLAIN_ACTIONS, useCachedReviewAssistAnswers, type CachedAssistAnswers, type ReviewAssistAction, type ReviewAssistTaskIntent } from './review-assist.js';
 import { AiProviderSelect } from '../../components/ai-provider-select.js';
 import { useAiProvider } from '../../hooks/ai-provider.js';
 import type { ReviewAssistTier } from '../../../shared/contracts.js';
@@ -25,7 +25,7 @@ export type { ReviewAssistAction, ReviewAssistTaskIntent };
  * lives on the block's gutter marker instead, so the panel only carries what
  * has to be asked for.
  */
-export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, tier = null, critical = false, escalation = null, hideJudging = false, children }: {
+export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDetailCard({ decision, taskIntent, autoScore, preparedAnswers, titleId = 'diff-review-decision-title', decisions = [], staleReferences = null, tier = null, critical = false, escalation = null, hideJudging = false, children }: {
   decision: ReviewDecision;
   taskIntent: ReviewAssistTaskIntent;
   /** Result of the background pass that scores a diff once its agent comes to
@@ -33,6 +33,9 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
    * has reached this decision yet, which is different from a pass that tried
    * and failed — that arrives with `error` set and stays retryable. */
   autoScore?: AutoScoreResult;
+  /** Answers returned by the active Review Director sweep. These are the same
+   * object its completion count validated, and win over an older cache read. */
+  preparedAnswers?: CachedAssistAnswers;
   titleId?: string;
   /** Every decision in the review. Supplies the coverage-evidence pack, which
    * is how a new function's tests — always a different decision, since they
@@ -76,7 +79,8 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
   // paying a cold start. This read shares that hook's query, so an answer
   // already warmed is on screen the moment the popover opens.
   const cachedAssistAnswers = useCachedReviewAssistAnswers(decision, taskIntent, decisions, tier);
-  const cachedScore = cachedAssistAnswers.data?.score_risk ?? autoScore?.answer ?? undefined;
+  const displayedAnswers = useMemo(() => ({ ...cachedAssistAnswers.data, ...preparedAnswers }), [cachedAssistAnswers.data, preparedAnswers]);
+  const cachedScore = displayedAnswers.score_risk ?? autoScore?.answer ?? undefined;
 
   // The freshest score wins: a just-finished rescore before the cache read that
   // will eventually agree with it.
@@ -142,14 +146,14 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
     {!hideJudging && critical && <section className="diff-review-director-analysis" aria-labelledby="diff-review-director-title">
       <h4 id="diff-review-director-title">Review Director analysis</h4>
       <dl>
-        <div><dt>Explanation</dt><dd>{cachedAssistAnswers.data?.explain
-          ? <MarkdownViewer id={`${decision.id}-explanation`} value={cachedAssistAnswers.data.explain} ariaLabel="Review Director explanation" />
+        <div><dt>Explanation</dt><dd>{displayedAnswers.explain
+          ? <MarkdownViewer id={`${decision.id}-explanation`} value={displayedAnswers.explain} ariaLabel="Review Director explanation" />
           : 'Preparing…'}</dd></div>
-        <div><dt>What could break</dt><dd>{cachedAssistAnswers.data?.what_could_break
-          ? <MarkdownViewer id={`${decision.id}-breakage`} value={cachedAssistAnswers.data.what_could_break} ariaLabel="Review Director breakage analysis" />
+        <div><dt>What could break</dt><dd>{displayedAnswers.what_could_break
+          ? <MarkdownViewer id={`${decision.id}-breakage`} value={displayedAnswers.what_could_break} ariaLabel="Review Director breakage analysis" />
           : 'Preparing…'}</dd></div>
-        {taskIntent && <div><dt>Task alignment</dt><dd>{cachedAssistAnswers.data?.compare_task_intent
-          ? <MarkdownViewer id={`${decision.id}-alignment`} value={cachedAssistAnswers.data.compare_task_intent} ariaLabel="Review Director task alignment" />
+        {taskIntent && <div><dt>Task alignment</dt><dd>{displayedAnswers.compare_task_intent
+          ? <MarkdownViewer id={`${decision.id}-alignment`} value={displayedAnswers.compare_task_intent} ariaLabel="Review Director task alignment" />
           : 'Preparing…'}</dd></div>}
       </dl>
     </section>}
@@ -164,7 +168,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       </div>
       <div className="diff-review-ai-assist-actions">
         {EXPLAIN_ACTIONS.map((action) => {
-          const hasCachedAnswer = Boolean(cachedAssistAnswers.data?.[action]);
+          const hasCachedAnswer = Boolean(displayedAnswers[action]);
           return <button
             key={action}
             type="button"

@@ -210,7 +210,7 @@ async function runScoreJob(repository: WorkItemRepository, scope: ReviewScoreSco
         const delegated = isDelegatedTier(effectiveRouting.tier);
         if (delegated && decision.state === null) {
           delegatedAnswer ??= await requestWithRetry(repository, 'explain', { ...entry, tier: effectiveRouting.tier, routing: effectiveRouting }, plan.decisions, taskIntent);
-          if (delegationOutcome(effectiveRouting.tier, delegatedAnswer).autoReview) {
+          if (delegationOutcome(effectiveRouting.tier, delegatedAnswer, answer).autoReview) {
             try {
               repository.upsertDiffHunkReviews(scope, {
                 revision: diff.revision,

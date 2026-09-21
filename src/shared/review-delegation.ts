@@ -1,5 +1,6 @@
 import type { ReviewDecision } from './review-decisions.js';
-import { assistEscalationReason } from './review-escalation.js';
+import { assistAnswersEscalationReason } from './review-escalation.js';
+import { LOW_RISK_DELEGATION_MAX, parseAiRiskScore } from './review-risk-score.js';
 import type { ReviewTier } from './review-routing.js';
 
 /**
@@ -11,18 +12,18 @@ import type { ReviewTier } from './review-routing.js';
  * open first. *Auto-reviewing* is accepting the answer as the verdict, and
  * that is only defensible where routing already said the question is bounded.
  *
- * T1 and T2 are both delegated and may close themselves when the model signs
- * off confidently. T3 is critical study and T0 already settled by proof, so
- * neither spends a delegated turn at all.
+ * T1 and T2 are both delegated. Only a scored, genuinely low-risk T1 may
+ * close itself. T2 still gets a model read, but remains a human verdict. T3 is
+ * critical study and T0 already settled by proof, so neither spends a
+ * delegated turn at all.
  */
 export function isDelegatedTier(tier: ReviewTier): boolean {
   return tier === 'T1' || tier === 'T2';
 }
 
-/** Every delegated tier may close itself when its answer is confident. T3 is
- * never delegated: it remains the critical human-review tier. */
+/** Only the lowest review tier is ever eligible to close itself. */
 export function delegationAutoReviews(tier: ReviewTier): boolean {
-  return isDelegatedTier(tier);
+  return tier === 'T1';
 }
 
 export interface DelegationOutcome {
@@ -40,9 +41,23 @@ export interface DelegationOutcome {
  * Jeffrey's queue with the model's own reason attached, and an empty answer —
  * a failed turn — is not evidence of anything.
  */
-export function delegationOutcome(tier: ReviewTier, answer: string | null | undefined): DelegationOutcome {
-  const escalation = assistEscalationReason(answer);
-  return { autoReview: delegationAutoReviews(tier) && Boolean(answer) && !escalation, escalation };
+export function delegationOutcome(
+  tier: ReviewTier,
+  answer: string | null | undefined,
+  scoreAnswer: string | null | undefined,
+): DelegationOutcome {
+  if (!answer) return { autoReview: false, escalation: 'Delegated review did not return an explanation.' };
+  const confidenceFailure = assistAnswersEscalationReason([answer, scoreAnswer]);
+  if (confidenceFailure) return { autoReview: false, escalation: confidenceFailure };
+  const score = parseAiRiskScore(scoreAnswer);
+  if (!score) return { autoReview: false, escalation: 'Delegated review did not return a valid risk score.' };
+  if (score.score > LOW_RISK_DELEGATION_MAX) {
+    return { autoReview: false, escalation: `AI risk score ${score.score}/100 needs review.` };
+  }
+  if (!delegationAutoReviews(tier)) {
+    return { autoReview: false, escalation: 'Delegated review recommends a human read.' };
+  }
+  return { autoReview: true, escalation: null };
 }
 
 /** A change waiting on a delegated turn, and the tier it was priced at. */

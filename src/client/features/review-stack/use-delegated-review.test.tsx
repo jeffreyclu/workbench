@@ -8,6 +8,8 @@ import { useDelegatedReview } from './use-delegated-review.js';
 
 const CONFIDENT = `It renames a local.\n${REVIEW_ASSIST_CONFIDENCE_PREFIX} high`;
 const UNCONFIDENT = `It might touch callers.\n${REVIEW_ASSIST_CONFIDENCE_PREFIX} low\n${REVIEW_ASSIST_MISSING_PREFIX} the call sites outside this diff`;
+const LOW_SCORE = `SCORE: 2\nMechanical and bounded.\n${REVIEW_ASSIST_CONFIDENCE_PREFIX} high`;
+const HIGH_SCORE = `SCORE: 24\nTouches production behavior.\n${REVIEW_ASSIST_CONFIDENCE_PREFIX} high`;
 
 function file(path: string, patch: string): WorkspaceDiffFile {
   return { path, status: 'modified', additions: 0, deletions: 0, previousPath: null, patch, isBinary: false, editorUrl: null };
@@ -28,8 +30,11 @@ function Harness({ targets, onAutoReview }: { targets: DelegationTarget[]; onAut
   return null;
 }
 
-function stubAssist(answer: string) {
-  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ answer }), { headers: { 'Content-Type': 'application/json' } }));
+function stubAssist(answer: string, scoreAnswer = LOW_SCORE) {
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const action = (JSON.parse(String(init?.body)) as { action: string }).action;
+    return new Response(JSON.stringify({ answer: action === 'score_risk' ? scoreAnswer : answer }), { headers: { 'Content-Type': 'application/json' } });
+  });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
@@ -52,20 +57,22 @@ describe('delegation policy', () => {
     expect(isDelegatedTier('T3')).toBe(false);
   });
 
-  it('lets every confident delegated answer close its change', () => {
-    expect(delegationOutcome('T1', CONFIDENT).autoReview).toBe(true);
-    expect(delegationOutcome('T2', CONFIDENT).autoReview).toBe(true);
+  it('only closes a T1 change with a valid risk score of 20 or lower', () => {
+    expect(delegationOutcome('T1', CONFIDENT, LOW_SCORE).autoReview).toBe(true);
+    expect(delegationOutcome('T1', CONFIDENT, HIGH_SCORE)).toMatchObject({ autoReview: false, escalation: 'AI risk score 24/100 needs review.' });
+    expect(delegationOutcome('T2', CONFIDENT, LOW_SCORE)).toMatchObject({ autoReview: false, escalation: 'Delegated review recommends a human read.' });
+    expect(delegationOutcome('T1', CONFIDENT, null)).toMatchObject({ autoReview: false, escalation: 'Delegated review did not return a valid risk score.' });
   });
 
   it('keeps an unconfident answer owed and carries what it lacked', () => {
-    const outcome = delegationOutcome('T1', UNCONFIDENT);
+    const outcome = delegationOutcome('T1', UNCONFIDENT, LOW_SCORE);
     expect(outcome.autoReview).toBe(false);
     expect(outcome.escalation).toContain('call sites outside this diff');
   });
 
   it('treats a failed turn as no evidence rather than a sign-off', () => {
-    expect(delegationOutcome('T1', null).autoReview).toBe(false);
-    expect(delegationOutcome('T1', '').autoReview).toBe(false);
+    expect(delegationOutcome('T1', null, LOW_SCORE).autoReview).toBe(false);
+    expect(delegationOutcome('T1', '', LOW_SCORE).autoReview).toBe(false);
   });
 });
 
@@ -107,9 +114,10 @@ describe('useDelegatedReview', () => {
   // them whether the change they were looking at was the one still waiting.
   it('names the change whose delegated turn is in flight and stops naming it once answered', async () => {
     let deliver: (() => void) | undefined;
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
-      await new Promise<void>((resolve) => { deliver = resolve; });
-      return new Response(JSON.stringify({ answer: CONFIDENT }), { headers: { 'Content-Type': 'application/json' } });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const action = (JSON.parse(String(init?.body)) as { action: string }).action;
+      if (action === 'explain') await new Promise<void>((resolve) => { deliver = resolve; });
+      return new Response(JSON.stringify({ answer: action === 'score_risk' ? LOW_SCORE : CONFIDENT }), { headers: { 'Content-Type': 'application/json' } });
     });
     vi.stubGlobal('fetch', fetchMock);
     const [decision] = decisions();
@@ -131,7 +139,7 @@ describe('useDelegatedReview', () => {
     const view = render(<Harness targets={targets} onAutoReview={(target) => autoReviewed.push(target.decisionId)} />);
     await settle();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]![0])).toContain('/api/review-assist');
     expect(autoReviewed).toEqual([decision.id]);
 
@@ -139,7 +147,7 @@ describe('useDelegatedReview', () => {
     // again: the attempt is claimed before the request leaves.
     view.rerender(<Harness targets={[{ decisionId: decision.id, decision, tier: 'T1' }]} onAutoReview={(target) => autoReviewed.push(target.decisionId)} />);
     await settle();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(autoReviewed).toEqual([decision.id]);
   });
 
@@ -151,9 +159,10 @@ describe('useDelegatedReview', () => {
   // revision is never delegated at all.
   it('gives back what an interrupted sweep never spent and finishes the revision', async () => {
     const gates: Array<() => void> = [];
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       await new Promise<void>((resolve) => { gates.push(resolve); });
-      return new Response(JSON.stringify({ answer: CONFIDENT }), { headers: { 'Content-Type': 'application/json' } });
+      const action = (JSON.parse(String(init?.body)) as { action: string }).action;
+      return new Response(JSON.stringify({ answer: action === 'score_risk' ? LOW_SCORE : CONFIDENT }), { headers: { 'Content-Type': 'application/json' } });
     });
     vi.stubGlobal('fetch', fetchMock);
     const open = async () => {
@@ -179,18 +188,18 @@ describe('useDelegatedReview', () => {
 
     view.rerender(<GatedHarness targets={targets} enabled onAutoReview={record} />);
     await settle();
-    for (let round = 0; round < 6 && autoReviewed.length < 4; round += 1) await open();
+    for (let round = 0; round < 12 && autoReviewed.length < 4; round += 1) await open();
 
     expect([...autoReviewed].sort()).toEqual(all.map((decision) => decision.id).sort());
   });
 
-  it('auto-reviews a confident T2 decision because every delegated tier is automated', async () => {
+  it('keeps a confident, low-scored T2 decision for a human verdict', async () => {
     stubAssist(CONFIDENT);
     const [decision] = decisions();
     const autoReviewed: string[] = [];
     render(<Harness targets={[{ decisionId: decision.id, decision, tier: 'T2' }]} onAutoReview={(target) => autoReviewed.push(target.decisionId)} />);
     await settle();
-    expect(autoReviewed).toEqual([decision.id]);
+    expect(autoReviewed).toEqual([]);
   });
 
   it('queues every delegated decision instead of stopping at an arbitrary review-size cap', async () => {
@@ -203,7 +212,7 @@ describe('useDelegatedReview', () => {
     />);
 
     await waitFor(() => expect(autoReviewed).toHaveLength(61));
-    expect(fetchMock).toHaveBeenCalledTimes(61);
+    expect(fetchMock).toHaveBeenCalledTimes(122);
   });
 
   it('leaves a change owed when the delegated answer is not confident', async () => {

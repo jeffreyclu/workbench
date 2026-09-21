@@ -4,7 +4,7 @@ import type { ReviewDirectorEntry } from '../../../shared/review-director.js';
 import { reviewAssistDecisionPayload, type ReviewDecision } from '../../../shared/review-decisions.js';
 import { sourceClient } from '../../data/source-client.js';
 import { useAiProvider } from '../../hooks/ai-provider.js';
-import type { ReviewAssistTaskIntent } from '../diff-review/review-assist.js';
+import type { CachedAssistAnswers, ReviewAssistTaskIntent } from '../diff-review/review-assist.js';
 
 const ENRICHMENT_CONCURRENCY = 2;
 
@@ -16,9 +16,13 @@ export interface ReviewDirectorEnrichmentProgress {
   /** Scores returned by the same critical pass. The queue consumes them as
    * routing input instead of rendering them as decorative metadata. */
   riskScores: ReadonlyMap<string, string>;
+  /** The exact answers counted as complete. The detail panel renders these
+   * directly, so its content cannot lag behind the completion counter while a
+   * separate cache lookup catches up. */
+  answers: ReadonlyMap<string, CachedAssistAnswers>;
 }
 
-const IDLE: ReviewDirectorEnrichmentProgress = { running: false, completed: 0, total: 0, failed: 0, riskScores: new Map() };
+const IDLE: ReviewDirectorEnrichmentProgress = { running: false, completed: 0, total: 0, failed: 0, riskScores: new Map(), answers: new Map() };
 
 /**
  * Completes the Review Director's critical analysis for diff sources the
@@ -48,7 +52,7 @@ export function useReviewDirectorEnrichment(input: {
 
     let cancelled = false;
     let cursor = 0;
-    setProgress({ running: true, completed: 0, total: critical.length, failed: 0, riskScores: new Map() });
+    setProgress({ running: true, completed: 0, total: critical.length, failed: 0, riskScores: new Map(), answers: new Map() });
 
     const enrichNext = async (): Promise<void> => {
       for (;;) {
@@ -59,12 +63,18 @@ export function useReviewDirectorEnrichment(input: {
 
         let failed = false;
         let score: string | null = null;
+        let prepared: CachedAssistAnswers | null = null;
         const payload = reviewAssistDecisionPayload(entry.decision, input.decisions);
         try {
           const response = await sourceClient.requestCriticalReviewAssist({ decision: payload, taskIntent: input.taskIntent, provider });
-          score = response.answers.score_risk ?? null;
+          const required = entry.enrichmentActions.filter((action) => action !== 'compare_task_intent' || input.taskIntent);
+          if (!required.every((action) => Boolean(response.answers[action]?.trim()))) {
+            throw new Error('Review Director returned an incomplete critical analysis.');
+          }
+          prepared = response.answers;
+          score = prepared.score_risk ?? null;
           if (cancelled) return;
-          await queryClient.invalidateQueries({ queryKey: ['review-assist-cache', entry.decision.id] });
+          void queryClient.invalidateQueries({ queryKey: ['review-assist-cache', entry.decision.id] });
         } catch {
           failed = true;
         }
@@ -75,6 +85,7 @@ export function useReviewDirectorEnrichment(input: {
           failed: current.failed + Number(failed),
           running: current.completed + current.failed + 1 < current.total,
           riskScores: score ? new Map(current.riskScores).set(entry.decision.id, score) : current.riskScores,
+          answers: prepared ? new Map(current.answers).set(entry.decision.id, prepared) : current.answers,
         }));
       }
     };

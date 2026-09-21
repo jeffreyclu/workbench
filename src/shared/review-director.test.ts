@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkspaceDiffFile } from './contracts.js';
-import { createReviewDirectorPlan, deferDelegatedReviewDecisions, nextReviewDirectorDecisionId, REVIEW_DIRECTOR_CRITICAL_ACTIONS } from './review-director.js';
+import type { DiffHunkReview, WorkspaceDiffFile } from './contracts.js';
+import { createReviewDirectorPlan, DELEGATED_REVIEW_NOTE, deferDelegatedReviewDecisions, LEGACY_DELEGATED_REVIEW_NOTE, nextReviewDirectorDecisionId, REVIEW_DIRECTOR_CRITICAL_ACTIONS } from './review-director.js';
 
 function file(path: string, patch: string): WorkspaceDiffFile {
   return {
@@ -99,5 +99,24 @@ describe('Review Director', () => {
     expect(lockfile).toMatchObject({ tier: 'T1', delegated: true, autoReview: true });
     expect(lockfile?.decision.hunks).toHaveLength(2);
     expect(plan.orderedDecisions.at(-1)?.id).toBe(lockfile?.decision.id);
+  });
+
+  it('reopens legacy delegated approvals while preserving verdicts created by the score gate', () => {
+    const changed = file('src/feature.ts', '@@ -1 +1 @@ feature\n-before\n+after');
+    const base = createReviewDirectorPlan([changed], []);
+    const hunk = base.decisions[0].hunks[0];
+    const review = (note: string): DiffHunkReview => ({
+      id: note,
+      revision: 'rev-1',
+      filePath: hunk.filePath,
+      hunkRange: hunk.hunkRange,
+      contentHash: hunk.contentHash,
+      state: 'reviewed',
+      note,
+      updatedAt: '2026-09-21T00:00:00.000Z',
+    });
+
+    expect(createReviewDirectorPlan([changed], [review(LEGACY_DELEGATED_REVIEW_NOTE)]).decisions[0].state).toBeNull();
+    expect(createReviewDirectorPlan([changed], [review(DELEGATED_REVIEW_NOTE)]).decisions[0].state).toBe('reviewed');
   });
 });

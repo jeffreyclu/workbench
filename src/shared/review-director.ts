@@ -37,7 +37,10 @@ export interface ReviewDirectorPlan {
 }
 
 export const AUTOMATIC_PROOF_REVIEW_NOTE = 'Reviewed automatically by Review Director: deterministic proof.';
-export const DELEGATED_REVIEW_NOTE = 'Reviewed automatically by Review Director.';
+/** Versioned wording separates verdicts proven by the current score gate from
+ * legacy delegated approvals that treated comprehension as safety. */
+export const DELEGATED_REVIEW_NOTE = 'Reviewed automatically by Review Director: AI risk 20/100 or lower.';
+export const LEGACY_DELEGATED_REVIEW_NOTE = 'Reviewed automatically by Review Director.';
 
 /** The deterministic router runs before model work. Once a score exists, it
  * must feed the same plan rather than remain a decorative badge. A very low
@@ -69,7 +72,10 @@ export function createReviewDirectorPlan(
   reviews: DiffHunkReview[],
   aiRiskScores: ReadonlyMap<string, number> = new Map(),
 ): ReviewDirectorPlan {
-  const decisions = buildReviewDecisions(files, reviews);
+  // The old delegated policy auto-approved every confident explanation,
+  // including T2 and unscored changes. Preserve those rows in storage for
+  // auditability, but do not let them settle today's queue.
+  const decisions = buildReviewDecisions(files, reviews.filter((review) => review.note !== LEGACY_DELEGATED_REVIEW_NOTE));
   const changeMap = buildChangeMap(decisions);
   const nodes = new Map(changeMap.nodes.map((node) => [node.id, node]));
   const outgoing = new Map<string, number>();

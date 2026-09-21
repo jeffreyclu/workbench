@@ -30,11 +30,11 @@ export const EXPLAIN_ACTIONS = ASSIST_ACTIONS.filter((action) => action !== 'sco
 
 export type CachedAssistAnswers = Partial<Record<ReviewAssistAction, string>>;
 
-function cacheKey(decisionId: string, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null, provider: AiProviderChoice) {
+function cacheKey(decisionId: string, taskIntent: ReviewAssistTaskIntent, tier: ReviewAssistTier | null, provider: AiProviderChoice, decisionPayload: ReturnType<typeof reviewAssistDecisionPayload> | null) {
   // Tier and provider are part of the key for the same reason they are part of
   // the server's cache hash: a T1 skim and a T3 study are different answers,
   // and so are two models.
-  return ['review-assist-cache', decisionId, taskIntent?.title, taskIntent?.description, tier, provider];
+  return ['review-assist-cache', decisionId, taskIntent?.title, taskIntent?.description, tier, provider, decisionPayload];
 }
 
 /** Cache-only reads: a reviewer (or another window) who already asked this
@@ -47,7 +47,7 @@ export function useCachedReviewAssistAnswers(decision: ReviewDecision | null, ta
   const decisionPayload = decision ? reviewAssistDecisionPayload(decision, siblings) : null;
   const { provider } = useAiProvider();
   return useQuery({
-    queryKey: cacheKey(decision?.id ?? '', taskIntent, tier, provider),
+    queryKey: cacheKey(decision?.id ?? '', taskIntent, tier, provider, decisionPayload),
     enabled: Boolean(decisionPayload),
     // A cache lookup is cheap and is automatically repeated when the decision
     // or diff changes. Retrying a deterministic 4xx four times only hammers the

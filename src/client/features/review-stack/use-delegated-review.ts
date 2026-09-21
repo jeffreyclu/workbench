@@ -173,18 +173,26 @@ export function useDelegatedReview(input: {
         // existed.
         const fileContext = await (latest.current.loadFileContext?.(target).catch(() => []) ?? Promise.resolve([]));
         if (run.cancelled) { abandon(target); break; }
-        const { answer } = await sourceClient.requestReviewAssist({
-          action: 'explain',
+        const provider = readAiProvider();
+        const requestBase = {
           decision: reviewAssistDecisionPayload(target.decision, latest.current.siblings, fileContext),
           taskIntent: latest.current.taskIntent,
           tier: target.tier,
-          provider: readAiProvider(),
+          provider,
+        };
+        const { answer } = await sourceClient.requestReviewAssist({
+          action: 'explain',
+          ...requestBase,
+        });
+        const { answer: scoreAnswer } = await sourceClient.requestReviewAssist({
+          action: 'score_risk',
+          ...requestBase,
         });
         // The answer is bought and server-side cached, but nothing here applied
         // it. Owing the change again costs a cache hit, not another turn.
         if (run.cancelled) { abandon(target); break; }
         if (answer) latest.current.onAnswer?.(target.decisionId, answer);
-        const outcome = delegationOutcome(target.tier, answer);
+        const outcome = delegationOutcome(target.tier, answer, scoreAnswer);
         if (outcome.autoReview) latest.current.onAutoReview?.(target);
         settlePending(pendingCounts.current, target.decisionId);
         setProgress((current) => {
