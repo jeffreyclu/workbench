@@ -97,6 +97,29 @@ describe('outbound policy', () => {
     await expect(loop('https://api.github.com/again')).rejects.toMatchObject({ code: 'OUTBOUND_REDIRECT_BLOCKED' });
   });
 
+  it('follows GitHub Actions log redirects without sending the GitHub credential to Azure', async () => {
+    const seen: Array<{ url: string; headers: Headers }> = [];
+    const fetch = createOutboundFetch('github-actions-api', {
+      resolve: publicDns,
+      transport: async (input, init) => {
+        seen.push({ url: String(input), headers: new Headers(init?.headers) });
+        return seen.length === 1
+          ? response('', { status: 302, headers: { location: 'https://productionresultssa11.blob.core.windows.net/actions-results/job.txt' } })
+          : response('job log');
+      },
+    });
+
+    expect(await (await fetch('https://api.github.com/repos/writer/repo/actions/jobs/123/logs', {
+      headers: { Authorization: 'Bearer github-secret' },
+    })).text()).toBe('job log');
+    expect(seen.map((entry) => entry.url)).toEqual([
+      'https://api.github.com/repos/writer/repo/actions/jobs/123/logs',
+      'https://productionresultssa11.blob.core.windows.net/actions-results/job.txt',
+    ]);
+    expect(seen[0].headers.get('authorization')).toBe('Bearer github-secret');
+    expect(seen[1].headers.get('authorization')).toBeNull();
+  });
+
   it('enforces the response size limit before reading and while streaming', async () => {
     const tooLarge = createOutboundFetch('github-api', { resolve: publicDns, transport: async () => response('', { headers: { 'content-length': String(2 * 1024 * 1024 + 1) } }) });
     await expect(tooLarge('https://api.github.com/')).rejects.toMatchObject({ code: 'OUTBOUND_RESPONSE_TOO_LARGE' });

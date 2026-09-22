@@ -46,6 +46,8 @@ Workbench's MCP surface exposes `search_external_sources` and `resolve_external_
 agents can make read-only external calls through those same Workbench-owned connections when prompt
 prefetching is insufficient. These tools are open-world but read-only: credentials remain server-side,
 results are normalized by the connection broker, and no external mutation capability is implied.
+GitHub Actions job links are resolved by the supervisor into a shared failed-step and log snapshot;
+agents must not fetch the same job independently.
 
 ### No personal phone on corporate tailnet
 

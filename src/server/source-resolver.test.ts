@@ -49,6 +49,59 @@ describe('source URL resolution', () => {
     expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ headers: expect.objectContaining({ Authorization: 'Bearer workbench-github-token' }) });
   });
 
+  it('resolves a GitHub Actions job to its failed step and log evidence', async () => {
+    const policies: string[] = [];
+    const fetchImpl = vi.fn(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = String(input);
+      if (url.endsWith('/actions/jobs/106896390065')) {
+        return new Response(JSON.stringify({
+          id: 106896390065,
+          name: 'SmokeStack @smoke 8/8',
+          conclusion: 'failure',
+          html_url: 'https://github.com/WriterColab/writer-monorepo/actions/runs/35772000927/job/106896390065',
+          steps: [
+            { number: 35, name: 'Install browsers', conclusion: 'success' },
+            { number: 36, name: 'Run Playwright smoke (@smoke) shard 8/8', conclusion: 'failure' },
+          ],
+        }), { headers: { 'content-type': 'application/json' } });
+      }
+      expect(url).toContain('/actions/jobs/106896390065/logs');
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer workbench-github-token');
+      return new Response([
+        '2026-09-18T00:01:00.000Z Running 10 tests using 1 worker',
+        '2026-09-18T00:04:00.000Z Timed out waiting 180s for the test suite to run',
+        '2026-09-18T00:04:00.000Z Timed out waiting 180s for the teardown for test suite to run',
+        '2026-09-18T00:04:00.000Z   1 did not run',
+        '2026-09-18T00:04:00.000Z   9 passed (3.0m)',
+        '2026-09-18T00:04:00.000Z   2 errors were not a part of any test',
+        '2026-09-18T00:04:00.000Z ##[error]Process completed with exit code 1.',
+      ].join('\n'));
+    });
+
+    const draft = await resolveSourceUrl('https://github.com/WriterColab/writer-monorepo/actions/runs/35772000927/job/106896390065', {
+      githubSettings: { token: 'workbench-github-token' },
+      fetchForPolicy: (policy) => { policies.push(policy); return fetchImpl as typeof fetch; },
+    });
+
+    expect(policies).toEqual(['github-actions-api']);
+    expect(draft.title).toBe('SmokeStack @smoke 8/8 · failure');
+    expect(draft.description).toContain('Failed step 36: Run Playwright smoke (@smoke) shard 8/8 (failure)');
+    expect(draft.description).toContain('Timed out waiting 180s for the test suite to run');
+    expect(draft.description).toContain('1 did not run');
+    expect(draft.description).toContain('9 passed (3.0m)');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not fall back to a metadata stub when a GitHub Actions log is unavailable', async () => {
+    const fetchImpl = vi.fn(async (input: Parameters<typeof fetch>[0]) => String(input).endsWith('/logs')
+      ? new Response('gone', { status: 410 })
+      : new Response(JSON.stringify({ id: 123, name: 'Smoke', conclusion: 'failure' }), { headers: { 'content-type': 'application/json' } }));
+
+    await expect(resolveSourceUrl('https://github.com/writer/repo/actions/runs/456/job/123', {
+      githubSettings: { token: 'token' }, fetchForPolicy: () => fetchImpl as typeof fetch,
+    })).rejects.toThrow('log could not be downloaded (410)');
+  });
+
   it('does not hide an outbound policy error behind a generic source draft', async () => {
     await expect(resolveSourceUrl('https://github.com/writer/workbench', {
       fetchForPolicy: () => (async () => { throw new OutboundPolicyError('OUTBOUND_URL_BLOCKED', 'blocked'); }) as typeof fetch,

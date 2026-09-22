@@ -22,7 +22,7 @@ export interface OutboundPolicyDependencies {
 }
 
 type HostRule = { hostname: string; subdomains?: boolean; path?: string };
-export type OutboundPolicyName = 'source-page' | 'github-api' | 'gmail-api' | 'linear-api' | 'atlassian-api' | 'grafana-api' | 'palmyra-api' | 'slack-oauth' | 'mcp-slack' | 'mcp-figma' | 'mcp-atlassian';
+export type OutboundPolicyName = 'source-page' | 'github-api' | 'github-actions-api' | 'gmail-api' | 'linear-api' | 'atlassian-api' | 'grafana-api' | 'palmyra-api' | 'slack-oauth' | 'mcp-slack' | 'mcp-figma' | 'mcp-atlassian';
 
 const rules: Record<OutboundPolicyName, HostRule[]> = {
   'source-page': [
@@ -30,6 +30,10 @@ const rules: Record<OutboundPolicyName, HostRule[]> = {
     { hostname: 'atlassian.net', subdomains: true }, { hostname: 'mail.google.com' }, { hostname: 'linear.app', subdomains: true },
   ],
   'github-api': [{ hostname: 'api.github.com' }],
+  // GitHub Actions job logs redirect from api.github.com to GitHub's public,
+  // per-request Azure result host. The outbound layer strips credentials when
+  // it follows that cross-origin redirect.
+  'github-actions-api': [{ hostname: 'api.github.com' }, { hostname: 'blob.core.windows.net', subdomains: true }],
   'gmail-api': [{ hostname: 'gmail.googleapis.com' }],
   'linear-api': [{ hostname: 'api.linear.app' }],
   'atlassian-api': [{ hostname: 'atlassian.net', subdomains: true }],

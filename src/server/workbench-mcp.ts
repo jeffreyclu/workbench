@@ -27,6 +27,7 @@ import { inspectManagedCommand, listManagedCommands, startManagedCommand, stopMa
 import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
 import { brokerExternalEvidence } from './external-evidence.js';
+import { EXTERNAL_SOURCE_EVIDENCE_VERSION } from './source-resolver.js';
 
 const actorSchema = z.enum(['codex', 'claude', 'palmyra']).describe('Which assistant is acting. This is attribution, not permission: all three agents hold identical, complete Workbench admin rights. Jeffrey and system are excluded only so the log never misreports who acted.');
 const stackSchema = z.enum(['attention', 'workbench', 'archive']);
@@ -890,7 +891,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     description: 'Resolves one supported external URL through the supervisor-owned evidence broker. Pass the current Workbench conversation and reply handles; the result is stored locally and reused across agents. Credentials remain server-side and no provider state is changed.',
     inputSchema: { ...resolveSourceUrlSchema.shape, ...evidenceContextShape },
     annotations: externalReadOnlyAnnotations,
-  }, async ({ url, conversationId, messageId }) => runTool('resolve_external_source', () => runEvidenceRead(repository, { conversationId, messageId }, 'external_source_url', url, { url }, () => admin.resolveExternalSource(url))));
+  }, async ({ url, conversationId, messageId }) => runTool('resolve_external_source', () => runEvidenceRead(repository, { conversationId, messageId }, 'external_source_url', url, { url, resolverVersion: EXTERNAL_SOURCE_EVIDENCE_VERSION }, () => admin.resolveExternalSource(url))));
 
   server.registerTool('set_figma_discovery_scope', {
     title: 'Set Figma discovery scope',

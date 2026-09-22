@@ -2,6 +2,17 @@ import type { ResolvedSourceDraft } from '../shared/contracts.js';
 import { resolveSlackPermalinkWithCodex } from './slack-codex.js';
 import { createOutboundFetch, OutboundPolicyError, type OutboundPolicyName } from './outbound-policy.js';
 
+export const EXTERNAL_SOURCE_EVIDENCE_VERSION = 2;
+
+type GitHubActionsJob = {
+  id?: number;
+  name?: string;
+  conclusion?: string | null;
+  status?: string;
+  html_url?: string;
+  steps?: Array<{ number?: number; name?: string; conclusion?: string | null; status?: string }>;
+};
+
 function sourceFor(host: string): string {
   if (host === 'claude.ai') return 'Claude';
   if (host === 'github.com') return 'GitHub';
@@ -57,6 +68,84 @@ function fallback(url: URL, source: string): ResolvedSourceDraft {
   return { source, sourceUrl: url.toString(), title: readable, description: `Context from ${source}: ${url.toString()}` };
 }
 
+function githubHeaders(token: string | undefined): Record<string, string> {
+  return {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'workbench-local',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+function cleanActionsLog(value: string): string[] {
+  return value
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/, '').trimEnd());
+}
+
+function actionsFailureExcerpt(value: string): string {
+  const lines = cleanActionsLog(value);
+  const highSignal = /##\[error\]|AssertionError|TimeoutError|Timed out waiting|\b\d+\s+(?:failed|did not run|passed)\b|errors? were not (?:a part of|part of) any test|Process completed with exit code/i;
+  const selected = new Set<number>();
+  lines.forEach((line, index) => {
+    if (!highSignal.test(line)) return;
+    for (let cursor = Math.max(0, index - 2); cursor <= Math.min(lines.length - 1, index + 2); cursor += 1) selected.add(cursor);
+  });
+  const excerpt = (selected.size ? [...selected].sort((a, b) => a - b).map((index) => lines[index]) : lines.slice(-120))
+    .filter((line, index, all) => line.trim() && line !== all[index - 1])
+    .join('\n');
+  return excerpt.length > 24_000 ? `${excerpt.slice(0, 24_000)}\n[log excerpt truncated]` : excerpt;
+}
+
+async function resolveGitHubActionsJob(
+  url: URL,
+  owner: string,
+  repository: string,
+  runId: string,
+  jobId: string,
+  token: string | undefined,
+  fetchImpl: typeof fetch,
+): Promise<ResolvedSourceDraft> {
+  const headers = githubHeaders(token);
+  const jobResponse = await fetchImpl(`https://api.github.com/repos/${owner}/${repository}/actions/jobs/${jobId}`, {
+    headers,
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!jobResponse.ok) {
+    const guidance = jobResponse.status === 401 || jobResponse.status === 403 || jobResponse.status === 404
+      ? ' Connect GitHub in Workbench Sources with access to this repository.'
+      : '';
+    throw new Error(`GitHub could not resolve Actions job ${jobId} (${jobResponse.status}).${guidance}`);
+  }
+  const job = await jobResponse.json() as GitHubActionsJob;
+  const failedSteps = (job.steps ?? []).filter((step) => step.conclusion === 'failure' || step.conclusion === 'timed_out');
+  const failedStepSummary = failedSteps.length
+    ? failedSteps.map((step) => `Failed step${step.number ? ` ${step.number}` : ''}: ${step.name ?? 'Unnamed step'} (${step.conclusion})`).join('\n')
+    : 'GitHub did not identify a failed step.';
+
+  const logsResponse = await fetchImpl(`https://api.github.com/repos/${owner}/${repository}/actions/jobs/${jobId}/logs`, {
+    headers,
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!logsResponse.ok) {
+    throw new Error(`GitHub resolved Actions job ${jobId}, but its log could not be downloaded (${logsResponse.status}). Logs may have expired.`);
+  }
+  const excerpt = actionsFailureExcerpt(await logsResponse.text());
+  const state = job.conclusion ?? job.status ?? 'unknown';
+  return {
+    source: 'GitHub',
+    sourceUrl: job.html_url ?? url.toString(),
+    title: `${job.name ?? `Actions job ${jobId}`} · ${state}`,
+    description: [
+      `GitHub Actions job ${jobId} in ${owner}/${repository} (run ${runId})`,
+      `Conclusion: ${state}`,
+      failedStepSummary,
+      'Failure evidence from the job log:',
+      excerpt || 'The job log did not contain readable failure output.',
+    ].join('\n').slice(0, 30_000),
+  };
+}
+
 export async function resolveSourceUrl(value: string, options: { confluenceSettings?: Record<string, string> | null; githubSettings?: Record<string, string> | null; fetchForPolicy?: (policy: OutboundPolicyName) => typeof fetch } = {}): Promise<ResolvedSourceDraft> {
   const url = new URL(value);
   const source = sourceFor(url.hostname);
@@ -69,14 +158,16 @@ export async function resolveSourceUrl(value: string, options: { confluenceSetti
   if (url.hostname === 'atlassian.net' || url.hostname.endsWith('.atlassian.net')) return resolveAtlassian(url, options.confluenceSettings ?? null, fetchFor('atlassian-api'));
   if (source === 'Slack') return resolveSlackPermalinkWithCodex(url.toString());
   if (source === 'GitHub') {
+    const actionsMatch = url.pathname.match(/^\/([^/]+)\/([^/]+)\/actions\/runs\/(\d+)\/job\/(\d+)/);
+    if (actionsMatch) {
+      const githubToken = options.githubSettings?.token ?? process.env.GITHUB_TOKEN;
+      return resolveGitHubActionsJob(url, actionsMatch[1], actionsMatch[2], actionsMatch[3], actionsMatch[4], githubToken, fetchFor('github-actions-api'));
+    }
     const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/(issues|pull)\/(\d+)/);
     if (match) {
       const endpoint = `https://api.github.com/repos/${match[1]}/${match[2]}/issues/${match[4]}`;
       const githubToken = options.githubSettings?.token ?? process.env.GITHUB_TOKEN;
-      const response = await fetchFor('github-api')(endpoint, { headers: {
-        Accept: 'application/vnd.github+json', 'User-Agent': 'workbench-local',
-        ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}),
-      } });
+      const response = await fetchFor('github-api')(endpoint, { headers: githubHeaders(githubToken) });
       if (response.ok) {
         const issue = await response.json() as { title: string; body: string | null; html_url: string };
         return { source, sourceUrl: issue.html_url, title: issue.title, description: issue.body?.trim() || `GitHub ${match[3]} #${match[4]} in ${match[1]}/${match[2]}.` };

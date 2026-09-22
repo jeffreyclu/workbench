@@ -48,7 +48,8 @@ operations are callable through MCP, including the irreversible ones.
 - External source access: `search_external_sources`, `resolve_external_source`. Connector production
   telemetry is available through `connector_failure_summary`, `connector_logs`, and
   `connector_observability_query`. These tools call Grafana Prometheus and Loki only through
-  Workbench-owned connections; provider credentials never reach an agent.
+  Workbench-owned connections; provider credentials never reach an agent. GitHub Actions job URLs
+  resolve to the failed step and a focused job-log excerpt, not webpage metadata.
 - Audit: `list_audit_log`
 
 Workbench writes its own routing decisions into the same activity log: the execution type

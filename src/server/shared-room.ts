@@ -29,6 +29,7 @@ import { listCandidateWorkspaces } from './workspace-candidates.js';
 import { repositoryRoutingPrompt, routedWorkspacePaths } from './workspace-routing.js';
 import { groundAuthoritativeWorkItem, needsAuthoritativeWorkItemGrounding } from './work-item-grounding.js';
 import { authoritativeTicketIdentifier, verifyAuthoritativeMutationLineage } from './external-mutation-lineage.js';
+import { EXTERNAL_SOURCE_EVIDENCE_VERSION } from './source-resolver.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -119,7 +120,7 @@ export async function prepareSharedExternalEvidence(
   if (needsConnectionContext) {
     evidence.push(await brokerExternalEvidence(repository, {
       conversationId: input.conversationId, dispatchGroupId: input.dispatchGroupId,
-      kind: 'connected_source_context', source: 'Workbench connected sources', request: { text: requestText },
+      kind: 'connected_source_context', source: 'Workbench connected sources', request: { text: requestText, resolverVersion: EXTERNAL_SOURCE_EVIDENCE_VERSION },
     }, () => contextForPrompt(repository, requestText)));
   }
   return evidence;
