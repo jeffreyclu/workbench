@@ -124,7 +124,10 @@ export function reviewPassCompletionPrompt(originalPrompt: string, draft: string
   return `${originalPrompt}\n\n${reviewPassCompletionRequirement(draft, missing)}`;
 }
 
-const COMPLETION_CLAIM = /\b(?:root fix is in|fix is in|now (?:fixed|works|working)|is fixed|are fixed|has been fixed|have been fixed|fixed the|resolved the|works end[- ]to[- ]end|verified live|verified end[- ]to[- ]end|fully (?:working|verified)|all set|tests? pass(?:es|ed|ing)?)\b/i;
+// A numeric CI result such as "9 tests passed" is evidence being reported,
+// not a claim that the agent ran the tests itself. Keep catching unqualified
+// completion claims ("tests passed") without rejecting quoted job results.
+const COMPLETION_CLAIM = /\b(?:root fix is in|fix is in|now (?:fixed|works|working)|is fixed|are fixed|has been fixed|have been fixed|fixed the|resolved the|works end[- ]to[- ]end|verified live|verified end[- ]to[- ]end|fully (?:working|verified)|all set|(?<!\d\s)tests? pass(?:es|ed|ing)?)\b/i;
 const ACKNOWLEDGED_GAP = /\b(?:not verified|unverified|could ?n[o']t verify|cannot verify|can't verify|remaining gap|not exercised|did not run|didn't run|no verification|still blocked|blocker)\b/i;
 const DEFERRED_EXECUTION_PROMISE = /\b(?:say the word|tell me (?:to )?(?:go|run|do|start)|ready to (?:run|apply|implement|fix|change|build)|i(?:'ll| will| can) (?:now )?(?:run|apply|implement|fix|change|update|build|execute|start)|we(?:'ll| will| can) (?:now )?(?:run|apply|implement|fix|change|update|build|execute|start)|next step(?: is)?)\b/i;
 const PLANNED_ACTION_LINE = /^\s*\d+[.)]\s+(?:then\s+)?(?:fix|add|update|run|implement|persist|apply|change|create|write|build|execute|start)\b/gim;

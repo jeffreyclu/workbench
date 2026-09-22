@@ -77,6 +77,8 @@ describe('Workbench supervisor', () => {
       .toMatchObject({ accepted: false, code: 'unverified_completion' });
     expect(superviseDraft('analysis', 'The behavior comes from src/state.ts:12.', { investigated: true, executed: false }))
       .toEqual({ accepted: true });
+    expect(superviseDraft('execute', 'The CI job timed out after 9 tests passed and 1 did not run.', { investigated: true, executed: false }))
+      .toEqual({ accepted: true });
   });
 
   it('enforces global brevity without replaying an execute turn that already mutated state', () => {

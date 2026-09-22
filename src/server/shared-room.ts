@@ -711,8 +711,8 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
         }
         continue;
       }
-      if (segmentResume && expiredThreadPrompt && isMissingCodexThreadError(message)) {
-        onProgress('● Codex thread expired. Restarting this turn in a fresh session…');
+      if (segmentResume && expiredThreadPrompt && isUnavailableCodexThreadError(message)) {
+        onProgress('● Codex thread unavailable. Restarting this turn in a fresh session…');
         segmentPrompt = expiredThreadPrompt;
         segmentResume = undefined;
         continue;
@@ -738,6 +738,11 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
 export function isMissingCodexThreadError(value: unknown): boolean {
   const message = value instanceof Error ? value.message : String(value);
   return /(?:thread|conversation).*(?:not found|does not exist|unknown)|no (?:thread|conversation) found|no rollout found for (?:thread|conversation)(?: id)?/i.test(message);
+}
+
+export function isUnavailableCodexThreadError(value: unknown): boolean {
+  const message = value instanceof Error ? value.message : String(value);
+  return isMissingCodexThreadError(message) || /thread\s+\S+\s+already has an active writer/i.test(message);
 }
 
 export type TurnGrounding = {
@@ -1933,7 +1938,7 @@ export async function replyInSharedRoom(
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
     }
     const evidence = () => ({
-      investigated: turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_read'),
+      investigated: externalEvidence.length > 0 || turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_read'),
       executed: turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_write'),
     });
     const verbose = verboseResponseRequested(latestUserMessage);
