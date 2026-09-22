@@ -1190,10 +1190,21 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     };
   }, [conversationId, messages.isSuccess, messages.dataUpdatedAt, conversationRenderRows.length]);
   useEffect(() => {
+    // 1b29e5d1-7725-4602-afbf-08078bed12b3 LEGACY-AFFECTING: Conversation
+    // history used to save only after a scroll pause. Flush on backgrounding
+    // and page exit too, so an existing reader returns to the same anchor.
     const container = threadScrollRef.current;
     if (!container || !conversationId) return;
     const nearBottomThreshold = 120;
     let writeTimeout: number | null = null;
+    const persistReadingPosition = () => {
+      const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= nearBottomThreshold;
+      isNearThreadBottomRef.current = nearBottom;
+      writeConversationReadingPosition(conversationId, {
+        pane: activePaneRef.current,
+        messageId: nearBottom ? null : findTopVisibleMessageId(container),
+      });
+    };
     const updateNearBottom = () => {
       const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= nearBottomThreshold;
       isNearThreadBottomRef.current = nearBottom;
@@ -1205,13 +1216,20 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       // tick, which fires far too often to persist synchronously.
       if (writeTimeout !== null) window.clearTimeout(writeTimeout);
       writeTimeout = window.setTimeout(() => {
-        writeConversationReadingPosition(conversationId, { pane: activePaneRef.current, messageId: nearBottom ? null : findTopVisibleMessageId(container) });
+        persistReadingPosition();
       }, 400);
     };
     updateNearBottom();
     container.addEventListener('scroll', updateNearBottom, { passive: true });
+    const flushOnBackground = () => {
+      if (document.visibilityState === 'hidden') persistReadingPosition();
+    };
+    document.addEventListener('visibilitychange', flushOnBackground);
+    window.addEventListener('pagehide', persistReadingPosition);
     return () => {
       container.removeEventListener('scroll', updateNearBottom);
+      document.removeEventListener('visibilitychange', flushOnBackground);
+      window.removeEventListener('pagehide', persistReadingPosition);
       if (writeTimeout !== null) window.clearTimeout(writeTimeout);
     };
   }, [conversationId]);

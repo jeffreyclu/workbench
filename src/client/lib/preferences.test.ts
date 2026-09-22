@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { readInsightsTab, readReviewStackReadingMode, writeInsightsTab, writeReviewStackReadingMode } from './preferences.js';
+import { readConversationReadingPosition, readInsightsTab, readReviewStackReadingMode, writeConversationReadingPosition, writeInsightsTab, writeReviewStackReadingMode } from './preferences.js';
 
 describe('review stack reading mode preference', () => {
   beforeEach(() => window.localStorage.clear());
@@ -40,5 +40,23 @@ describe('insights tab preference', () => {
   it('ignores an invalid stored tab', () => {
     window.localStorage.setItem('workbench:insights-tab', 'everything');
     expect(readInsightsTab()).toBe('overview');
+  });
+});
+
+describe('conversation reading position preference', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('restores the selected pane and message anchor after a fresh read', () => {
+    writeConversationReadingPosition('conversation-1', { pane: 'changes', messageId: 'message-42' });
+
+    expect(readConversationReadingPosition('conversation-1')).toEqual({ pane: 'changes', messageId: 'message-42' });
+  });
+
+  it('ignores malformed saved pane state', () => {
+    window.localStorage.setItem('workbench:conversation-reading-positions', JSON.stringify({
+      'conversation-1': { pane: 'activity', messageId: 'message-42' },
+    }));
+
+    expect(readConversationReadingPosition('conversation-1')).toBeNull();
   });
 });
