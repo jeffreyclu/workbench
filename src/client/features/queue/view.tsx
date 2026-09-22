@@ -1,6 +1,6 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { AlertTriangle, Bot, Check, Clock, GripVertical, LoaderCircle, Sparkles, User } from 'lucide-react';
+import { AlertTriangle, Bot, Check, Clock, GripVertical, LoaderCircle, MessageSquareText, Sparkles, User } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AgentRun, Assignee, WorkItem } from '../../../shared/contracts';
@@ -113,6 +113,18 @@ export function TaskClassificationSelect({ itemId, kind, compact = false, disclo
   </span>;
 }
 
+/**
+ * A finished agent run gives the card no hint at what Jeffrey should do
+ * next, so infer one from task metadata: an open dependency outranks
+ * everything else, a strategy/scoping run produced a plan to approve, and
+ * every other finished run defaults to reading the agent's reply.
+ */
+function nextActionSummary(item: WorkItem, openDependencyCount: number): { Icon: typeof AlertTriangle; text: string } {
+  if (openDependencyCount > 0 || item.status === 'blocked') return { Icon: AlertTriangle, text: 'Resolve blocker' };
+  if (item.classificationKind === 'strategy') return { Icon: Sparkles, text: 'Approve plan' };
+  return { Icon: MessageSquareText, text: 'Review reply' };
+}
+
 export function SortableQueueItem({ item, index, selected, focused, draggable, onSelect, onOpenTask, onFocus, onKeyDown }: {
   item: WorkItem; index: number; selected: boolean; focused: boolean; draggable: boolean;
   onSelect: () => void; onOpenTask: (id: string) => void; onFocus: () => void;
@@ -141,9 +153,12 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
   const isHumanOnly = !item.agentOutcome && item.assignees.length === 1 && item.assignees[0] === 'jeffrey';
   const openDependencies = (item.blockedBy ?? []).filter((dependency) => dependency.isOpen);
   const visibleOutcome = item.agentOutcome ?? (item.status === 'in_progress' ? 'in_progress' : null);
+  const isAwaiting = visibleOutcome === 'finished' && !item.archivedAt;
+  const nextAction = isAwaiting ? nextActionSummary(item, openDependencies.length) : null;
   return <div ref={setNodeRef} data-work-item-id={item.id} style={style} role="listitem" tabIndex={focused ? 0 : -1} className={`stack-card queue-item ${visibleOutcome ? `outcome-${visibleOutcome}` : ''} ${isHumanOnly ? 'human-only' : ''} ${item.projectName ? 'project-colored' : ''} ${hasFollowUps || isFollowUp ? 'relationship-family' : ''} ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`} onClick={onSelect} onFocus={onFocus} onKeyDown={onKeyDown}>
     {draggable ? <button className="drag-handle" onClick={(event) => event.stopPropagation()} aria-label={`Reorder ${item.title}`} {...attributes} {...listeners}><GripVertical size={15} /></button> : <span className="rank">{String(index + 1).padStart(2, '0')}</span>}
     <span className="item-copy"><strong>{item.title}</strong>
+      {nextAction && <span className="next-action-summary"><nextAction.Icon size={11} /> {nextAction.text}</span>}
       <span className="item-meta"><span className="item-project">{item.projectName && <ProjectColorDot projectName={item.projectName} />}{item.sourceIdentifier ? `${item.sourceIdentifier} · ` : ''}{item.projectName ?? 'Personal'}</span><span className="source-tags">{item.sourceTags.map((source) => <span key={source} className={`source-tag source-${source.toLowerCase()}`}>{source}</span>)}</span></span>
       <TaskClassificationSelect itemId={item.id} kind={item.classificationKind} compact />
       {isFollowUp && <button type="button" className="task-lineage child-lineage" onClick={(event) => { event.stopPropagation(); onOpenTask(item.parentWorkItemId!); }} aria-label={`Open parent task: ${item.lineage!.parentTitle}`}><span aria-hidden="true">↳</span> Follow-up to: {item.lineage!.parentTitle}</button>}

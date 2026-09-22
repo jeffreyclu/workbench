@@ -141,6 +141,36 @@ describe('task status badges', () => {
 
 });
 
+describe('next-action summary on Awaiting cards', () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const renderCard = (overrides: Partial<WorkItem>) => render(
+    <QueryClientProvider client={client}>
+      <SortableQueueItem item={{ ...item, ...overrides }} index={0} selected={false} focused={false} draggable={false} onSelect={vi.fn()} onOpenTask={vi.fn()} onFocus={vi.fn()} onKeyDown={vi.fn()} />
+    </QueryClientProvider>,
+  );
+
+  it.each([
+    [{ agentOutcome: 'finished' } as const, 'Review reply'],
+    [{ agentOutcome: 'finished', classificationKind: 'strategy' } as const, 'Approve plan'],
+    [{ agentOutcome: 'finished', blockedBy: [{ id: 'dependency-id', title: 'A prerequisite', status: 'blocked', archivedAt: null, completedAt: null, isOpen: true }] } as const, 'Resolve blocker'],
+    [{ agentOutcome: 'finished', status: 'blocked' } as const, 'Resolve blocker'],
+  ])('shows a compact one-line summary for %o', (overrides, expectedText) => {
+    const { container } = renderCard(overrides);
+
+    const summary = container.querySelector('.next-action-summary');
+    expect(summary?.textContent).toContain(expectedText);
+    expect(container.querySelectorAll('.next-action-summary')).toHaveLength(1);
+  });
+
+  it('omits the summary for non-Awaiting outcomes and for archived Awaiting cards', () => {
+    expect(renderCard({ agentOutcome: null }).container.querySelector('.next-action-summary')).toBeNull();
+    cleanup();
+    expect(renderCard({ agentOutcome: 'needs_attention' }).container.querySelector('.next-action-summary')).toBeNull();
+    cleanup();
+    expect(renderCard({ agentOutcome: 'finished', archivedAt: '2026-01-02T12:00:00Z' }).container.querySelector('.next-action-summary')).toBeNull();
+  });
+});
+
 describe('prerequisite-blocked queue cards', () => {
   it('opens the task prerequisites instead of submitting a manual unblock', () => {
     const fetchMock = vi.fn();
