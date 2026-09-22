@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { WORKBENCH_DOCUMENTS_ROOT } from './local-documents.js';
 
 function contains(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
@@ -9,7 +9,7 @@ function contains(root: string, candidate: string): boolean {
 
 export function artifactRoots(workspace: string, cwd = process.cwd(), configured = process.env.WORKBENCH_ARTIFACT_ROOTS ?? ''): string[] {
   const configuredRoots = configured.split(',').map((entry) => entry.trim()).filter(Boolean);
-  const defaults = [workspace, dirname(realpathSync(cwd)), join(homedir(), 'notes')];
+  const defaults = [workspace, dirname(realpathSync(cwd)), WORKBENCH_DOCUMENTS_ROOT];
   return [...new Set([...defaults, ...configuredRoots]
     .map((entry) => resolve(entry))
     .filter((entry) => existsSync(entry))

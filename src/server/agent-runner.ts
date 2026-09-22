@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type AgentStreamEvent, type WorkItem } from '../shared/contracts.js';
@@ -12,7 +12,7 @@ import { classifyExternalActionAuthorization, externalActionAttempted, hasUnsupp
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
-import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
+import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isManagedRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
@@ -21,6 +21,10 @@ import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, typ
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
 import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisorPromptContract } from './supervisor.js';
+import { listCandidateWorkspaces } from './workspace-candidates.js';
+import { inferTaskRepositories, repositoryRoutingPrompt, routedWorkspacePaths } from './workspace-routing.js';
+import { groundAuthoritativeWorkItem, needsAuthoritativeWorkItemGrounding } from './work-item-grounding.js';
+import { authoritativeTicketIdentifier, verifyAuthoritativeMutationLineage } from './external-mutation-lineage.js';
 
 export { hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim, missingReviewPasses, preserveReviewPassesAfterFormatting, reviewPassCompletionPrompt, reviewPassCompletionRequirement } from './supervisor.js';
 
@@ -156,7 +160,7 @@ export function isWorkbenchWorkspace(cwd: string): boolean {
   const resolved = resolve(cwd);
   return basename(resolved) === 'workbench'
     || resolved === resolve(process.cwd())
-    || resolved.includes('/.workbench/run-worktrees/workbench-');
+    || (isManagedRunWorktree(resolved) && resolved.includes('/workbench-'));
 }
 
 export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountProfile: string, cwd: string): NodeJS.ProcessEnv {
@@ -368,6 +372,8 @@ Report format: a short summary of the symptom investigated, then one entry per c
 `.trim();
 
 function isBackendImplementation(item: WorkItem): boolean {
+  const routedRepository = inferTaskRepositories(item)[0]?.repository;
+  if (routedRepository) return routedRepository === 'be.mcp-gateway';
   const text = `${item.title}\n${item.description}`.toLowerCase();
   return /\b(backend|server|api|endpoint|database|sqlite|migration|webhook|worker|queue|provider sync|repository)\b/.test(text);
 }
@@ -391,7 +397,7 @@ function personaFor(item: WorkItem, run: AgentRun): string {
             : IMPLEMENTATION_PLANNER_PERSONA;
 }
 
-export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = ''): string {
+export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = '', executionWorkspaces: readonly RunWorkspaceBinding[] = []): string {
   const readOnly = run.kind === 'analysis' || run.kind === 'research' || run.kind === 'review' || run.kind === 'strategy';
   const persona = personaFor(item, run);
   const supervisorContract = supervisorPromptContract(run.kind, [run.instructions, item.sourceUrl, item.description, item.title].filter(Boolean).join('\n'));
@@ -409,6 +415,7 @@ Source: ${item.sourceIdentifier ?? item.source}
 Source URL: ${item.sourceUrl ?? 'none'}
 Project: ${item.projectName ?? 'none'}
 Status: ${item.status}
+${repositoryRoutingPrompt(item, listCandidateWorkspaces(), executionWorkspaces)}
 Prerequisites:
 ${(item.blockedBy ?? []).length
     ? item.blockedBy!.map((dependency) => `- ${dependency.isOpen ? 'OPEN' : 'complete'}: ${dependency.title} (${dependency.status})`).join('\n')
@@ -428,7 +435,7 @@ ${item.attachments?.length
 Requested capability: ${run.kind}
 Execution mode: ${readOnly
     ? 'read-only by task type. Inspect, research, or review only; do not attempt project-file edits and do not describe this intentional mode as a missing sandbox permission.'
-    : 'write-enabled across every local repository. The resolved workspace is only the starting directory; inspect and edit files anywhere needed to complete this task.'}
+    : 'write-enabled across every local repository, but code writes are allowed only in the isolated worktree path listed for each routed repository. All local repositories remain readable; never edit a source or primary checkout. Use one ~/dev worktree per additional repository.'}
 Additional instructions:
 ${compactPromptSection(run.instructions || 'Use your judgment and return a concise, actionable result.', 1_500)}
 
@@ -440,7 +447,7 @@ ${memoryContext}
 ${run.agent === 'claude' ? '' : RUNNER_SYSTEM_CONTRACT}`;
 }
 
-export function buildResumedPrompt(item: WorkItem, run: AgentRun, externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = '', shortTermContext = ''): string {
+export function buildResumedPrompt(item: WorkItem, run: AgentRun, externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = '', shortTermContext = '', executionWorkspaces: readonly RunWorkspaceBinding[] = []): string {
   return `${externalActionContract}
 
 Continue the existing task session. The prior task, source context, shared context, and earlier decisions are already available in this session.
@@ -455,6 +462,7 @@ Conversation ID: ${run.conversationId ?? 'none'}
 Current reply message ID: ${run.messageId ?? 'none'}
 Source URL: ${item.sourceUrl ?? 'none'}
 Status: ${item.status}
+${repositoryRoutingPrompt(item, listCandidateWorkspaces(), executionWorkspaces)}
 Current strategy:
 ${compactPromptSection(item.strategy || 'No strategy yet.', 1_500)}
 
@@ -525,11 +533,11 @@ export function resolveWorkingDirectory(item: WorkItem): string {
   }
 
   const workspaceRoot = dirname(current);
-  const candidates = readdirSync(workspaceRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => join(workspaceRoot, entry.name))
-    .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')) || existsSync(join(path, 'AGENTS.md')));
+  const candidates = listCandidateWorkspaces();
   if (!candidates.length) return resolve(current);
+
+  const routed = routedWorkspacePaths(item, candidates);
+  if (routed[0]) return routed[0].path;
 
   const context = `${item.title}\n${item.description}\n${item.projectName ?? ''}\n${item.sourceUrl ?? ''}`.toLowerCase();
   let sourceRepository = '';
@@ -1595,7 +1603,7 @@ ${AGENT_EXECUTION_CONTRACT}`;
         // Bash tool's real cwd. Only direct binary bypasses are decided here,
         // where the provider process cwd is the best available boundary.
         const blockedWriterSuite = Boolean(toolCommand && isWriterWorkspace(cwd) && bypassesWriterTestCommandGuard(toolCommand) && blockedWriterTestSuiteCommand(toolCommand));
-        const blockedDependencyBootstrap = Boolean(toolCommand && cwd.includes('/.workbench/run-worktrees/') && blockedWorkbenchDependencyBootstrapCommand(toolCommand));
+        const blockedDependencyBootstrap = Boolean(toolCommand && isManagedRunWorktree(cwd) && blockedWorkbenchDependencyBootstrapCommand(toolCommand));
         const blockedPersistentForeground = Boolean(toolCommand && blockedPersistentForegroundCommand(toolCommand));
         const blockedCommand = blockedWriterSuite || blockedDependencyBootstrap || blockedPersistentForeground;
         if (toolCommand && blockedCommand) {
@@ -1898,7 +1906,7 @@ const WORKSPACE_WAIT_RETRY_MS = 5_000;
 
 export async function executeAgentRun(repository: WorkItemRepository, run: AgentRun, ownerId: string, leaseMs: number, externalContext = ''): Promise<void> {
   if (!repository.claimRun(run.id, ownerId, leaseMs)) return;
-  const item = repository.get(run.workItemId);
+  let item = repository.get(run.workItemId);
   if (!item) return;
   if (repository.isCancellationRequested(run.id)) {
     repository.finishRunCancellation(run.id, ownerId);
@@ -1910,14 +1918,32 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   // failure path inside the try below.
   let workspace: string | null = null;
   let sourceWorkspace: string | null = null;
+  let workspaceBindings: RunWorkspaceBinding[] = [];
+  let workspaceResolutionError: Error | null = null;
   try {
-    sourceWorkspace = resolveWorkingDirectory(item);
+    const requiredAuthoritativeGrounding = needsAuthoritativeWorkItemGrounding(item);
+    if (requiredAuthoritativeGrounding) item = await groundAuthoritativeWorkItem(repository, item);
+    const routedSources = routedWorkspacePaths(item, listCandidateWorkspaces()).map((route) => route.path);
+    const authoritativeTaskKey = authoritativeTicketIdentifier(item);
+    const authoritativeSources = authoritativeTaskKey
+      ? await Promise.all(routedSources.map((source) => authoritativeTaskWorkspace(source, authoritativeTaskKey)))
+      : routedSources;
+    sourceWorkspace = authoritativeTaskKey ? authoritativeSources[0] ?? resolveWorkingDirectory(item) : resolveWorkingDirectory(item);
+    const sourceWorkspaces = [...new Set([sourceWorkspace, ...authoritativeSources])];
     // Keep the runner's synchronous setup boundary in tests: cancellation
     // coverage intentionally observes the registered process immediately.
-    workspace = process.env.VITEST
-      ? sourceWorkspace
-      : await isolatedRunWorkspace(sourceWorkspace, run.id, MUTATING_RUN_KINDS.has(run.kind), shouldIsolateRunWorkspace(sourceWorkspace));
-  } catch { workspace = null; }
+    workspaceBindings = process.env.VITEST
+      ? sourceWorkspaces.map((source) => ({ sourceWorkspace: source, worktree: source }))
+      : await isolatedRunWorkspaces(sourceWorkspaces, run.id, MUTATING_RUN_KINDS.has(run.kind));
+    if (authoritativeTaskKey) workspaceBindings = workspaceBindings.map((binding, index) => ({
+      ...binding,
+      routingWorkspace: routedSources[index] ?? binding.sourceWorkspace,
+    }));
+    workspace = workspaceBindings[0]?.worktree ?? sourceWorkspace;
+  } catch (error) {
+    workspace = null;
+    workspaceResolutionError = error instanceof Error ? error : new Error(String(error));
+  }
   if (repository.isCancellationRequested(run.id)) {
     repository.finishRunCancellation(run.id, ownerId);
     return;
@@ -1983,6 +2009,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● Starting ${run.kind}…` });
   const observedRunEvents: ObservedRunEvent[] = [];
   try {
+    if (workspaceResolutionError) throw workspaceResolutionError;
     const cwd = workspace ?? resolveWorkingDirectory(item);
     // Task executions reach this runner directly (including Retry), rather
     // than the shared-room dispatcher. Give them the same deterministic
@@ -2043,6 +2070,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     });
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
+    const lineageDecision = await verifyAuthoritativeMutationLineage(repository, item, externalAuthorization, sourceWorkspace ?? cwd, run);
+    if (lineageDecision && run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, [{ kind: 'decision', detail: lineageDecision }]);
     if (externalAuthorization.granted && run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, [{
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
@@ -2061,8 +2090,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     });
     if (resumesSession) repository.addActivity(item.id, 'system', 'progress', `Resuming ${run.agent === 'palmyra' ? 'Palmyra context' : 'Claude session'} with bounded continuation context.`);
     const prompt = resumesSession
-      ? buildResumedPrompt(item, run, externalActionContract, memoryContext, shortTermContext)
-      : buildPrompt(item, run, sharedContext, externalActionContract, memoryContext);
+      ? buildResumedPrompt(item, run, externalActionContract, memoryContext, shortTermContext, workspaceBindings)
+      : buildPrompt(item, run, sharedContext, externalActionContract, memoryContext, workspaceBindings);
     repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, run.agent, 'prompt', {
       promptChars: prompt.length,
       taskChars: item.description.length,
@@ -2299,13 +2328,15 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       // Integration reports; it never decides whether the run finished. This
       // await sits before finishRun, so a throw here would erase a completed
       // run's output entirely -- the failure mode this catch exists to stop.
-      const integration = await integrateWorkbenchRunWorktree(sourceWorkspace, workspace, run.id)
-        .catch((error: unknown) => ({ integrated: false, commitHash: null, conflicted: [] as string[], blocked: error instanceof Error ? error.message : String(error) }));
-      if (integration.integrated) repository.addActivity(item.id, 'system', 'progress', `Integrated Workbench agent changes into main at ${integration.commitHash?.slice(0, 12)}.`);
-      // A partly integrated run is still a completed run. Name the files
-      // left behind so the held-back work is recoverable rather than silent.
-      if (integration.conflicted.length) repository.addActivity(item.id, 'system', 'blocker', `${integration.conflicted.length} file(s) conflicted with main and stayed in the run worktree: ${integration.conflicted.join(', ')}.`);
-      if (integration.blocked) repository.addActivity(item.id, 'system', 'blocker', `Changes were not integrated into main and remain in the run worktree: ${integration.blocked}`);
+      for (const binding of workspaceBindings) {
+        const integration = await integrateWorkbenchRunWorktree(binding.sourceWorkspace, binding.worktree, run.id)
+          .catch((error: unknown) => ({ integrated: false, commitHash: null, conflicted: [] as string[], blocked: error instanceof Error ? error.message : String(error) }));
+        if (integration.integrated) repository.addActivity(item.id, 'system', 'progress', `Integrated agent changes into ${binding.sourceWorkspace} at ${integration.commitHash?.slice(0, 12)}.`);
+        // A partly integrated run is still a completed run. Name the files
+        // left behind so the held-back work is recoverable rather than silent.
+        if (integration.conflicted.length) repository.addActivity(item.id, 'system', 'blocker', `${integration.conflicted.length} file(s) conflicted in ${binding.sourceWorkspace} and stayed in ${binding.worktree}: ${integration.conflicted.join(', ')}.`);
+        if (integration.blocked) repository.addActivity(item.id, 'system', 'blocker', `Changes for ${binding.sourceWorkspace} were not integrated and remain in ${binding.worktree}: ${integration.blocked}`);
+      }
     }
     const completedAt = new Date().toISOString();
     const finishPatch = { agent: result.agent, status: 'completed' as const, output, completedAt, ...telemetry };

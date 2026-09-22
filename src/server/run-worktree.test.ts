@@ -2,9 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, provisionRunWorktreeDependencies, shouldIsolateRunWorkspace } from './run-worktree.js';
+import { authoritativeTaskWorkspace, cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, isolatedRunWorkspaces, provisionRunWorktreeDependencies, shouldIsolateRunWorkspace, WORKBENCH_RUN_WORKTREE_ROOT } from './run-worktree.js';
 
 const directories: string[] = [];
 
@@ -21,23 +21,24 @@ afterEach(() => {
         execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: directory, stdio: 'ignore' });
         // isolatedRunWorkspace groups runs under a repository-key directory.
         // Temporary repositories get a unique group, so remove that empty test
-        // container too instead of leaking one ~/.workbench directory per test.
+        // container too instead of leaking one managed directory per test.
         rmSync(dirname(worktree), { recursive: true, force: true });
       }
     } catch { /* The assertion may have failed before Git/worktree setup. */ }
     try {
       const repository = realpathSync(directory);
       const key = createHash('sha256').update(repository).digest('hex').slice(0, 12);
-      rmSync(join(homedir(), '.workbench', 'run-worktrees', `${basename(repository)}-${key}`), { recursive: true, force: true });
+      rmSync(join(WORKBENCH_RUN_WORKTREE_ROOT, `${basename(repository)}-${key}`), { recursive: true, force: true });
     } catch { /* The temporary primary may already be gone. */ }
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
 describe('isolatedRunWorkspace', () => {
-  it('does not isolate a non-Workbench project workspace', () => {
-    expect(shouldIsolateRunWorkspace('/Users/jeffrey.lu/dev/writer-monorepo')).toBe(false);
+  it('isolates every Git project and leaves non-Git directories alone', () => {
+    expect(shouldIsolateRunWorkspace('/Users/jeffrey.lu/dev/writer-monorepo')).toBe(true);
     expect(shouldIsolateRunWorkspace(process.cwd())).toBe(true);
+    expect(shouldIsolateRunWorkspace(tmpdir())).toBe(false);
   });
 
   it('uses a detached worktree for a mutating production run without creating a branch', async () => {
@@ -56,9 +57,73 @@ describe('isolatedRunWorkspace', () => {
     try {
       const workspace = await isolatedRunWorkspace(directory, 'isolated-run', true);
       expect(workspace).not.toBe(directory);
+      expect(workspace.startsWith(`${join(homedir(), 'dev')}/`)).toBe(true);
       expect(execFileSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8' }).trim()).toBe('');
       expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toBe('');
       execFileSync('git', ['worktree', 'remove', '--force', workspace], { cwd: directory });
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
+  it('creates a stable ticket worktree from the default branch instead of the currently checked-out feature', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-ticket-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'main.txt'), 'main\n');
+    execFileSync('git', ['add', 'main.txt'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'main'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'main'], { cwd: directory });
+    execFileSync('git', ['switch', '-qc', 'feature/CON-999-unrelated'], { cwd: directory });
+    writeFileSync(join(directory, 'unrelated.txt'), 'wrong base\n');
+    execFileSync('git', ['add', 'unrelated.txt'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'unrelated'], { cwd: directory });
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const [workspace, concurrentWorkspace] = await Promise.all([
+        authoritativeTaskWorkspace(directory, 'CON-214'),
+        authoritativeTaskWorkspace(directory, 'CON-214'),
+      ]);
+      expect(concurrentWorkspace).toBe(workspace);
+      expect(execFileSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8' }).trim()).toBe('workbench/con-214');
+      expect(execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: workspace, encoding: 'utf8' })).not.toContain('unrelated.txt');
+      expect(await authoritativeTaskWorkspace(directory, 'CON-214')).toBe(workspace);
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
+  it('creates one isolated worktree per repository for a multi-repository run', async () => {
+    const repositories = ['frontend', 'backend'].map((name) => {
+      const directory = mkdtempSync(join(tmpdir(), `workbench-${name}-`));
+      directories.push(directory);
+      execFileSync('git', ['init', '-q'], { cwd: directory });
+      execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+      execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+      writeFileSync(join(directory, 'seed.txt'), `${name}\n`);
+      execFileSync('git', ['add', 'seed.txt'], { cwd: directory });
+      execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+      return directory;
+    });
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const bindings = await isolatedRunWorkspaces(repositories, 'multi-repo-run', true);
+      expect(bindings).toHaveLength(2);
+      expect(bindings.map((binding) => binding.sourceWorkspace)).toEqual(repositories.map((repository) => resolve(repository)));
+      expect(new Set(bindings.map((binding) => binding.worktree)).size).toBe(2);
+      for (const binding of bindings) {
+        expect(binding.worktree.startsWith(`${join(homedir(), 'dev')}/`)).toBe(true);
+        expect(binding.worktree).not.toBe(binding.sourceWorkspace);
+        expect(execFileSync('git', ['branch', '--show-current'], { cwd: binding.worktree, encoding: 'utf8' }).trim()).toBe('');
+      }
     } finally {
       if (previous === undefined) delete process.env.VITEST;
       else process.env.VITEST = previous;
@@ -263,7 +328,7 @@ describe('isolatedRunWorkspace', () => {
   });
 
 
-  it('reports a primary checkout parked off main instead of failing the completed run', async () => {
+  it('integrates into the source checkout active feature branch', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
     directories.push(directory);
     execFileSync('git', ['init', '-q'], { cwd: directory });
@@ -285,11 +350,12 @@ describe('isolatedRunWorkspace', () => {
 
       const result = await integrateWorkbenchRunWorktree(directory, workspace, 'off-main-run', true);
 
-      expect(result.integrated).toBe(false);
-      expect(result.blocked).toContain('requires the primary checkout on main');
-      // No commit was invented on the wrong branch, and the run's work survives.
-      expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim()).toBe(head);
-      expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toContain('seed.txt');
+      expect(result.integrated).toBe(true);
+      expect(result.blocked).toBeNull();
+      expect(execFileSync('git', ['branch', '--show-current'], { cwd: directory, encoding: 'utf8' }).trim()).toBe('wip');
+      expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim()).not.toBe(head);
+      expect(execFileSync('cat', ['seed.txt'], { cwd: directory, encoding: 'utf8' })).toBe('run work\n');
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toBe('');
       execFileSync('git', ['worktree', 'remove', '--force', workspace], { cwd: directory });
     } finally {
       if (previous === undefined) delete process.env.VITEST;

@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative, resolve } from 'node:path';
-import { homedir } from 'node:os';
 import { pipeline } from '@huggingface/transformers';
 import type { WorkbenchDatabase } from './database.js';
 import { buildFtsMatchQuery } from './fts-query.js';
 import { expandKnowledgeGraph } from './knowledge-graph.js';
 import { scoreSemanticDocuments, searchSemanticChunks, searchSemanticTexts } from './memory-semantic-worker.js';
+import { WORKBENCH_DOCUMENTS_ROOT } from './local-documents.js';
 
 /**
  * Vectorized, hybrid retrieval over the complete durable Workbench record
@@ -230,7 +230,7 @@ function collectDocCandidates(label: string, docsRoot: string): CandidateDocumen
     const body = readFileSync(file, 'utf8');
     if (!nonEmpty(body)) continue;
     // Namespaced by root label: two roots (e.g. this repo's docs/ and the
-    // shared ~/notes knowledge base) can otherwise share a relative path and
+    // shared Workbench documents tree) can otherwise share a relative path and
     // collide on the same (source, source_id) key.
     const sourceId = `${label}:${relative(docsRoot, file)}`;
     const heading = body.match(/^#\s+(.+)$/m)?.[1]?.trim();
@@ -247,9 +247,8 @@ function collectDocCandidates(label: string, docsRoot: string): CandidateDocumen
  * Jeffrey wants captured: shared messages, shared conversations, task
  * activity, agent-run prompts/responses/errors (as three independent
  * documents so a prompt is retrievable without its response), work items,
- * repo markdown under docs/, and the shared cross-tool knowledge
- * base under ~/notes (durable facts recorded outside Workbench's own tables,
- * e.g. by Codex). Skips null/empty bodies.
+ * repo markdown under docs/, and the centralized cross-tool document tree
+ * under ~/Documents/Workbench. Skips null/empty bodies.
  *
  * Existing (source, source_id) hashes are fetched once up front so this is a
  * handful of full-table scans plus writes only for rows that are new or whose
@@ -337,11 +336,11 @@ export function collectMemoryDocuments(
 
   const roots = options.docRoots ?? [
     { label: 'workbench-docs', path: options.docsRoot ?? resolve(process.cwd(), 'docs') },
-    { label: 'notes', path: resolve(homedir(), 'notes') },
+    { label: 'workbench-local-documents', path: WORKBENCH_DOCUMENTS_ROOT },
   ];
   for (const root of roots) candidates.push(...collectDocCandidates(root.label, root.path));
 
-  return upsertMemoryDocuments(database, candidates, new Set(['artifact']));
+  return upsertMemoryDocuments(database, candidates, new Set(['artifact', 'doc']));
 }
 
 function upsertMemoryDocuments(

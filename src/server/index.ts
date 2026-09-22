@@ -17,8 +17,10 @@ import { shutdownMemorySemanticWorker } from './memory-semantic-worker.js';
 import { requestMemoryIndexRefresh, shutdownMemoryIndexMaintenance } from './memory-index-maintenance.js';
 import { readMcpQualityHistory } from './mcp-quality-history.js';
 import { startMcpQualityMonitor } from './mcp-quality-monitor.js';
+import { ensureWorkbenchDocumentRoot } from './local-documents.js';
 
 const port = Number(process.env.PORT ?? 4317);
+ensureWorkbenchDocumentRoot();
 const database = openDatabase();
 const app = createApp(database, liveRuntimeCapabilities);
 

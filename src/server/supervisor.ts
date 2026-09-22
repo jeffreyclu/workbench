@@ -41,6 +41,19 @@ const CATEGORY_CONTRACTS: Record<AgentRun['kind'], string> = {
 
 const GITHUB_PULL_REQUEST_URL = /https?:\/\/github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/pull\/\d+/i;
 
+export const LOCAL_DOCUMENT_CONTRACT = `Local document policy:
+- The only physical root for personal, generated, imported, meeting, research, and durable knowledge documents is ~/Documents/Workbench.
+- Put durable shared notes in ~/Documents/Workbench/notes, publishable artifacts in ~/Documents/Workbench/artifacts, finished standalone documents in ~/Documents/Workbench/documents, and unfiled external material in ~/Documents/Workbench/imports.
+- ~/notes is a compatibility symlink only. Read it when an older instruction names it, but write the canonical target above and never create a second notes tree.
+- Never leave Workbench-owned documents loose in ~/dev, ~/Downloads, ~/Desktop, or the home directory.
+- Repository-owned documentation stays in that repository. Do not move README, AGENTS, source-adjacent docs, migrations, or checked-in specifications into the personal document root.`;
+
+export const LOCAL_CODE_WORKTREE_CONTRACT = `Local code policy:
+- Every code edit must be made in a dedicated Git worktree under ~/dev. Never write code in a repository's primary checkout.
+- The selected repository is the source and routing anchor. For a mutating run, create or use its isolated ~/dev worktree before the first file edit.
+- Multi-repository work gets one ~/dev worktree per repository. Do not use the worktree rule as a reason to collapse a full-stack task to one repository.
+- Read-only analysis and review may inspect primary checkouts because they do not write code.`;
+
 export function githubSourceAuthorityForRequest(request: string, kind: AgentRun['kind']): string {
   const pullRequestUrl = request.match(GITHUB_PULL_REQUEST_URL)?.[0];
   if (!pullRequestUrl) return '';
@@ -66,8 +79,8 @@ export function githubSourceAuthorityForUrl(pullRequestUrl: string, kind: AgentR
 export function supervisorPromptContract(kind: AgentRun['kind'], request: string): string {
   const category = `Supervisor-selected execution category: ${kind}\n${CATEGORY_CONTRACTS[kind]}\nThe selected category is authoritative for this turn and must not be inferred again from the request text.`;
   const sourceAuthority = githubSourceAuthorityForRequest(request, kind);
-  if (kind !== 'review') return `${category}\n\n${sourceAuthority}`.trim();
-  return `${category}\n\n${FRONTEND_REVIEWER_PERSONA}\n\n${sourceAuthority}`.trim();
+  if (kind !== 'review') return `${category}\n\n${LOCAL_DOCUMENT_CONTRACT}\n\n${LOCAL_CODE_WORKTREE_CONTRACT}\n\n${sourceAuthority}`.trim();
+  return `${category}\n\n${FRONTEND_REVIEWER_PERSONA}\n\n${LOCAL_DOCUMENT_CONTRACT}\n\n${LOCAL_CODE_WORKTREE_CONTRACT}\n\n${sourceAuthority}`.trim();
 }
 
 export async function superviseExternalAction(input: {
@@ -149,7 +162,10 @@ export function superviseDraft(kind: AgentRun['kind'], output: string, evidence:
     };
   }
   const styleProblem = responseStyleViolation(output, { verbose: options.verbose, review: kind === 'review' });
-  if (styleProblem) return {
+  // Formatting is presentation, not execution. Replaying a task after tools or
+  // file writes have already run can duplicate external mutations and strand
+  // correct code merely because the report exceeded a word limit.
+  if (styleProblem && !(kind === 'execute' && evidence.executed)) return {
     accepted: false, code: 'response_style',
     reason: `Response broke the global brevity rule. ${styleProblem}`,
     recoveryRequirement: `Response style retry: return one complete replacement answer. ${styleProblem} Apply the global brevity rule: lead with the result, use plain English and short sentences, remove investigation narration and unexplained engineering shorthand, and use compact bullets for multiple findings. Preserve material findings and exact evidence by shortening each item, not by dropping it. ${kind === 'review' ? 'Keep all five named pass sections. Use one compact bullet per actual finding with the impact, fix, and file/line in parentheses; never exceed 350 words.' : 'Target 120 words and never exceed 180 words.'} This is not a verbose turn.`,

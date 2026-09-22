@@ -24,6 +24,20 @@ describe('Workbench supervisor', () => {
     expect(prompt).toContain('must not be inferred again from the request text');
   });
 
+  it.each(kinds)('gives every %s agent one canonical local document root', (kind) => {
+    const prompt = supervisorPromptContract(kind, 'Handle the request.');
+    expect(prompt).toContain('~/Documents/Workbench');
+    expect(prompt).toContain('~/notes is a compatibility symlink only');
+    expect(prompt).toContain('Repository-owned documentation stays in that repository');
+  });
+
+  it.each(kinds)('requires every %s agent to write code only in ~/dev worktrees', (kind) => {
+    const prompt = supervisorPromptContract(kind, 'Handle the request.');
+    expect(prompt).toContain('Every code edit must be made in a dedicated Git worktree under ~/dev');
+    expect(prompt).toContain("Never write code in a repository's primary checkout");
+    expect(prompt).toContain('one ~/dev worktree per repository');
+  });
+
   it('owns the complete five-pass review contract and authoritative GitHub source', () => {
     const request = 'review https://github.com/WriterColab/writer-monorepo/pull/16623';
     const prompt = supervisorPromptContract('review', request);
@@ -65,14 +79,19 @@ describe('Workbench supervisor', () => {
       .toEqual({ accepted: true });
   });
 
-  it('enforces global brevity on every category unless this turn explicitly requested verbosity', () => {
+  it('enforces global brevity without replaying an execute turn that already mutated state', () => {
     const longDraft = Array.from({ length: 190 }, (_, index) => `word${index}`).join(' ');
-    for (const kind of kinds.filter((candidate) => candidate !== 'review')) {
+    for (const kind of kinds.filter((candidate) => candidate !== 'review' && candidate !== 'execute')) {
       expect(superviseDraft(kind, longDraft, { investigated: true, executed: true }))
         .toMatchObject({ accepted: false, code: 'response_style' });
       expect(superviseDraft(kind, longDraft, { investigated: true, executed: true }, { verbose: true }))
         .toEqual({ accepted: true });
     }
+    expect(superviseDraft('execute', longDraft, { investigated: true, executed: true })).toEqual({ accepted: true });
+    expect(superviseDraft('execute', longDraft, { investigated: true, executed: false }))
+      .toMatchObject({ accepted: false, code: 'response_style' });
+    expect(superviseDraft('execute', `${longDraft} I will implement this next.`, { investigated: true, executed: true }))
+      .toMatchObject({ accepted: false, code: 'deferred_execution' });
   });
 
   it('keeps complete five-pass reviews but rejects dense review prose', () => {

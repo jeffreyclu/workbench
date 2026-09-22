@@ -1,5 +1,19 @@
 ## Workbench operating practices
 
+### Code changes always use worktrees under ~/dev **(always)**
+
+Jeffrey's standing rule from 2026-09-21: every local code change must be created in a dedicated Git
+worktree under `~/dev`, never in a repository's primary checkout. This applies to direct Codex/Claude
+work and Workbench-dispatched mutating runs. Multi-repository work gets one `~/dev` worktree per
+repository; the rule must not collapse a full-stack task to one checkout. Read-only analysis and
+review may inspect primary checkouts because they do not write code.
+
+### Local documents have one physical root **(always)**
+
+All personal, generated, imported, meeting, research, and durable-knowledge documents live under
+`~/Documents/Workbench`. `~/notes` is a compatibility symlink to the canonical `notes` directory,
+not a second store. Repository-owned documentation stays checked into its repository.
+
 ### Workspace resolution is authoritative for task execution (2026-08-29)
 
 Jeffrey explicitly disabled every guard that requires a task to have an internal or external

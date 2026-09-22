@@ -11,7 +11,7 @@ import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
 import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
-import { integrateWorkbenchRunWorktree, isolatedRunWorkspace, shouldIsolateRunWorkspace } from './run-worktree.js';
+import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
 import { groundTurn } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
@@ -25,6 +25,10 @@ import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supe
 import { brokerExternalEvidence, evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
 import { getGitHubPullRequestDiff, parseGitHubPullRequestUrl } from './github-pull-request-diff.js';
 import { repositoryIdentity } from './workspace-diff.js';
+import { listCandidateWorkspaces } from './workspace-candidates.js';
+import { repositoryRoutingPrompt, routedWorkspacePaths } from './workspace-routing.js';
+import { groundAuthoritativeWorkItem, needsAuthoritativeWorkItemGrounding } from './work-item-grounding.js';
+import { authoritativeTicketIdentifier, verifyAuthoritativeMutationLineage } from './external-mutation-lineage.js';
 
 export { isTransientSqliteContention } from './sqlite-contention.js';
 
@@ -1137,18 +1141,19 @@ export function buildSharedReplyPrompt(
   messageId?: string | null,
   memoryContext = '',
   runKind: AgentRun['kind'] = linked?.run.kind ?? 'analysis',
+  executionWorkspaces: readonly RunWorkspaceBinding[] = [],
 ): string {
   const grounding = turnGrounding ?? fallbackTurnGrounding(thread);
   const standaloneSupervisorContract = !linked
     ? supervisorPromptContract(runKind, `${grounding.objective}\n${latestHumanMessageForSharedReply(thread)}`)
     : '';
   const roleContext = linked
-    ? buildPrompt(linked.item, linked.run, sharedContext, externalActionContract)
+    ? buildPrompt(linked.item, linked.run, sharedContext, externalActionContract, '', executionWorkspaces)
     : `${externalActionContract ?? EXTERNAL_ACTION_CONTRACT}
 
 You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey and the other Workbench agents: Codex, Claude, and Palmyra.
 
-This conversation is not linked to a project task. Start in Workbench, but treat that directory only as execution context: every local repository and Jeffrey's home directory remain fully accessible. Follow Jeffrey's current request directly, including repository edits and Git branch/worktree operations; linking a task is never required for access.
+This conversation is not linked to a project task. Start in Workbench, but treat that directory only as execution context: every local repository and Jeffrey's home directory remain fully accessible. Follow Jeffrey's current request directly; linking a task is never required for access. Before any code edit, create and use a dedicated Git worktree under ~/dev for each repository involved, and never edit a primary checkout.
 
 ${standaloneSupervisorContract}
 
@@ -1548,19 +1553,39 @@ export async function replyInSharedRoom(
     const precedingAgentResponse = [...thread].reverse().find((message) => message.author === 'claude' || message.author === 'codex' || message.author === 'palmyra')?.body ?? '';
     const linkedRun = runId ? repository.getRun(runId) : null;
     const linkedConversation = repository.getConversation(target.conversationId);
-    const linkedItem = linkedRun
+    let linkedItem = linkedRun
       ? repository.get(linkedRun.workItemId)
       : linkedConversation?.workItemId ? repository.get(linkedConversation.workItemId) : null;
+    const requiredAuthoritativeGrounding = linkedItem ? needsAuthoritativeWorkItemGrounding(linkedItem) : false;
+    if (linkedItem && requiredAuthoritativeGrounding) linkedItem = await groundAuthoritativeWorkItem(repository, linkedItem);
     const recentSourceReferences = [
       ...thread.filter((message) => message.author === 'jeffrey' && /https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(message.body)).slice(-3).map((message) => message.body),
       linkedItem?.sourceUrl ?? '',
       ...(linkedItem ? repository.listReferences(linkedItem.id).map((reference) => reference.url) : []),
     ].filter(Boolean);
     const selectedWorkspace = repository.database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(target.conversationId) as { workspace_path: string } | undefined;
-    const sourceCwd = resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
-    const cwd = linkedRun
-      ? await isolatedRunWorkspace(sourceCwd, linkedRun.id, MUTATING_RUN_KINDS.has(linkedRun.kind), shouldIsolateRunWorkspace(sourceCwd))
-      : sourceCwd;
+    const routedSources = linkedItem ? routedWorkspacePaths(linkedItem, listCandidateWorkspaces()).map((route) => route.path) : [];
+    const authoritativeTaskKey = linkedItem ? authoritativeTicketIdentifier(linkedItem) : null;
+    const authoritativeSources = authoritativeTaskKey
+      ? await Promise.all(routedSources.map((source) => authoritativeTaskWorkspace(source, authoritativeTaskKey)))
+      : routedSources;
+    // Once the provider-backed ticket is known, its ownership wins over stale
+    // conversation/default workspace state. Otherwise the prompt can name the
+    // right repo while the provider process still starts in the wrong one.
+    const sourceCwd = authoritativeTaskKey
+      ? authoritativeSources[0] ?? resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path)
+      : resolveSharedReplyWorkingDirectory(linkedItem, selectedWorkspace?.workspace_path);
+    const sourceWorkspaces = [...new Set([sourceCwd, ...authoritativeSources])];
+    let workspaceBindings: RunWorkspaceBinding[] = linkedRun
+      ? process.env.VITEST
+        ? sourceWorkspaces.map((sourceWorkspace) => ({ sourceWorkspace, worktree: sourceWorkspace }))
+        : await isolatedRunWorkspaces(sourceWorkspaces, linkedRun.id, MUTATING_RUN_KINDS.has(linkedRun.kind))
+      : [{ sourceWorkspace: sourceCwd, worktree: sourceCwd }];
+    if (authoritativeTaskKey) workspaceBindings = workspaceBindings.map((binding, index) => ({
+      ...binding,
+      routingWorkspace: routedSources[index] ?? binding.sourceWorkspace,
+    }));
+    const cwd = workspaceBindings[0]?.worktree ?? sourceCwd;
     // The Changes pane must inspect the detached worktree actually handed to
     // this run, not the source checkout selected before isolation.
     if (runId) repository.updateRun(runId, { resolvedWorkspace: cwd });
@@ -1649,6 +1674,10 @@ export async function replyInSharedRoom(
     });
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
+    const lineageDecision = linkedItem && linkedRun
+      ? await verifyAuthoritativeMutationLineage(repository, linkedItem, externalAuthorization, sourceCwd, linkedRun)
+      : null;
+    if (lineageDecision) addLiveAgentStreamEvents(repository, messageId, runId ?? null, [{ kind: 'decision', detail: lineageDecision }]);
     if (externalAuthorization.granted) addLiveAgentStreamEvents(repository, messageId, runId ?? null, [{
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
@@ -1679,13 +1708,14 @@ export async function replyInSharedRoom(
       messageId,
       memoryContext,
       runKind,
+      workspaceBindings,
     );
     const palmyraContext = agent === 'palmyra' ? parsePalmyraContext(repository.getConversationPalmyraContext(target.conversationId)) : undefined;
     const resumeProviderId = providerSessionForAuthorization(agent === 'codex'
       ? linkedConversation?.codexThreadId
       : agent === 'claude' ? linkedConversation?.claudeSessionId : palmyraContext?.length ? 'palmyra-context' : null, externalAuthorization);
     const prompt = resumeProviderId
-      ? buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, latestUserMessage)
+      ? `${buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, latestUserMessage)}\n\n${linkedItem ? repositoryRoutingPrompt(linkedItem, listCandidateWorkspaces(), workspaceBindings) : ''}`.trim()
       : freshPrompt;
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,
@@ -1930,13 +1960,15 @@ export async function replyInSharedRoom(
     if (linkedRun && MUTATING_RUN_KINDS.has(linkedRun.kind)) {
       // A failed integration must not reach the catch below, which would mark
       // this completed message failed and throw its output away.
-      const integration = await integrateWorkbenchRunWorktree(sourceCwd, cwd, linkedRun.id)
-        .catch((error: unknown) => ({ integrated: false, commitHash: null, conflicted: [] as string[], blocked: error instanceof Error ? error.message : String(error) }));
-      if (integration.integrated && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Integrated Workbench agent changes into main at ${integration.commitHash?.slice(0, 12)}.`);
-      // A partly integrated run is still a completed run. Name the files
-      // left behind so the held-back work is recoverable rather than silent.
-      if (integration.conflicted.length && linkedItem) repository.addActivity(linkedItem.id, 'system', 'blocker', `${integration.conflicted.length} file(s) conflicted with main and stayed in the run worktree: ${integration.conflicted.join(', ')}.`);
-      if (integration.blocked && linkedItem) repository.addActivity(linkedItem.id, 'system', 'blocker', `Changes were not integrated into main and remain in the run worktree: ${integration.blocked}`);
+      for (const binding of workspaceBindings) {
+        const integration = await integrateWorkbenchRunWorktree(binding.sourceWorkspace, binding.worktree, linkedRun.id)
+          .catch((error: unknown) => ({ integrated: false, commitHash: null, conflicted: [] as string[], blocked: error instanceof Error ? error.message : String(error) }));
+        if (integration.integrated && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', `Integrated agent changes into ${binding.sourceWorkspace} at ${integration.commitHash?.slice(0, 12)}.`);
+        // A partly integrated run is still a completed run. Name the files
+        // left behind so the held-back work is recoverable rather than silent.
+        if (integration.conflicted.length && linkedItem) repository.addActivity(linkedItem.id, 'system', 'blocker', `${integration.conflicted.length} file(s) conflicted in ${binding.sourceWorkspace} and stayed in ${binding.worktree}: ${integration.conflicted.join(', ')}.`);
+        if (integration.blocked && linkedItem) repository.addActivity(linkedItem.id, 'system', 'blocker', `Changes for ${binding.sourceWorkspace} were not integrated and remain in ${binding.worktree}: ${integration.blocked}`);
+      }
     }
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
     repository.recordAgentHandoff(target.conversationId, messageId, result.agent, result.output);

@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { ReviewCommit, WorkspaceBranchRef, WorkspaceDiff, WorkspaceDiffFile, WorkspaceFileSource, WorkspacePublishResult, WorkspacePublishStatus, WorkspaceRefs, WorkspaceWorktreeRef } from '../shared/contracts.js';
 import { patchLogicBoundaries } from './review-logic-primitives.js';
+import { isManagedRunWorktree } from './run-worktree.js';
 
 const execFile = promisify(execFileCallback);
 // Workspace diffs in the Writer monorepo routinely exceed Node's 1 MiB
@@ -239,7 +240,7 @@ export async function snapshotsForRepository<T extends { repositoryIdentity: str
   const selectedCheckout = resolveWorkspaceRepository(workspacePath);
   const capturedHere = (snapshot: T) => {
     const path = resolve(snapshot.diff.workspacePath);
-    if (path.includes('/.workbench/run-worktrees/')) return true;
+    if (isManagedRunWorktree(path)) return true;
     if (isWithinWorkspace(selectedCheckout, path)) return true;
     // A checkout that is gone cannot be a competing entry in the repository
     // picker, so it cannot be the leak this scoping exists to stop. Only the

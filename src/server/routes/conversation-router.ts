@@ -15,6 +15,8 @@ import { parseFollowUpPlan } from '../app-exports.js';
 import { isRuntimeApproval } from '../runtime-promotion.js';
 import { PROMOTION_QUEUED_MESSAGE } from '../promotion-messages.js';
 import { listCandidateWorkspaces } from '../workspace-candidates.js';
+import { isManagedRunWorktree } from '../run-worktree.js';
+import { routedWorkspacePaths } from '../workspace-routing.js';
 import type { RouteContext } from '../route-context.js';
 
 export function createConversationRouter({ repository, database, capabilities, admin }: RouteContext) {
@@ -37,7 +39,7 @@ export function createConversationRouter({ repository, database, capabilities, a
       try { return existsSync(path) && statSync(path).isDirectory() ? path : null; }
       catch { return null; } // The collector may remove a run worktree mid-request.
     };
-    const isRunWorktree = (workspacePath: string | null) => Boolean(workspacePath?.includes('/.workbench/run-worktrees/'));
+    const isRunWorktree = (workspacePath: string | null) => Boolean(workspacePath && isManagedRunWorktree(workspacePath));
     const allConversationRuns = linkedItem
       ? repository.listRuns(linkedItem.id).filter((run) => run.conversationId === conversationId)
       : [];
@@ -50,13 +52,14 @@ export function createConversationRouter({ repository, database, capabilities, a
     // A linked task can predate its explicit workspace assignment. Reuse the
     // same repository resolver as agent dispatch so Changes is immediately
     // usable instead of making the user rediscover the repository manually.
-    const inferredTaskPath = (() => {
+    const inferredRoutes = linkedItem ? routedWorkspacePaths(linkedItem, candidates) : [];
+    const inferredTaskPath = inferredRoutes[0]?.path ?? (() => {
       try { return linkedItem ? usableWorkspace(resolveWorkingDirectory(linkedItem)) : null; }
       catch { return null; }
     })();
     const explicitTaskPath = usableWorkspace(linkedItem?.workspacePath);
     const recordedPaths = conversationSnapshots.map((snapshot) => usableWorkspace(snapshot.diff.workspacePath)).filter((path): path is string => Boolean(path));
-    const sourcePath = explicitTaskPath ?? recordedPaths[0] ?? inferredTaskPath;
+    const sourcePath = explicitTaskPath ?? inferredTaskPath ?? recordedPaths[0];
     const activePath = usableWorkspace(activeRunWorkspace);
     const linkedPath = activePath ?? sourcePath;
     if (linkedPath && !candidates.includes(linkedPath)) candidates.unshift(linkedPath);
@@ -65,7 +68,7 @@ export function createConversationRouter({ repository, database, capabilities, a
     // editing workspace, or an immutable diff. A repository an agent merely
     // opened is not a conversation change set.
     const relevantPaths = new Set<string>();
-    for (const path of [activePath, explicitTaskPath, !linkedItem ? defaultPath : null]) if (path) relevantPaths.add(path);
+    for (const path of [activePath, explicitTaskPath, ...inferredRoutes.map((route) => route.path), !linkedItem ? defaultPath : null]) if (path) relevantPaths.add(path);
     for (const snapshot of conversationSnapshots) {
       const path = usableWorkspace(snapshot.diff.workspacePath);
       if (path) relevantPaths.add(path);

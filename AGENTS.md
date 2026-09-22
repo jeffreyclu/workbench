@@ -22,9 +22,11 @@ This voice is stable, not frozen. Learn from Jeffrey's accepted edits and sample
 - `docs/shared-memory.md` is the single durable memory for every agent. It holds Jeffrey's standing preferences, corrections, and constraints. Read it before acting on anything non-trivial.
 - Never keep private per-agent memory. Claude's `~/.claude/**/memory/` directory, Codex's own notes, or any equivalent per-tool store are not acceptable homes for a durable lesson. Jeffrey stated this directly on 2026-08-23: memory is shared or it does not exist.
 - When Jeffrey teaches or corrects something durable, append it to the right section of `docs/shared-memory.md` in the same reply, updating the existing subsection rather than adding a near-duplicate.
-- Writer product facts still also belong in `~/notes/knowledge/` so both Claude and Codex can read them without this repo.
+- Writer product facts still also belong in `~/Documents/Workbench/notes/knowledge/` so both Claude and Codex can read them without this repo.
 
 ## Operating rules
+
+- Every code change must be created in a dedicated Git worktree under `~/dev`, never in a repository's primary checkout. Multi-repository work gets one `~/dev` worktree per repository. Read-only inspection may use a primary checkout.
 
 - Any dev server started during a task must be shut down before handing work back. This includes Next.js, Vite, Turbo, Storybook, and other local application servers. Verify the process and its port are actually gone. Never leave a server running that can interfere with Jeffrey's local environment.
 

@@ -106,6 +106,30 @@ export async function contextForPrompt(repository: WorkItemRepository, message: 
 
 export async function resolveBrokerUrl(repository: WorkItemRepository, value: string): Promise<ResolvedSourceDraft> {
   const url = new URL(value);
+  const linearIdentifier = url.hostname === 'linear.app'
+    ? url.pathname.match(/\/issue\/([A-Za-z]+-\d+)/i)?.[1]?.toUpperCase()
+    : undefined;
+  if (linearIdentifier) {
+    const cachedItem = repository.searchLinear(linearIdentifier, 20)
+      .find((item) => item.sourceIdentifier?.toUpperCase() === linearIdentifier);
+    let item = cachedItem;
+    // A pasted Linear URL is authoritative task input. Resolve it here, before
+    // repository routing, instead of handing the runner the generic HTML-page
+    // fallback ("Linear / Context from Linear: ...").
+    if (process.env.LINEAR_API_KEY || !cachedItem) {
+      const config = repository.getLinearConfig();
+      const provider = new LinearProvider(process.env.LINEAR_API_KEY ?? '', config.teamIds, config.projectIds);
+      const liveItem = await provider.fetchIssue(linearIdentifier);
+      repository.upsertLinearItem(liveItem);
+      item = { ...cachedItem, ...liveItem } as typeof cachedItem;
+    }
+    if (item) return {
+      source: 'Linear',
+      sourceUrl: item.sourceUrl ?? value,
+      title: `${item.sourceIdentifier ?? linearIdentifier} · ${item.title}`,
+      description: item.description || `Linear issue ${linearIdentifier} has no description.`,
+    };
+  }
   if (url.hostname.includes('atlassian.net')) {
     const settings = repository.getSourceSettings('confluence');
     if (!settings) return resolveGenericSourceUrl(value);

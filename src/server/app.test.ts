@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createApp, oauthCallbackBase, parseFollowUpPlan } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
@@ -97,8 +97,9 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     const response = await fetch(`${baseUrl}/api/work-items/${item.id}/workspace-diff`);
 
     expect(response.status).toBe(200);
-    expect((await response.json() as { diff: WorkspaceDiff }).diff.workspacePath).toBe(process.cwd());
-    expect(database.prepare('SELECT workspace_path FROM work_item_workspace_selection WHERE work_item_id = ?').get(item.id)).toEqual({ workspace_path: process.cwd() });
+    const canonicalWorkbench = join(dirname(process.cwd()), 'workbench');
+    expect((await response.json() as { diff: WorkspaceDiff }).diff.workspacePath).toBe(canonicalWorkbench);
+    expect(database.prepare('SELECT workspace_path FROM work_item_workspace_selection WHERE work_item_id = ?').get(item.id)).toEqual({ workspace_path: canonicalWorkbench });
   });
 
   it('recovers conversation Changes from a garbage-collected run worktree and repairs the saved choice', async () => {
@@ -112,8 +113,9 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspace-diff`);
 
     expect(response.status).toBe(200);
-    expect((await response.json() as { diff: WorkspaceDiff }).diff.workspacePath).toBe(process.cwd());
-    expect(database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversation.id)).toEqual({ workspace_path: process.cwd() });
+    const canonicalWorkbench = join(dirname(process.cwd()), 'workbench');
+    expect((await response.json() as { diff: WorkspaceDiff }).diff.workspacePath).toBe(canonicalWorkbench);
+    expect(database.prepare('SELECT workspace_path FROM shared_conversation_workspace_selection WHERE conversation_id = ?').get(conversation.id)).toEqual({ workspace_path: canonicalWorkbench });
   });
 
   it('selects an inferred repository for a linked conversation with no saved workspace', async () => {
@@ -126,6 +128,32 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
     const body = await response.json() as { selectedPath: string | null; workspaces: Array<{ path: string; selected: boolean }> };
     expect(body.selectedPath).not.toBeNull();
     expect(body.workspaces.some((workspace) => workspace.path === body.selectedPath && workspace.selected)).toBe(true);
+  });
+
+  it('uses the same ticket-derived repository order for execution and conversation Changes', async () => {
+    const item = repository.create({
+      title: 'Connector authentication full-stack change',
+      description: 'Update the connector gateway backend in be.mcp-gateway and the AIS screen in fe.web-app.',
+      priority: 1,
+      status: 'ready',
+      projectName: null,
+      workspacePath: null,
+      dueDate: null,
+    });
+    const conversation = repository.createConversation('Repository-routed conversation', item.id);
+
+    const response = await fetch(`${baseUrl}/api/shared/conversations/${conversation.id}/workspaces`);
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { selectedPath: string | null; workspaces: Array<{ path: string; selected: boolean; relevant: boolean }> };
+    const developmentRoot = dirname(process.cwd());
+    const frontend = join(developmentRoot, 'fe.web-app');
+    const gateway = join(developmentRoot, 'be.mcp-gateway');
+    expect(body.selectedPath).toBe(frontend);
+    expect(body.workspaces.filter((workspace) => workspace.relevant).map((workspace) => workspace.path)).toEqual(expect.arrayContaining([
+      frontend,
+      gateway,
+    ]));
   });
 
   it('retires provider sessions when Repo Explorer changes a conversation workspace', async () => {

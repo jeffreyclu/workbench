@@ -12,7 +12,7 @@ When you learn something durable: append it to the right topic file below, in th
 it — update the existing subsection rather than forking a near-duplicate. If it doesn't fit any topic
 file here, create a new file under `docs/shared-memory/` and add a line for it below. Rules marked
 **(always)** inside a topic file apply to every task, no exceptions. Writer product facts still also
-belong in `~/notes/knowledge/` so both tools can read them.
+belong in `~/Documents/Workbench/notes/knowledge/` so both tools can read them.
 
 ## Topic files
 

@@ -87,6 +87,11 @@ directory. A selected workspace or run worktree is a starting directory and conc
 not an authorization boundary. Claude, Codex, and Palmyra may change directories, use absolute or
 parent paths, and perform normal Git branch/worktree operations when the current request requires it.
 
+Every mutating code run gets an isolated worktree under `~/dev`; primary repository checkouts are
+read-only starting points. A multi-repository task gets one worktree per changed repository. Personal
+and generated documents live under `~/Documents/Workbench`; repository-owned documentation remains
+in its repository.
+
 Only data-integrity conflicts remain: impossible dependency cycles, stale plans/results,
 and concurrent writes to one working tree. These are reported as concrete state conflicts
 and are retried or resolved by the agent; they are never framed as an authority limitation.

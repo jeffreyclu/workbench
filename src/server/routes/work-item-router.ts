@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { ZodError, z } from 'zod';
 import {
   bulkWorkItemActionSchema,
@@ -40,6 +40,9 @@ import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWo
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
+import { isManagedRunWorktree } from '../run-worktree.js';
+import { listCandidateWorkspaces } from '../workspace-candidates.js';
+import { routedWorkspacePaths } from '../workspace-routing.js';
 
 export function createWorkItemRouter({ repository, database }: RouteContext) {
   const router = Router();
@@ -52,19 +55,16 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
       try { return existsSync(path) && statSync(path).isDirectory() ? path : null; }
       catch { return null; } // The collector may remove a run worktree mid-request.
     };
-    const isRunWorktree = (workspacePath: string | null) => Boolean(workspacePath?.includes('/.workbench/run-worktrees/'));
+    const isRunWorktree = (workspacePath: string | null) => Boolean(workspacePath && isManagedRunWorktree(workspacePath));
     const selected = database.prepare('SELECT workspace_path, updated_at FROM work_item_workspace_selection WHERE work_item_id = ?').get(workItemId) as { workspace_path: string; updated_at: string } | undefined;
-    const root = dirname(process.cwd());
-    const candidates = readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => resolve(join(root, entry.name)))
-      .filter((path) => existsSync(join(path, '.git')) || existsSync(join(path, 'package.json')));
+    const candidates = listCandidateWorkspaces();
+    const inferredRoutes = routedWorkspacePaths(item, candidates);
     const runWorkspaces = repository.listRuns(item.id)
       .filter((run) => (run.status === 'queued' || run.status === 'running') && usableWorkspace(run.resolvedWorkspace))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
     const activeRun = runWorkspaces.find((run) => run.status === 'queued' || run.status === 'running') ?? null;
     const latestRunWorkspace = usableWorkspace(activeRun?.resolvedWorkspace) ?? usableWorkspace(runWorkspaces[0]?.resolvedWorkspace);
-    const defaultPath = latestRunWorkspace ?? usableWorkspace(resolveWorkingDirectory(item));
+    const defaultPath = latestRunWorkspace ?? usableWorkspace(item.workspacePath) ?? inferredRoutes[0]?.path ?? usableWorkspace(resolveWorkingDirectory(item));
     if (defaultPath && !candidates.includes(defaultPath)) candidates.unshift(defaultPath);
     const savedPath = usableWorkspace(selected?.workspace_path);
     const savedPathIsUsable = Boolean(savedPath && candidates.includes(savedPath) && !isRunWorktree(savedPath));
@@ -83,7 +83,14 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
         .run(workItemId, selectedPath, new Date().toISOString());
       else database.prepare('DELETE FROM work_item_workspace_selection WHERE work_item_id = ?').run(workItemId);
     }
-    return { selectedPath, workspaces: candidates.map((path) => ({ path, label: path === defaultPath && latestRunWorkspace ? `${basename(resolveWorkingDirectory(item))} · agent worktree` : basename(path), selected: path === selectedPath })) };
+    const relevantPaths = new Set([usableWorkspace(item.workspacePath), ...inferredRoutes.map((route) => route.path)].filter((path): path is string => Boolean(path)));
+    candidates.sort((left, right) => Number(relevantPaths.has(right)) - Number(relevantPaths.has(left)));
+    return { selectedPath, workspaces: candidates.map((path) => ({
+      path,
+      label: path === defaultPath && latestRunWorkspace ? `${basename(resolveWorkingDirectory(item))} · agent worktree` : basename(path),
+      selected: path === selectedPath,
+      relevant: relevantPaths.has(path),
+    })) };
   };
   const taskWorkingDirectory = (workItemId: string) => taskWorkspaces(workItemId)?.selectedPath ?? null;
   router.post('/api/diff-confidence', async (request, response, next) => {

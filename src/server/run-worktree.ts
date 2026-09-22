@@ -7,6 +7,82 @@ import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
 let integrationTail: Promise<void> = Promise.resolve();
+const taskWorkspaceInFlight = new Map<string, Promise<string>>();
+
+export const DEVELOPMENT_ROOT = join(homedir(), 'dev');
+export const WORKBENCH_RUN_WORKTREE_ROOT = join(DEVELOPMENT_ROOT, '.workbench-worktrees');
+const LEGACY_RUN_WORKTREE_ROOT = join(homedir(), '.workbench', 'run-worktrees');
+
+export interface RunWorkspaceBinding {
+  /** Canonical checkout used only to match this binding back to ticket routing. */
+  routingWorkspace?: string;
+  sourceWorkspace: string;
+  worktree: string;
+}
+
+async function repositoryDefaultRef(repository: string): Promise<string> {
+  try {
+    const { stdout } = await execFile('git', ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], { cwd: repository, timeout: 5_000, maxBuffer: 32_768 });
+    if (stdout.trim()) return stdout.trim();
+  } catch { /* Local-only repositories fall through to conventional branches. */ }
+  for (const branch of ['main', 'develop', 'master']) {
+    try {
+      await execFile('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: repository, timeout: 5_000, maxBuffer: 32_768 });
+      return branch;
+    } catch { /* Try the next conventional default. */ }
+  }
+  return 'HEAD';
+}
+
+/**
+ * A provider-backed ticket gets one stable branch worktree per repository.
+ * This prevents a new task from inheriting whichever unrelated feature branch
+ * happens to be checked out in the canonical clone, while preserving one
+ * durable location for subsequent commit/push/PR turns.
+ */
+export async function authoritativeTaskWorkspace(sourceWorkspace: string, taskKey: string): Promise<string> {
+  const source = resolve(sourceWorkspace);
+  if (process.env.VITEST) return source;
+  const { stdout } = await execFile('git', ['rev-parse', '--show-toplevel'], { cwd: source, timeout: 5_000, maxBuffer: 32_768 });
+  const repository = resolve(stdout.trim());
+  const safeTaskKey = taskKey.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'task';
+  const repositoryKey = createHash('sha256').update(repository).digest('hex').slice(0, 12);
+  const destination = join(WORKBENCH_RUN_WORKTREE_ROOT, `${basename(repository)}-${repositoryKey}`, 'tasks', safeTaskKey);
+  const branch = `workbench/${safeTaskKey}`;
+  const pending = taskWorkspaceInFlight.get(destination);
+  if (pending) return pending;
+  const creation = (async () => {
+    if (existsSync(destination)) {
+      provisionRunWorktreeDependencies(repository, destination);
+      return destination;
+    }
+    mkdirSync(dirname(destination), { recursive: true });
+    const { stdout: listing } = await execFile('git', ['worktree', 'list', '--porcelain'], { cwd: repository, timeout: 5_000, maxBuffer: 131_072 });
+    const existing = listing.split(/\n\n+/).find((block) => block.split('\n').includes(`branch refs/heads/${branch}`));
+    const existingPath = existing?.split('\n').find((line) => line.startsWith('worktree '))?.slice(9);
+    if (existingPath && existsSync(existingPath)) return resolve(existingPath);
+    const branchExists = await execFile('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: repository, timeout: 5_000, maxBuffer: 32_768 })
+      .then(() => true, () => false);
+    if (branchExists) await execFile('git', ['worktree', 'add', destination, branch], { cwd: repository, timeout: 60_000, maxBuffer: 131_072 });
+    else await execFile('git', ['worktree', 'add', '-b', branch, destination, await repositoryDefaultRef(repository)], { cwd: repository, timeout: 60_000, maxBuffer: 131_072 });
+    provisionRunWorktreeDependencies(repository, destination);
+    return destination;
+  })();
+  taskWorkspaceInFlight.set(destination, creation);
+  try {
+    return await creation;
+  } finally {
+    if (taskWorkspaceInFlight.get(destination) === creation) taskWorkspaceInFlight.delete(destination);
+  }
+}
+
+export function isManagedRunWorktree(path: string): boolean {
+  const resolved = resolve(path);
+  return resolved === WORKBENCH_RUN_WORKTREE_ROOT
+    || resolved.startsWith(`${WORKBENCH_RUN_WORKTREE_ROOT}/`)
+    || resolved === LEGACY_RUN_WORKTREE_ROOT
+    || resolved.startsWith(`${LEGACY_RUN_WORKTREE_ROOT}/`);
+}
 
 // Dependencies and runtime output are local machine state, never Workbench
 // source. A nested Git repository here is reported as a gitlink and can make
@@ -80,10 +156,15 @@ async function untrackedPaths(cwd: string): Promise<string[]> {
   return output.split('\0').filter(Boolean);
 }
 
-/** Workbench is the only repository whose parallel mutating runs are isolated.
- * Other project repositories remain in their selected primary checkout. */
+/** Every Git repository is isolated before a mutating run. A selected checkout
+ * is a source/base, never a place for an agent to write code directly. */
 export function shouldIsolateRunWorkspace(sourceWorkspace: string): boolean {
-  return resolve(sourceWorkspace) === resolve(process.cwd());
+  try {
+    execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: resolve(sourceWorkspace), encoding: 'utf8', timeout: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -140,9 +221,9 @@ export async function isolatedRunWorkspace(sourceWorkspace: string, runId: strin
     const { stdout } = await execFile('git', ['rev-parse', '--show-toplevel'], { cwd: source, timeout: 5_000, maxBuffer: 32_768 });
     const repository = resolve(stdout.trim());
     const key = createHash('sha256').update(repository).digest('hex').slice(0, 12);
-    const destination = join(homedir(), '.workbench', 'run-worktrees', `${basename(repository)}-${key}`, runId);
+    const destination = join(WORKBENCH_RUN_WORKTREE_ROOT, `${basename(repository)}-${key}`, runId);
     if (!existsSync(destination)) {
-      mkdirSync(join(homedir(), '.workbench', 'run-worktrees', `${basename(repository)}-${key}`), { recursive: true });
+      mkdirSync(join(WORKBENCH_RUN_WORKTREE_ROOT, `${basename(repository)}-${key}`), { recursive: true });
       await execFile('git', ['worktree', 'add', '--detach', destination, 'HEAD'], { cwd: repository, timeout: 60_000, maxBuffer: 131_072 });
     }
     // Also runs for an existing destination so retries repair worktrees created
@@ -154,6 +235,24 @@ export async function isolatedRunWorkspace(sourceWorkspace: string, runId: strin
     // task from running. Real repositories use the isolated path above.
     return source;
   }
+}
+
+/**
+ * Isolate every repository routed to one run. The first binding is the
+ * starting workspace; subsequent bindings are the additional repositories the
+ * ticket requires. A shared run id is safe because each repository has its own
+ * hashed parent directory.
+ */
+export async function isolatedRunWorkspaces(sourceWorkspaces: readonly string[], runId: string, mutates: boolean): Promise<RunWorkspaceBinding[]> {
+  const uniqueSources = [...new Set(sourceWorkspaces.map((path) => resolve(path)))];
+  const bindings: RunWorkspaceBinding[] = [];
+  for (const sourceWorkspace of uniqueSources) {
+    bindings.push({
+      sourceWorkspace,
+      worktree: await isolatedRunWorkspace(sourceWorkspace, runId, mutates, shouldIsolateRunWorkspace(sourceWorkspace)),
+    });
+  }
+  return bindings;
 }
 
 type IntegrationOutcome = { integrated: boolean; commitHash: string | null; conflicted: string[]; blocked: string | null };
@@ -191,9 +290,9 @@ function splitPatchByFile(patch: string): { paths: string[]; patch: string }[] {
 }
 
 /**
- * The only valid exit path for a dirty Workbench run worktree. Its patch is
- * applied to the primary main checkout under one in-process FIFO, committed on
- * main, and left available for the normal explicit promotion flow. Integration
+ * The only valid exit path for a dirty run worktree. Its patch is applied to
+ * the source checkout under one in-process FIFO, committed on its active branch,
+ * and left available for the repository's normal delivery flow. Integration
  * is index-only so an unrelated, uncommitted edit in the primary checkout is
  * preserved rather than stranding a completed run.
  *
@@ -222,7 +321,7 @@ export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree:
       // A primary checkout parked off main is a property of the workspace, not a
       // defect in the run that just finished. Report it and leave the work in the
       // detached tree; do not throw, which would discard the completed run.
-      if (branch !== 'main') return notIntegrated(`integration requires the primary checkout on main; found ${branch || 'detached HEAD'}. The run's changes stay in ${detached}.`);
+      if (!branch) return notIntegrated(`integration requires the source checkout to remain on its branch; found detached HEAD. The run's changes stay in ${detached}.`);
       // Remember every tracked file the primary checkout had already changed.
       // Those paths are user/WIP territory and must not be refreshed below.
       const primaryDirtyPaths = await changedPaths(source, ['HEAD']);
@@ -236,8 +335,8 @@ export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree:
 
       const commitStagedIntegration = async (conflicted: string[]): Promise<IntegrationOutcome> => {
         const message = conflicted.length
-          ? `feat: integrate Workbench agent run ${runId} (${conflicted.length} conflicting file(s) left in the run worktree)`
-          : `feat: integrate Workbench agent run ${runId}`;
+          ? `feat: integrate agent run ${runId} (${conflicted.length} conflicting file(s) left in the run worktree)`
+          : `feat: integrate agent run ${runId}`;
         await git(['commit', '-m', message], { cwd: source, timeout: 30_000, maxBuffer: 4_000_000 });
         const commitHash = (await git(['rev-parse', 'HEAD'], { cwd: source, timeout: 5_000 })).trim();
         // `--cached` intentionally leaves the working tree alone. Refresh only
@@ -303,35 +402,37 @@ export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree:
 
 /** Remove only integrated, clean run worktrees. Never discard work merely
  * because a run ended: the detached commit must already be reachable from the
- * source repository's main branch, which is true after its commit has landed
- * and been promoted. */
+ * source repository's active branch, which is true after its patch has landed. */
 export async function cleanupIntegratedRunWorktrees(): Promise<number> {
-  const root = join(homedir(), '.workbench', 'run-worktrees');
-  if (!existsSync(root)) return 0;
   let removed = 0;
-  for (const repositoryDirectory of readdirSync(root, { withFileTypes: true })) {
-    if (!repositoryDirectory.isDirectory()) continue;
-    const directory = join(root, repositoryDirectory.name);
-    for (const runDirectory of readdirSync(directory, { withFileTypes: true })) {
-      if (!runDirectory.isDirectory()) continue;
-      const worktree = join(directory, runDirectory.name);
-      try {
-        const [{ stdout: status }, { stdout: listing }, { stdout: head }] = await Promise.all([
-          execFile('git', ['status', '--porcelain'], { cwd: worktree, timeout: 5_000, maxBuffer: 32_768 }),
-          execFile('git', ['worktree', 'list', '--porcelain'], { cwd: worktree, timeout: 5_000, maxBuffer: 131_072 }),
-          execFile('git', ['rev-parse', 'HEAD'], { cwd: worktree, timeout: 5_000, maxBuffer: 32_768 }),
-        ]);
-        if (status.trim()) continue;
-        const primary = listing.split('\n').find((line) => line.startsWith('worktree '))?.slice('worktree '.length).trim();
-        if (!primary) continue;
-        const integrated = await execFile('git', ['merge-base', '--is-ancestor', head.trim(), 'main'], { cwd: primary, timeout: 5_000, maxBuffer: 32_768 })
-          .then(() => true, () => false);
-        if (!integrated) continue;
-        await execFile('git', ['worktree', 'remove', '--force', worktree], { cwd: primary, timeout: 15_000, maxBuffer: 32_768 });
-        removed += 1;
-      } catch {
-        // A manually removed or temporarily inaccessible worktree is skipped;
-        // cleanup must never make a promotion fail.
+  for (const root of [WORKBENCH_RUN_WORKTREE_ROOT, LEGACY_RUN_WORKTREE_ROOT]) {
+    if (!existsSync(root)) continue;
+    for (const repositoryDirectory of readdirSync(root, { withFileTypes: true })) {
+      if (!repositoryDirectory.isDirectory()) continue;
+      const directory = join(root, repositoryDirectory.name);
+      for (const runDirectory of readdirSync(directory, { withFileTypes: true })) {
+        if (!runDirectory.isDirectory()) continue;
+        const worktree = join(directory, runDirectory.name);
+        try {
+          const [{ stdout: status }, { stdout: listing }, { stdout: head }] = await Promise.all([
+            execFile('git', ['status', '--porcelain'], { cwd: worktree, timeout: 5_000, maxBuffer: 32_768 }),
+            execFile('git', ['worktree', 'list', '--porcelain'], { cwd: worktree, timeout: 5_000, maxBuffer: 131_072 }),
+            execFile('git', ['rev-parse', 'HEAD'], { cwd: worktree, timeout: 5_000, maxBuffer: 32_768 }),
+          ]);
+          if (status.trim()) continue;
+          const primary = listing.split('\n').find((line) => line.startsWith('worktree '))?.slice('worktree '.length).trim();
+          if (!primary) continue;
+          const branch = await execFile('git', ['branch', '--show-current'], { cwd: primary, timeout: 5_000, maxBuffer: 32_768 });
+          if (!branch.stdout.trim()) continue;
+          const integrated = await execFile('git', ['merge-base', '--is-ancestor', head.trim(), branch.stdout.trim()], { cwd: primary, timeout: 5_000, maxBuffer: 32_768 })
+            .then(() => true, () => false);
+          if (!integrated) continue;
+          await execFile('git', ['worktree', 'remove', worktree], { cwd: primary, timeout: 15_000, maxBuffer: 32_768 });
+          removed += 1;
+        } catch {
+          // A manually removed or temporarily inaccessible worktree is skipped;
+          // cleanup must never make a promotion fail.
+        }
       }
     }
   }

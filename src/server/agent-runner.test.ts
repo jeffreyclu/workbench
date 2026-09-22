@@ -1298,6 +1298,15 @@ fi`,
     expect(classifyExecution(backendItem).instructions).toContain('authoritative backend-engineer persona');
   });
 
+  it('uses the frontend persona for a private-endpoint UI ticket despite the word endpoint', () => {
+    const run = { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun;
+    const privateEndpointItem = item('CON-214 · Show custom domain in Private endpoint fallback URL', 'During private endpoint provisioning, show the custom DNS name when provided.');
+    privateEndpointItem.sourceUrl = 'https://linear.app/writer/issue/CON-214/show-custom-domain-in-private-endpoint-fallback-url';
+    const prompt = buildPrompt(privateEndpointItem, run);
+    expect(prompt).toContain('Authoritative persona: frontend-engineer');
+    expect(prompt).not.toContain('Authoritative persona: backend-engineer');
+  });
+
   it('gates complex work behind a strategy', () => {
     const result = classifyExecution(item('Redesign the connector architecture'));
     expect(result.complex).toBe(true);

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { activeAgentRunIds, executeAgentRun } from './agent-runner.js';
 import type { WorkItemRepository } from './repository.js';
+import { cleanupIntegratedRunWorktrees } from './run-worktree.js';
+import { cleanupStaleLocalGitState } from './workspace-maintenance.js';
 
 /**
  * A durable retry/recovery loop for agent runs.
@@ -117,7 +119,42 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
   }, RETENTION_MS);
   retention.unref();
 
+  let workspaceMaintenanceRunning = false;
+  const runWorkspaceMaintenance = async () => {
+    if (workspaceMaintenanceRunning) return;
+    workspaceMaintenanceRunning = true;
+    const startedAt = Date.now();
+    try {
+      const integratedRunWorktrees = await cleanupIntegratedRunWorktrees();
+      const stale = await cleanupStaleLocalGitState();
+      logSafely(
+        'retention_cleanup',
+        'retention',
+        stale.skipped.length ? 'failure' : 'success',
+        `Removed ${integratedRunWorktrees + stale.worktrees.length} stale worktree(s) and ${stale.branches.length} merged local branch(es).${stale.skipped.length ? ` Skipped ${stale.skipped.length} repository operation(s).` : ''}`,
+        Date.now() - startedAt,
+        stale.skipped.length ? 'workspace_maintenance_partial' : undefined,
+      );
+    } catch (error) {
+      logSafely('retention_cleanup', 'retention', 'failure', `Workspace maintenance failed: ${String(error)}`, Date.now() - startedAt, 'workspace_maintenance_error');
+    } finally {
+      workspaceMaintenanceRunning = false;
+    }
+  };
+  // Repository scans should never compete with server boot or the first page
+  // load. Run shortly after the app has settled, then once per retention cycle.
+  const initialMaintenance = process.env.VITEST ? null : setTimeout(() => { void runWorkspaceMaintenance(); }, 5 * 60_000);
+  initialMaintenance?.unref();
+  const workspaceMaintenance = setInterval(() => { void runWorkspaceMaintenance(); }, RETENTION_MS);
+  workspaceMaintenance.unref();
+
   return {
-    stop: () => { clearInterval(heartbeat); clearInterval(tick); clearInterval(retention); },
+    stop: () => {
+      clearInterval(heartbeat);
+      clearInterval(tick);
+      clearInterval(retention);
+      if (initialMaintenance) clearTimeout(initialMaintenance);
+      clearInterval(workspaceMaintenance);
+    },
   };
 }

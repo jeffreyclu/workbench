@@ -9,7 +9,7 @@ vi.mock('./providers/linear.js', () => ({
   },
 }));
 
-import { contextForPrompt, listBrokerConnections, searchBrokerSources, sourceQuery } from './connection-broker.js';
+import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBrokerSources, sourceQuery } from './connection-broker.js';
 
 describe('Linear connection contract', () => {
   it('advertises the create and update operations Workbench actually exposes', () => {
@@ -70,6 +70,30 @@ describe('searchBrokerSources', () => {
     await searchBrokerSources(repository as never, 'CON-999', ['linear']);
 
     expect(fetchIssue).toHaveBeenCalledWith('CON-999');
+    expect(repository.upsertLinearItem).toHaveBeenCalledWith(providerItem);
+  });
+});
+
+describe('resolveBrokerUrl', () => {
+  it('resolves a pasted Linear ticket to provider content before task routing', async () => {
+    const providerItem = {
+      sourceIdentifier: 'CON-214', sourceUrl: 'https://linear.app/writer/issue/CON-214/show-custom-domain', title: 'Show custom domain in Private endpoint fallback URL',
+      description: 'During private endpoint provisioning, show the custom DNS name when provided.', status: 'ready', priority: 2, projectName: 'Connectors', labels: [], dueDate: null,
+      providerUpdatedAt: '2026-09-21T00:00:00.000Z', providerPayload: {},
+    };
+    const repository = {
+      searchLinear: vi.fn().mockReturnValue([]),
+      getLinearConfig: vi.fn().mockReturnValue({ teamIds: [], projectIds: [] }),
+      upsertLinearItem: vi.fn(),
+    };
+    fetchIssue.mockResolvedValueOnce(providerItem);
+
+    await expect(resolveBrokerUrl(repository as never, providerItem.sourceUrl)).resolves.toMatchObject({
+      source: 'Linear',
+      title: 'CON-214 · Show custom domain in Private endpoint fallback URL',
+      description: providerItem.description,
+    });
+    expect(fetchIssue).toHaveBeenCalledWith('CON-214');
     expect(repository.upsertLinearItem).toHaveBeenCalledWith(providerItem);
   });
 });

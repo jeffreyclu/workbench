@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { buildMemoryFtsMatchQuery, chunkText, collectMemoryDocuments, diversifyMemoryResults, indexPendingMemory, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, pruneLegacyAuditMemory, pruneLegacyAuditMemoryBatch, reciprocalRankFusion, searchMemory, setEmbedder, type MemorySearchResult } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
@@ -195,6 +198,20 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     expect(database.prepare("SELECT source_id FROM memory_documents WHERE source = 'artifact'").get()).toBeUndefined();
     expect(database.prepare("SELECT COUNT(*) AS count FROM memory_chunks WHERE document_id NOT IN (SELECT id FROM memory_documents)").get())
       .toEqual({ count: 0 });
+  });
+
+  it('removes local documents after their canonical file is moved or deleted', () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-memory-docs-'));
+    const path = join(root, 'brief.md');
+    writeFileSync(path, '# Brief\n\nCanonical content.');
+    collectMemoryDocuments(database, { docRoots: [{ label: 'local', path: root }] });
+    expect(database.prepare("SELECT source_id FROM memory_documents WHERE source = 'doc'").get())
+      .toMatchObject({ source_id: 'local:brief.md' });
+
+    rmSync(path);
+    collectMemoryDocuments(database, { docRoots: [{ label: 'local', path: root }] });
+    expect(database.prepare("SELECT source_id FROM memory_documents WHERE source = 'doc'").get()).toBeUndefined();
+    rmSync(root, { recursive: true });
   });
 
   it('keeps operational audit entries out of retrieval while compatibility cleanup removes old projections', async () => {
