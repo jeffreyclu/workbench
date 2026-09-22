@@ -662,7 +662,7 @@ export function App() {
       </main>
 
       {selectedId ? <TaskDetail key={selectedId} id={selectedId} onClose={() => navigate({ name: 'stack', stack: taskStack })} onCreated={revealCreatedTask} onRemoving={animateTaskExit} onOpenTask={(taskId) => { openTaskFromConversation(taskId); }} onOpenConversation={openConversation} /> : <section className="detail-empty"><Sparkles /><h2>Choose your next move</h2><p>Select an item or add something new.</p></section>}</>}
-      {showCreate && <CreateTask onClose={() => setShowCreate(false)} onCreated={revealCreatedTask} onBackgroundError={(state) => { setCreateTaskReopenState(state); setShowCreate(true); }} initialState={createTaskReopenState} defaultProjectName={view === 'workbench' ? WORKBENCH_PROJECT_NAME : ''} />}
+      {showCreate && <CreateTask onClose={() => setShowCreate(false)} onCreated={revealCreatedTask} onBackgroundError={(state) => { setCreateTaskReopenState(state); setShowCreate(true); }} initialState={createTaskReopenState} defaultProjectName={view === 'workbench' ? WORKBENCH_PROJECT_NAME : ''} draftScope={view === 'workbench' ? 'workbench' : 'attention'} />}
       {showSources && <SourcesDialog onClose={() => setShowSources(false)} />}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} onOpenKeyboardShortcuts={() => { setShowSettings(false); setShowKeyboardHelp(true); }} />}
       {showKeyboardHelp && <KeyboardHelpDialog onClose={() => setShowKeyboardHelp(false)} />}

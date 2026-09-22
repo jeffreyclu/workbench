@@ -10,6 +10,8 @@ import { MarkdownComposer } from '../markdown/markdown-composer.js';
 import { ModalDialog } from './modal-dialog';
 import { ProjectField } from '../project/project-field';
 import { toast, toastError } from '../../state/toast-store';
+import { useNewTaskDraft } from '../../hooks/new-task-draft';
+import type { NewTaskDraft } from '../../lib/preferences';
 
 export interface CreateTaskReopenState {
   mode: 'ai' | 'link';
@@ -25,17 +27,12 @@ async function buildAttachments(files: File[]) {
   })));
 }
 
-export function CreateTask({ onClose, onCreated, onBackgroundError, initialState = null, defaultProjectName = '' }: { onClose: () => void; onCreated: (item: WorkItem) => void; onBackgroundError?: (state: CreateTaskReopenState) => void; initialState?: CreateTaskReopenState | null; defaultProjectName?: string }) {
+export function CreateTask({ onClose, onCreated, onBackgroundError, initialState = null, defaultProjectName = '', draftScope = 'attention' }: { onClose: () => void; onCreated: (item: WorkItem) => void; onBackgroundError?: (state: CreateTaskReopenState) => void; initialState?: CreateTaskReopenState | null; defaultProjectName?: string; draftScope?: string }) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'search' | 'link' | 'ai' | 'manual'>(initialState?.mode ?? 'manual');
+  const { draft, updateDraft, clearSubmittedDraft } = useNewTaskDraft(draftScope, defaultProjectName, initialState);
+  const { mode, sourceUrl, aiPrompt, title, description, projectName, classificationKind } = draft;
   const [sourceQuery, setSourceQuery] = useState('');
   const [submittedSourceQuery, setSubmittedSourceQuery] = useState('');
-  const [sourceUrl, setSourceUrl] = useState(initialState?.sourceUrl ?? '');
-  const [aiPrompt, setAiPrompt] = useState(initialState?.aiPrompt ?? '');
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [projectName, setProjectName] = useState(defaultProjectName);
-  const [classificationKind, setClassificationKind] = useState<AgentRun['kind']>('execute');
   const { provider: aiProvider, setProvider: setAiProvider } = useAiProvider();
   // The draft turn runs under the account profile the new task will use, which
   // is decided by its project — so a Workbench task and a Writer task can get
@@ -44,7 +41,7 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
   const [files, setFiles] = useState<File[]>([]);
   const [backgroundError, setBackgroundError] = useState(initialState?.error ?? '');
   const fileRef = useRef<HTMLInputElement>(null);
-  const taskTypeField = <label>Task type<select aria-label="Task type" value={classificationKind} onChange={(event) => setClassificationKind(event.target.value as AgentRun['kind'])}>
+  const taskTypeField = <label>Task type<select aria-label="Task type" value={classificationKind} onChange={(event) => updateDraft({ classificationKind: event.target.value as AgentRun['kind'] })}>
     <option value="execute">Execute</option><option value="bugfix">Bug fix</option><option value="research">Research</option><option value="analysis">Analysis</option><option value="strategy">Strategy</option><option value="review">Review</option>
   </select></label>;
   const attachmentField = <div className="task-attachment-picker"><span className="section-label">Files for the agent</span><p className="muted">Saved with this task and available when it executes.</p>{files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((entry) => entry !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}<input ref={fileRef} className="visually-hidden" type="file" multiple onChange={(event) => setFiles((current) => [...current, ...Array.from(event.target.files ?? [])].slice(0, 10))} /><button type="button" className="button secondary compact" onClick={() => fileRef.current?.click()}><Paperclip size={13} /> Attach files</button></div>;
@@ -55,8 +52,9 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
   };
   const createManual = useMutation({
-    mutationFn: api.createWorkItem,
-    onSuccess: async ({ item }) => {
+    mutationFn: ({ request }: { request: Parameters<typeof api.createWorkItem>[0]; submittedDraft: NewTaskDraft }) => api.createWorkItem(request),
+    onSuccess: async ({ item }, { submittedDraft }) => {
+      clearSubmittedDraft(submittedDraft);
       await closeBeforeShowingCreatedTask();
       await queryClient.invalidateQueries({ queryKey: ['work-items'] });
       onCreated(item);
@@ -97,6 +95,7 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
   // than a useMutation callback: the component may unmount before it settles, and the
   // work (and any error toast/reopen) must still happen.
   async function submitAiDraft() {
+    const submittedDraft = draft;
     const prompt = aiPrompt;
     const pendingFiles = files;
     const currentClassificationKind = classificationKind;
@@ -118,6 +117,7 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
         classificationKind: currentClassificationKind,
         attachments,
       });
+      clearSubmittedDraft(submittedDraft);
       toast.dismiss(toastId);
       toast.success('Task added to queue.', { description: item.title });
       await queryClient.invalidateQueries({ queryKey: ['work-items'] });
@@ -130,6 +130,7 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
   }
 
   async function submitLink() {
+    const submittedDraft = draft;
     const url = sourceUrl;
     const pendingFiles = files;
     const currentProjectName = projectName;
@@ -150,6 +151,7 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
         classificationKind: currentClassificationKind,
         attachments,
       });
+      clearSubmittedDraft(submittedDraft);
       toast.dismiss(toastId);
       toast.success('Task added to queue.', { description: item.title });
       await queryClient.invalidateQueries({ queryKey: ['work-items'] });
@@ -163,17 +165,21 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    const submittedDraft = draft;
     const attachments = await buildAttachments(files);
     createManual.mutate({
-      title,
-      description,
-      projectName: projectName || null,
-      status: 'backlog',
-      dueDate: null,
-      sourceUrl: sourceUrl || null,
-      workspacePath: null,
-      classificationKind,
-      attachments,
+      submittedDraft,
+      request: {
+        title,
+        description,
+        projectName: projectName || null,
+        status: 'backlog',
+        dueDate: null,
+        sourceUrl: sourceUrl || null,
+        workspacePath: null,
+        classificationKind,
+        attachments,
+      },
     });
   }
 
@@ -189,10 +195,10 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
           </button>
         </div>
         <div className="task-mode-tabs four-tabs" role="group" aria-label="Task creation mode">
-          <button type="button" className={mode === 'search' ? 'active' : ''} aria-pressed={mode === 'search'} onClick={() => setMode('search')}><Search size={14} /> From search</button>
-          <button type="button" className={mode === 'link' ? 'active' : ''} aria-pressed={mode === 'link'} onClick={() => setMode('link')}><ArrowUpRight size={14} /> Paste link</button>
-          <button type="button" className={mode === 'ai' ? 'active' : ''} aria-pressed={mode === 'ai'} onClick={() => setMode('ai')}><Sparkles size={14} /> Describe to AI</button>
-          <button type="button" className={mode === 'manual' ? 'active' : ''} aria-pressed={mode === 'manual'} onClick={() => setMode('manual')}><Plus size={14} /> Manual task</button>
+          <button type="button" className={mode === 'search' ? 'active' : ''} aria-pressed={mode === 'search'} onClick={() => updateDraft({ mode: 'search' })}><Search size={14} /> From search</button>
+          <button type="button" className={mode === 'link' ? 'active' : ''} aria-pressed={mode === 'link'} onClick={() => updateDraft({ mode: 'link' })}><ArrowUpRight size={14} /> Paste link</button>
+          <button type="button" className={mode === 'ai' ? 'active' : ''} aria-pressed={mode === 'ai'} onClick={() => updateDraft({ mode: 'ai' })}><Sparkles size={14} /> Describe to AI</button>
+          <button type="button" className={mode === 'manual' ? 'active' : ''} aria-pressed={mode === 'manual'} onClick={() => updateDraft({ mode: 'manual' })}><Plus size={14} /> Manual task</button>
         </div>
 
         {mode === 'search' ? (
@@ -216,14 +222,14 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
           </div>
         ) : mode === 'link' ? (
           <form onSubmit={(event) => { event.preventDefault(); void submitLink(); }}>
-            <label>Source URL<input autoFocus value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); setBackgroundError(''); }} placeholder="Slack, GitHub, Linear, Confluence, or Gmail URL" /></label>
+            <label>Source URL<input autoFocus value={sourceUrl} onChange={(event) => { updateDraft({ sourceUrl: event.target.value }); setBackgroundError(''); }} placeholder="Slack, GitHub, Linear, Confluence, or Gmail URL" /></label>
             {attachmentField}
             {backgroundError && <p className="error-message">{backgroundError}</p>}
             <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" disabled={!sourceUrl.trim()}><ArrowUpRight size={16} /> Add to stack</button></div>
           </form>
         ) : mode === 'ai' ? (
           <form onSubmit={(event) => { event.preventDefault(); void submitAiDraft(); }} className="ai-task-form">
-            <label>Describe the task<MarkdownComposer conversationId="create-task-prompt" value={aiPrompt} onChange={(value) => { setAiPrompt(value); setBackgroundError(''); }} placeholder="Paste rough notes, links, constraints, or the outcome you want…" ariaLabel="Describe the task" autoFocus /></label>
+            <label>Describe the task<MarkdownComposer conversationId="create-task-prompt" value={aiPrompt} onChange={(value) => { updateDraft({ aiPrompt: value }); setBackgroundError(''); }} placeholder="Paste rough notes, links, constraints, or the outcome you want…" ariaLabel="Describe the task" autoFocus /></label>
             <p className="ai-draft-help">AI will turn this into one self-contained, executable task and add it to the stack.</p>
             <label className="ai-provider-field">Model<AiProviderSelect value={aiProvider} onChange={setAiProvider} accountProfile={draftAccountProfile} ariaLabel="AI provider for the task draft" /></label>
             {attachmentField}
@@ -234,13 +240,13 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
           <form onSubmit={submit}>
             <label>
               Title
-              <input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="What needs to happen?" />
+              <input autoFocus value={title} onChange={(event) => updateDraft({ title: event.target.value })} placeholder="What needs to happen?" />
             </label>
             <label>
               Description
-              <MarkdownComposer conversationId="create-task-manual" value={description} onChange={setDescription} placeholder="Notes, constraints, links…" ariaLabel="Task description" />
+              <MarkdownComposer conversationId="create-task-manual" value={description} onChange={(value) => updateDraft({ description: value })} placeholder="Notes, constraints, links…" ariaLabel="Task description" />
             </label>
-            <ProjectField value={projectName} onChange={setProjectName} />
+            <ProjectField value={projectName} onChange={(value) => updateDraft({ projectName: value })} />
             {taskTypeField}{attachmentField}
             {createManual.error && <p className="error-message">{createManual.error.message}</p>}
             <div className="dialog-actions">

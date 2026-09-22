@@ -9,6 +9,7 @@ import { AI_PROVIDER_STORAGE_KEY, parseAiProviderChoice, type AiProviderChoice }
 const conversationModelStorageKey = 'workbench:conversation-model-profiles';
 const taskModelStorageKey = 'workbench:task-model-profiles';
 const conversationDraftStorageKey = 'workbench:conversation-drafts';
+const newTaskDraftStorageKey = 'workbench:new-task-drafts';
 const workspaceDiffSelectionsStorageKey = 'workbench:workspace-diff-selections';
 /** The Review surface remembers its own source and its own block, under its
  * own key. Sharing Changes' key would mean opening Review moves the file
@@ -150,6 +151,74 @@ export function clearSentConversationDraft(conversationId: string, sentBody: str
   if ((drafts[conversationId] ?? '') !== sentBody) return;
   delete drafts[conversationId];
   window.localStorage.setItem(conversationDraftStorageKey, JSON.stringify(drafts));
+}
+
+export type NewTaskDraftMode = 'search' | 'link' | 'ai' | 'manual';
+
+export interface NewTaskDraft {
+  mode: NewTaskDraftMode;
+  sourceUrl: string;
+  aiPrompt: string;
+  title: string;
+  description: string;
+  projectName: string;
+  classificationKind: AgentRun['kind'];
+}
+
+function parseNewTaskDraft(value: unknown): NewTaskDraft | null {
+  if (!value || typeof value !== 'object') return null;
+  const draft = value as Record<string, unknown>;
+  const mode = draft.mode;
+  const classificationKind = draft.classificationKind;
+  if (mode !== 'search' && mode !== 'link' && mode !== 'ai' && mode !== 'manual') return null;
+  if (!['execute', 'bugfix', 'research', 'analysis', 'strategy', 'review'].includes(String(classificationKind))) return null;
+  if (![draft.sourceUrl, draft.aiPrompt, draft.title, draft.description, draft.projectName].every((field) => typeof field === 'string')) return null;
+  return {
+    mode,
+    sourceUrl: draft.sourceUrl as string,
+    aiPrompt: draft.aiPrompt as string,
+    title: draft.title as string,
+    description: draft.description as string,
+    projectName: draft.projectName as string,
+    classificationKind: classificationKind as AgentRun['kind'],
+  };
+}
+
+function readNewTaskDrafts(): Record<string, NewTaskDraft> {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(newTaskDraftStorageKey) ?? '{}') as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(value).flatMap(([scope, draft]) => {
+      const parsed = parseNewTaskDraft(draft);
+      return parsed ? [[scope, parsed]] : [];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+export function readNewTaskDraft(scope: string): NewTaskDraft | null {
+  return readNewTaskDrafts()[scope] ?? null;
+}
+
+export function writeNewTaskDraft(scope: string, draft: NewTaskDraft): void {
+  try {
+    const drafts = readNewTaskDrafts();
+    drafts[scope] = draft;
+    window.localStorage.setItem(newTaskDraftStorageKey, JSON.stringify(drafts));
+  } catch {
+    // The form remains usable when browser storage is unavailable.
+  }
+}
+
+export function clearCreatedNewTaskDraft(scope: string, submittedDraft: NewTaskDraft): void {
+  try {
+    const drafts = readNewTaskDrafts();
+    if (JSON.stringify(drafts[scope]) !== JSON.stringify(submittedDraft)) return;
+    delete drafts[scope];
+    window.localStorage.setItem(newTaskDraftStorageKey, JSON.stringify(drafts));
+  } catch {
+    // The task was still created even if browser storage cannot be updated.
+  }
 }
 
 export function readConversationModelProfiles(): Record<string, NonNullable<AgentRun['executionProfile']>> {
