@@ -443,7 +443,14 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const MESSAGES_PAGE_SIZE = 40;
   const [olderMessagePages, setOlderMessagePages] = useState<SharedMessagePage[]>([]);
   const [isLoadingEarlierMessages, setIsLoadingEarlierMessages] = useState(false);
-  const [hasNewActivityBelow, setHasNewActivityBelow] = useState(false);
+  const [newActivityCountBelow, setNewActivityCountBelow] = useState(0);
+  // Message count captured the moment the reader leaves the bottom edge (or a
+  // conversation loads); the delta against the live count is the "N new
+  // updates" total shown in the jump prompt.
+  const activityBaselineCountRef = useRef(0);
+  // Kept in sync so the scroll listener (recreated only on conversation
+  // change, not on every message update) can read the live count.
+  const latestMessageCountRef = useRef(0);
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return;
     const media = window.matchMedia('(max-width: 820px) and (pointer: coarse)');
@@ -1090,6 +1097,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   });
   const latestMessage = messages.data?.messages.at(-1);
   const latestMessageLength = latestMessage?.body.length ?? 0;
+  latestMessageCountRef.current = messages.data?.messages.length ?? 0;
   const scrollThreadToLatest = (behavior: ScrollBehavior) => {
     const container = threadScrollRef.current;
     if (!container) return;
@@ -1133,7 +1141,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // bottom; once they scroll up to read history, stop yanking them back
     // and instead flag that new activity is waiting below the fold.
     if (!isNearThreadBottomRef.current) {
-      setHasNewActivityBelow(true);
+      setNewActivityCountBelow(Math.max(1, latestMessageCountRef.current - activityBaselineCountRef.current));
       return;
     }
     // A stream can update several times per second. Starting a new smooth
@@ -1150,8 +1158,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     isNearThreadBottomRef.current = !savedAnchor;
     pendingInitialThreadScrollRef.current = conversationId;
     pendingInitialThreadAnchorRef.current = savedAnchor;
+    activityBaselineCountRef.current = latestMessageCountRef.current;
     setOlderMessagePages([]);
-    setHasNewActivityBelow(false);
+    setNewActivityCountBelow(0);
     setMobileHeaderOpen(false);
     setMobileComposerOpen(false);
   }, [conversationId]);
@@ -1170,6 +1179,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         const anchorElement = anchorId ? threadScrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(anchorId)}"]`) : null;
         if (anchorElement) anchorElement.scrollIntoView({ block: 'start' });
         else scrollThreadToLatest('auto');
+        activityBaselineCountRef.current = latestMessageCountRef.current;
         pendingInitialThreadScrollRef.current = null;
         pendingInitialThreadAnchorRef.current = null;
       });
@@ -1187,7 +1197,10 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     const updateNearBottom = () => {
       const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= nearBottomThreshold;
       isNearThreadBottomRef.current = nearBottom;
-      if (nearBottom) setHasNewActivityBelow(false);
+      if (nearBottom) {
+        activityBaselineCountRef.current = latestMessageCountRef.current;
+        setNewActivityCountBelow(0);
+      }
       // Debounce the write to a pause in scrolling rather than every scroll
       // tick, which fires far too often to persist synchronously.
       if (writeTimeout !== null) window.clearTimeout(writeTimeout);
@@ -1204,7 +1217,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   }, [conversationId]);
   const jumpToLatest = () => {
     isNearThreadBottomRef.current = true;
-    setHasNewActivityBelow(false);
+    activityBaselineCountRef.current = latestMessageCountRef.current;
+    setNewActivityCountBelow(0);
     scrollThreadToLatest('smooth');
   };
   // Sending before the agent target / conversation state has finished
@@ -1509,7 +1523,11 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           {createTasks.error && createTasks.variables?.conversationId === conversationId && <div className="finding-progress error-message"><X size={15} /><span><strong>Could not create tasks</strong><small>{createTasks.error.message}</small></span></div>}
           <div ref={endRef} />
         </div>
-        {hasNewActivityBelow && <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> New activity · Jump to latest</button>}
+        {newActivityCountBelow > 0 && (
+          <button type="button" className="jump-to-latest-button" onClick={jumpToLatest}>
+            <ArrowDown size={13} /> {newActivityCountBelow} new update{newActivityCountBelow === 1 ? '' : 's'} · Jump to latest
+          </button>
+        )}
         {conversationDetail.isLoading || (conversationId && selectionHydratedFor !== conversationId) ? <ConversationComposerSkeleton /> : conversationView === 'archive' ? <div className="archived-composer-note"><Archive size={14} /> Archived conversation · restore or fork it to continue</div> : <>{isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-backdrop" aria-label="Dismiss composer" onClick={() => setMobileComposerOpen(false)} />}<form id="conversation-composer" className={`shared-composer${mobileComposerOpen ? ' mobile-composer-sheet' : ' is-mobile-composer-collapsed'}`} onSubmit={submit}>
           {isPhoneChrome && mobileComposerOpen && <button type="button" className="mobile-composer-handle" aria-label="Collapse composer" title="Collapse composer" onPointerDown={(event) => { mobileComposerDragStartY.current = event.clientY; }} onPointerUp={(event) => { if (mobileComposerDragStartY.current !== null && event.clientY - mobileComposerDragStartY.current >= 36) setMobileComposerOpen(false); mobileComposerDragStartY.current = null; }} onPointerCancel={() => { mobileComposerDragStartY.current = null; }} onClick={() => setMobileComposerOpen(false)}><span /></button>}
           {files.length > 0 && <div className="pending-files">{files.map((file) => <button type="button" key={`${file.name}-${file.size}`} onClick={() => setFiles((current) => current.filter((item) => item !== file))}><Paperclip size={11} /> {file.name} <X size={10} /></button>)}</div>}
