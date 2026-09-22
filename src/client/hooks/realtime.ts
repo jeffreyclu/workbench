@@ -27,13 +27,9 @@ export function subscribeRealtimeMessages(listener: (message: RealtimeMessage) =
  * established connection was lost and backoff is in progress. Callers use
  * this to warn that cached data may be stale while the socket is down.
  */
-export type RealtimeConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'polling';
+export type RealtimeConnectionState = 'connecting' | 'connected' | 'reconnecting';
 
-const MAX_WEBSOCKET_RECONNECT_ATTEMPTS = 3;
 const REALTIME_INVALIDATION_BATCH_MS = 250;
-const HTTPS_FALLBACK_POLL_MS = 1_500;
-const HTTPS_FALLBACK_WS_PROBE_MS = 30_000;
-const HTTPS_FALLBACK_TOPICS: readonly RealtimeTopic[] = realtimeTopics;
 
 const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
   'work-items': [
@@ -105,8 +101,8 @@ export function realtimeUrl(location: Pick<Location, 'protocol' | 'host'> = wind
  * for a batch of 'shared-messages' events. When every event in the batch
  * named one, only those conversations' message/event queries are refetched
  * instead of every open conversation's. An empty set (a 'ready' resync, or
- * the HTTPS polling fallback, which carries no per-event ids) falls back to
- * invalidating both broadly.
+ * a `ready` catch-up, which carries no per-event ids) falls back to
+ * invalidating both broadly once.
  */
 export function invalidateRealtimeTopics(
   queryClient: QueryClient,
@@ -175,8 +171,6 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
 
     let socket: WebSocket | null = null;
     let reconnectTimer: number | null = null;
-    let pollingTimer: number | null = null;
-    let recoveryProbeTimer: number | null = null;
     let invalidationTimer: number | null = null;
     const pendingInvalidationTopics = new Set<RealtimeTopic>();
     const pendingMessagesConversationIds = new Set<string>();
@@ -206,33 +200,11 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       if (invalidationTimer === null) invalidationTimer = window.setTimeout(flushInvalidations, REALTIME_INVALIDATION_BATCH_MS);
     };
 
-    const startHttpsFallback = () => {
-      if (disposed || pollingTimer !== null) return;
-      // The socket carries invalidations only. Invalidating active queries
-      // makes TanStack Query fetch their normal HTTPS endpoints, preserving
-      // live agent output when a proxy, VPN, or browser policy rejects WS.
-      setConnectionState('polling');
-      invalidateRealtimeTopics(queryClient, HTTPS_FALLBACK_TOPICS);
-      pollingTimer = window.setInterval(() => invalidateRealtimeTopics(queryClient, HTTPS_FALLBACK_TOPICS), HTTPS_FALLBACK_POLL_MS);
-      // Stay useful over HTTPS, but periodically make one recovery probe.
-      // A failed probe returns here without fast retries; the next probe is
-      // still bounded to this low-frequency interval.
-      recoveryProbeTimer = window.setInterval(connect, HTTPS_FALLBACK_WS_PROBE_MS);
-    };
-
     const connect = () => {
       if (disposed) return;
       socket = new WebSocket(realtimeUrl());
       socket.addEventListener('open', () => {
         attempts = 0;
-        if (pollingTimer !== null) {
-          window.clearInterval(pollingTimer);
-          pollingTimer = null;
-        }
-        if (recoveryProbeTimer !== null) {
-          window.clearInterval(recoveryProbeTimer);
-          recoveryProbeTimer = null;
-        }
         setConnectionState('connected');
       });
       socket.addEventListener('message', (event) => {
@@ -258,10 +230,6 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
           connect();
           return;
         }
-        if (attempts >= MAX_WEBSOCKET_RECONNECT_ATTEMPTS) {
-          startHttpsFallback();
-          return;
-        }
         setConnectionState('reconnecting');
         const delay = Math.min(30_000, 1_000 * 2 ** attempts++);
         const jitter = Math.round(delay * (0.2 * Math.random()));
@@ -269,7 +237,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       });
     };
 
-    // Skips any pending backoff/poll wait and makes an immediate connection
+    // Skips any pending backoff wait and makes an immediate connection
     // attempt — used by the "Retry now" action and by the browser 'online'
     // hint. The resulting connection state still comes from the socket.
     retryRef.current = () => {
@@ -277,14 +245,6 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
         reconnectTimer = null;
-      }
-      if (recoveryProbeTimer !== null) {
-        window.clearInterval(recoveryProbeTimer);
-        recoveryProbeTimer = null;
-      }
-      if (pollingTimer !== null) {
-        window.clearInterval(pollingTimer);
-        pollingTimer = null;
       }
       if (socket && socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
         manualRetryRequested = true;
@@ -300,8 +260,6 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       disposed = true;
       retryRef.current = () => {};
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
-      if (pollingTimer !== null) window.clearInterval(pollingTimer);
-      if (recoveryProbeTimer !== null) window.clearInterval(recoveryProbeTimer);
       if (invalidationTimer !== null) window.clearTimeout(invalidationTimer);
       pendingInvalidationTopics.clear();
       socket?.close();

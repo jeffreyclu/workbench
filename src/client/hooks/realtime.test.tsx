@@ -142,7 +142,7 @@ describe('realtime invalidation', () => {
     rendered.unmount();
   });
 
-  it('falls back to HTTPS query polling after a bounded number of websocket failures', () => {
+  it('keeps reconnecting over WebSocket without starting HTTPS polling', () => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', MockWebSocket);
     const client = new QueryClient();
@@ -157,21 +157,14 @@ describe('realtime invalidation', () => {
       if (attempt < 3) act(() => { vi.advanceTimersByTime(30_000); });
     }
 
-    expect(states.at(-1)).toBe('polling');
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-messages'] });
-    const callsBeforePoll = invalidateQueries.mock.calls.length;
-    act(() => { vi.advanceTimersByTime(1_500); });
-    expect(invalidateQueries.mock.calls.length).toBeGreaterThan(callsBeforePoll);
-
-    const socketsBeforeProbe = MockWebSocket.instances.length;
+    expect(states.at(-1)).toBe('reconnecting');
+    expect(invalidateQueries).not.toHaveBeenCalled();
+    const socketsBeforeRetry = MockWebSocket.instances.length;
     act(() => { vi.advanceTimersByTime(30_000); });
-    expect(MockWebSocket.instances).toHaveLength(socketsBeforeProbe + 1);
+    expect(MockWebSocket.instances).toHaveLength(socketsBeforeRetry + 1);
     act(() => { MockWebSocket.instances.at(-1)?.emit('open'); });
     expect(states.at(-1)).toBe('connected');
-
-    const callsAfterRecovery = invalidateQueries.mock.calls.length;
-    act(() => { vi.advanceTimersByTime(1_500); });
-    expect(invalidateQueries.mock.calls.length).toBe(callsAfterRecovery);
+    expect(invalidateQueries).not.toHaveBeenCalled();
     rendered.unmount();
   });
 

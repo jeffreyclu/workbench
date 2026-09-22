@@ -1152,7 +1152,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // been laid out. An immediate scroll then targets the old/zero height and
     // still leaves the conversation at the top. Wait for the message rows to
     // commit before consuming this conversation's one initial scroll. Later
-    // polling must not pull a reader back down after they scroll.
+    // realtime updates must not pull a reader back down after they scroll.
     if (!conversationId || !messages.isSuccess || pendingInitialThreadScrollRef.current !== conversationId) return;
     let finalFrame = 0;
     const layoutFrame = window.requestAnimationFrame(() => {

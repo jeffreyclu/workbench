@@ -121,8 +121,8 @@ When Workbench is backgrounded, browser chrome must surface conversations in
 `needs_attention` or `waiting_approval`: title format is `(N) Workbench` and
 the favicon has an attention dot. Do not use unread conversations for this
 count; ordinary completed agent replies are not action-required. The precise
-count refreshes through the authenticated shared WebSocket invalidation, with
-a polling fallback. Desktop notifications remain unimplemented because they
+count refreshes through authenticated shared WebSocket invalidation only.
+Desktop notifications remain unimplemented because they
 require an explicit opt-in permission UX.
 
 ### Interject steers the active run; it must not create a parallel reply
@@ -581,17 +581,18 @@ every server-authored user notification**. Notifications are typed toast frames
 with tone, text, optional duration, and an internal action route; the client
 must render them directly rather than inferring them from polling state. REST
 remains the source of truth: do not put full records or agent text on the
-socket. Keep polling only as a data-refresh fallback until process-to-process
-event delivery is durable.
+socket.
 
 *Decision from Jeffrey, 2026-09-21.* Feature queries must not run independent
 polling intervals alongside the socket. Insights, navigation, discovery,
 tasks, conversations, workspace-diff status, artifacts, source authorization,
 runtime state, and review scoring refresh from WebSocket invalidations. After a
 reconnect, one `ready` catch-up invalidation refreshes active queries that may
-have missed an event. Repeating HTTPS invalidation remains only as the shared
-transport fallback after the socket exhausts its reconnect attempts, and it
-must stop as soon as a WebSocket opens.
+have missed an event. There is no timer-based HTTPS polling fallback. If the
+socket disconnects, keep reconnecting with capped exponential backoff and show
+the disconnected state. Initial loads, mutation responses, and the one `ready`
+catch-up may use REST; ongoing refreshes must be triggered only by WebSocket
+events.
 
 *Decision from Jeffrey, 2026-08-24.* Suppress a toast whose update concerns
 the task or conversation the user is currently viewing. The active surface
@@ -1010,8 +1011,9 @@ including the existing pinned-reminder-toast navigation test.
 *Transport correction, 2026-09-21.* The reminder no longer refetches the task
 list every 30 minutes. Work-item WebSocket events keep the cached pinned count
 current, while a local one-shot timeout re-evaluates the existing 30-minute
-toast gate without issuing an HTTP request. HTTPS query polling remains only
-the shared realtime transport fallback after repeated socket failures.
+toast gate without issuing an HTTP request. Socket failures stay disconnected
+and reconnect through the shared WebSocket backoff; they never start HTTPS
+query polling.
 
 ### Agent debugger only shows recorded rationale
 

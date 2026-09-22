@@ -569,14 +569,12 @@ export function App() {
   return (
     <div className="app-shell">
       <Toaster />
-      {(realtimeBrowserOffline || realtimeConnectionState === 'reconnecting' || realtimeConnectionState === 'polling') && (
+      {(realtimeBrowserOffline || realtimeConnectionState === 'reconnecting') && (
         <div className="realtime-status-banner" role="status">
           <LoaderCircle className="spin" size={13} />
           {realtimeBrowserOffline
             ? 'Offline — showing cached data'
-            : realtimeConnectionState === 'reconnecting'
-              ? 'Reconnecting… showing cached data'
-              : 'Live agent updates are polling over HTTPS'}
+            : 'Reconnecting… showing cached data'}
           <button type="button" className="realtime-status-retry" onClick={() => retryRealtimeConnection()}>Retry now</button>
         </div>
       )}
