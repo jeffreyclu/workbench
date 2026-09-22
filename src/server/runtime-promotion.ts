@@ -3,9 +3,8 @@ import { join, resolve } from 'node:path';
 
 const MAX_OUTPUT = 20_000;
 
-export function promotionMustWaitForAgents(status: { ownedAgentWorkActive?: unknown; liveAgentProcessCount?: unknown }): boolean {
-  return status.ownedAgentWorkActive === true
-    || (typeof status.liveAgentProcessCount === 'number' && status.liveAgentProcessCount > 0);
+export function promotionMustWaitForAgents(status: { runtimeWorkActive?: unknown }): boolean {
+  return status.runtimeWorkActive === true;
 }
 
 export function isRuntimeApproval(message: string): boolean {

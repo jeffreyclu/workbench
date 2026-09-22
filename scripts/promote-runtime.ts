@@ -30,7 +30,7 @@ function activeAgentWork(): Promise<boolean | null> {
       response.on('data', (chunk: string) => { body = `${body}${chunk}`.slice(-4_000); });
       response.on('end', () => {
         try {
-          const status = JSON.parse(body) as { ownedAgentWorkActive?: unknown; liveAgentProcessCount?: unknown };
+          const status = JSON.parse(body) as { runtimeWorkActive?: unknown };
           resolveStatus(promotionMustWaitForAgents(status));
         } catch { resolveStatus(null); }
       });
@@ -45,8 +45,8 @@ async function waitForAgentIdle(): Promise<void> {
   for (;;) {
     const active = await activeAgentWork();
     // No live runtime is normal for the first installation. A responding live
-    // runtime must drain every agent process before build/preflight can compete
-    // with the user's workload for memory and CPU.
+    // runtime must drain Workbench-scoped work before build/preflight replaces
+    // its backend. An agent working in another repository remains independent.
     if (active !== true) return;
     if (!reported) {
       reported = true;

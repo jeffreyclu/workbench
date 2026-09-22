@@ -25,10 +25,10 @@ describe('isRuntimeApproval', () => {
 });
 
 describe('runtime drain state', () => {
-  it('waits for agent-owned work without deadlocking on the promotion worker itself', () => {
-    expect(promotionMustWaitForAgents({ ownedAgentWorkActive: true, liveAgentProcessCount: 0 })).toBe(true);
-    expect(promotionMustWaitForAgents({ ownedAgentWorkActive: false, liveAgentProcessCount: 1 })).toBe(true);
-    expect(promotionMustWaitForAgents({ ownedAgentWorkActive: false, liveAgentProcessCount: 0 })).toBe(false);
+  it('waits only for Workbench-scoped runtime work', () => {
+    expect(promotionMustWaitForAgents({ runtimeWorkActive: true })).toBe(true);
+    expect(promotionMustWaitForAgents({ runtimeWorkActive: false })).toBe(false);
+    expect(promotionMustWaitForAgents({ runtimeWorkActive: false, ownedAgentWorkActive: true, liveAgentProcessCount: 1 } as never)).toBe(false);
   });
 
   it('keeps the old runtime alive for both agent work and system promotion progress', () => {
