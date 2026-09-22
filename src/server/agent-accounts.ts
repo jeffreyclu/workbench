@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { agentAccountEnv, managedAccountDirectory } from './agent-security.js';
@@ -61,15 +61,45 @@ export function listAgentAccounts(source: NodeJS.ProcessEnv = process.env): Agen
 
 /** Opens the provider's own interactive login in Terminal. The CLI opens its browser
  * OAuth page, where Google sign-in remains between the provider and Google. */
-export function startAgentAccountLogin(provider: AccountProvider, rawName: string, source: NodeJS.ProcessEnv = process.env): AgentAccountProfile[] {
+export function startAgentAccountLogin(
+  provider: AccountProvider,
+  rawName: string,
+  source: NodeJS.ProcessEnv = process.env,
+  onCredentialsChanged?: () => void,
+): AgentAccountProfile[] {
   const name = profileName(rawName);
   const directory = managedAccountDirectory(provider, name, source);
-  if (directory) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const credentialDirectory = directory ?? join(source.HOME?.trim() || homedir(), provider === 'codex' ? '.codex' : '.claude');
+  mkdirSync(credentialDirectory, { recursive: true, mode: 0o700 });
+  let watcher: FSWatcher | null = null;
+  let notificationTimer: NodeJS.Timeout | null = null;
+  let expiryTimer: NodeJS.Timeout | null = null;
+  const stopWatching = () => {
+    watcher?.close();
+    watcher = null;
+    if (notificationTimer) clearTimeout(notificationTimer);
+    if (expiryTimer) clearTimeout(expiryTimer);
+  };
+  if (onCredentialsChanged) {
+    watcher = watch(credentialDirectory, { recursive: true }, () => {
+      if (notificationTimer) clearTimeout(notificationTimer);
+      notificationTimer = setTimeout(onCredentialsChanged, 250);
+      notificationTimer.unref();
+    });
+    watcher.unref();
+    expiryTimer = setTimeout(stopWatching, 15 * 60_000);
+    expiryTimer.unref();
+  }
   const env = directory ? `${provider === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'}=${shellQuote(directory)} ` : '';
   const command = provider === 'codex' ? 'codex login' : 'claude auth login --claudeai';
   const terminalCommand = `${env}${command}; printf '\\nLogin finished. You can close this window.\\n'`;
   const script = `tell application "Terminal"\nactivate\ndo script ${appleScriptString(`exec ${process.env.SHELL || '/bin/zsh'} -lc ${shellQuote(terminalCommand)}`)}\nend tell`;
-  execFileSync('/usr/bin/osascript', ['-e', script], { stdio: 'ignore' });
+  try {
+    execFileSync('/usr/bin/osascript', ['-e', script], { stdio: 'ignore' });
+  } catch (error) {
+    stopWatching();
+    throw error;
+  }
   return listAgentAccounts(source);
 }
 

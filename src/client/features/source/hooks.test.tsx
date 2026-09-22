@@ -3,7 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrokerConnection } from '../../../shared/contracts.js';
-import { SOURCE_AUTHORIZATION_POLL_INTERVAL_MS, useSourceAuthorization, useSourceConnections } from './hooks.js';
+import { useSourceAuthorization, useSourceConnections } from './hooks.js';
 
 const pendingFigmaConnection: BrokerConnection = {
   id: 'figma',
@@ -23,14 +23,6 @@ function jsonResponse(body: unknown) {
 function queryWrapper() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-}
-
-async function advanceAuthorizationPoll() {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(SOURCE_AUTHORIZATION_POLL_INTERVAL_MS);
-    await Promise.resolve();
-    await Promise.resolve();
-  });
 }
 
 afterEach(() => {
@@ -54,18 +46,22 @@ describe('useSourceConnections', () => {
 });
 
 describe('useSourceAuthorization', () => {
-  it('polls while waiting and reaches authorized when the server connection changes', async () => {
+  it('waits for the realtime-refreshed connection and reaches authorized without polling', async () => {
     vi.useFakeTimers();
     const connectedFigma = { ...pendingFigmaConnection, state: 'connected' as const };
-    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ connections: [connectedFigma] }));
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    const { result } = renderHook(() => useSourceAuthorization(pendingFigmaConnection), { wrapper: queryWrapper() });
+    const { result, rerender } = renderHook(({ connection }) => useSourceAuthorization(connection), {
+      initialProps: { connection: pendingFigmaConnection },
+      wrapper: queryWrapper(),
+    });
 
     act(() => result.current.startAuthorization('https://example.com/oauth'));
     expect(result.current.state.status).toBe('awaiting-auth');
 
-    await advanceAuthorizationPoll();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    rerender({ connection: connectedFigma });
     expect(result.current.state.status).toBe('authorized');
   });
 

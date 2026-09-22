@@ -95,12 +95,11 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     queryFn: () => conversationId ? conversationClient.getConversationWorkspaces(conversationId) : sourceClient.getWorkItemWorkspaces(workItemId!),
     enabled: Boolean(conversationId || workItemId),
     // A run can receive its detached worktree after this panel is mounted.
-    // Refresh only the tiny explorer payload while it is active; the full diff
+    // Realtime run events refresh this tiny explorer payload; the full diff
     // remains explicit unless its selected workspace actually changes.
     staleTime: 0,
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
-    refetchInterval: isRunning ? 2_000 : false,
   });
   const selectWorkspace = useMutation({
     mutationFn: (workspacePath: string) => conversationId ? conversationClient.selectConversationWorkspace(conversationId, workspacePath) : sourceClient.selectWorkItemWorkspace(workItemId!, workspacePath),

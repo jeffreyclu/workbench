@@ -201,7 +201,6 @@ export function PromotionQueueStatus() {
   const status = useQuery({
     queryKey: ['promotion-queue-status'],
     queryFn: () => api.getPromotionQueueStatus(),
-    refetchInterval: 2_000,
   });
   const data = status.data;
 

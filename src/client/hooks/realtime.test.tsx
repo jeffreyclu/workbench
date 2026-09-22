@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, render } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { invalidateRealtimeTopics, realtimeUrl, useRealtimeNotifications, type RealtimeConnection } from './realtime';
 
@@ -34,14 +34,40 @@ describe('realtime invalidation', () => {
     expect(realtimeUrl({ protocol: 'http:', host: 'localhost:5180' })).toBe('ws://localhost:5180/api/realtime');
   });
 
-  it('maps topic invalidations to the existing query cache', () => {
+  it('maps topic invalidations to every realtime-backed feature cache without duplicates', () => {
     const client = new QueryClient();
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
 
-    invalidateRealtimeTopics(client, ['shared', 'runtime']);
+    invalidateRealtimeTopics(client, ['work-items', 'shared', 'shared-messages', 'discovery', 'runtime', 'insights', 'artifacts']);
 
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-messages'] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['runtime-preview-status'] });
+    for (const queryKey of [
+      ['work-items'], ['work-item'], ['work-item-counts'], ['pinned-reminder'],
+      ['shared-conversations'], ['shared-messages'], ['shared-message-activity'], ['shared-agent-events'],
+      ['work-item-workspaces'], ['conversation-workspaces'], ['workspace-diff-status'],
+      ['discovery'], ['runtime-preview-status'], ['promotion-queue-status'], ['health'], ['agent-accounts'],
+      ['insights'], ['memory-diagnostics'], ['mcp-quality'], ['artifacts'],
+    ]) expect(invalidateQueries).toHaveBeenCalledWith({ queryKey });
+    expect(invalidateQueries.mock.calls.filter(([input]) => JSON.stringify(input) === JSON.stringify({ queryKey: ['workspace-diff-status'] }))).toHaveLength(1);
+    expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['workspace-diff'] });
+  });
+
+  it('catches up realtime-backed queries once when a websocket connection becomes ready', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    const client = new QueryClient();
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
+    const noop = () => {};
+    function RealtimeClient() { useRealtimeNotifications(noop); return null; }
+
+    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
+    MockWebSocket.instances[0].emit('message', JSON.stringify({ type: 'ready' }));
+    expect(invalidateQueries).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(250); });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['work-items'] });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-agent-events'] });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['workspace-diff-status'] });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['mcp-quality'] });
+    rendered.unmount();
   });
 
   it('invalidates active server data and delivers typed notifications from socket events', () => {
@@ -66,6 +92,34 @@ describe('realtime invalidation', () => {
     expect(invalidateQueries.mock.calls.filter(([input]) => JSON.stringify(input) === JSON.stringify({ queryKey: ['work-items'] }))).toHaveLength(1);
     socket.emit('message', JSON.stringify({ type: 'notification', tone: 'success', message: 'Agent finished', action: { label: 'Open conversation', route: '/conversations/123' } }));
     expect(notify).toHaveBeenCalledWith({ type: 'notification', tone: 'success', message: 'Agent finished', action: { label: 'Open conversation', route: '/conversations/123' } });
+    rendered.unmount();
+  });
+
+  it('does not refetch a connected feature query on a timer and fetches once for batched socket events', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryFn = vi.fn(async () => ({ total: 1 }));
+    const noop = () => {};
+    function RealtimeClient() {
+      useRealtimeNotifications(noop);
+      useQuery({ queryKey: ['insights', 'all'], queryFn });
+      return null;
+    }
+
+    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
+    await act(async () => { await Promise.resolve(); });
+    expect(queryFn).toHaveBeenCalledOnce();
+    queryFn.mockClear();
+    act(() => { MockWebSocket.instances[0].emit('open'); });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(queryFn).not.toHaveBeenCalled();
+
+    MockWebSocket.instances[0].emit('message', JSON.stringify({ type: 'invalidate', topics: ['insights'] }));
+    MockWebSocket.instances[0].emit('message', JSON.stringify({ type: 'invalidate', topics: ['insights', 'work-items'] }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(queryFn).toHaveBeenCalledOnce();
     rendered.unmount();
   });
 

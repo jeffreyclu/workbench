@@ -41,6 +41,16 @@ export const isSharedReplyActive = (id: string) => activeReplies.has(id);
 
 type SharedReplyEvidence = Promise<ExternalEvidence<unknown>[]>;
 
+function addLiveAgentStreamEvents(
+  repository: WorkItemRepository,
+  messageId: string,
+  runId: string | null,
+  events: Array<Pick<AgentStreamEvent, 'kind' | 'detail' | 'trace'>>,
+): void {
+  repository.addAgentStreamEvents(messageId, runId, events);
+  publishRealtimeEvent('shared-messages');
+}
+
 function pullRequestUrls(value: string): string[] {
   return [...new Set((value.match(/https?:\/\/github\.com\/[^\s<>)]+\/pull\/\d+(?:\/files)?/gi) ?? [])
     .map((url) => url.replace(/[.,;:!?]+$/, ''))
@@ -1566,7 +1576,7 @@ export async function replyInSharedRoom(
     })));
     const connectedContext = externalEvidence.find((entry) => entry.snapshot.kind === 'connected_source_context')?.payload;
     const connectionContext = [typeof connectedContext === 'string' ? connectedContext : '', evidencePromptBlock(externalEvidence)].filter(Boolean).join('\n\n');
-    for (const entry of externalEvidence) repository.addAgentStreamEvents(messageId, runId ?? null, [{
+    for (const entry of externalEvidence) addLiveAgentStreamEvents(repository, messageId, runId ?? null, [{
       kind: 'decision',
       detail: `Supervisor supplied ${entry.snapshot.kind} from one immutable local snapshot (${entry.snapshot.id}); ${entry.reused ? 'reused' : 'fetched once'} for dispatch ${entry.snapshot.dispatchGroupId}.`,
     }]);
@@ -1639,7 +1649,7 @@ export async function replyInSharedRoom(
     });
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
-    if (externalAuthorization.granted) repository.addAgentStreamEvents(messageId, runId ?? null, [{
+    if (externalAuthorization.granted) addLiveAgentStreamEvents(repository, messageId, runId ?? null, [{
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);
@@ -1701,7 +1711,7 @@ export async function replyInSharedRoom(
       }, (steer) => {
         registerActiveReplySteering(messageId, steer);
         void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
-      }, (event) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, [event])), (usage) => {
+      }, (event) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, [event])), (usage) => {
         persistNonTerminalAgentUpdate(() => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
           repository.updateSharedMessage(messageId, telemetry);
@@ -1728,7 +1738,7 @@ export async function replyInSharedRoom(
         if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, 'palmyra', 'usage', telemetry); }
       }),
       onAudit: (entries) => persistNonTerminalAgentUpdate(() => {
-        repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+        addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
         })));
@@ -1759,7 +1769,7 @@ export async function replyInSharedRoom(
         if (runId) repository.updateRun(runId, telemetry);
         if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry);
       });
-    }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+    }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
       kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       trace: entry.trace,
     })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
@@ -1787,7 +1797,7 @@ export async function replyInSharedRoom(
           repository.updateSharedMessage(messageId, telemetry);
           if (runId) repository.updateRun(runId, telemetry);
         });
-      }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+      }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
         trace: entry.trace,
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
@@ -1815,7 +1825,7 @@ export async function replyInSharedRoom(
             repository.updateSharedMessage(messageId, telemetry);
             if (runId) repository.updateRun(runId, telemetry);
           });
-        }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+        }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
         })))), runKind, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
@@ -1853,7 +1863,7 @@ export async function replyInSharedRoom(
           repository.updateSharedMessage(messageId, telemetry);
           if (runId) repository.updateRun(runId, telemetry);
         });
-      }, (entries) => persistNonTerminalAgentUpdate(() => repository.addAgentStreamEvents(messageId, runId ?? null, entries.map((entry) => ({
+      }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
         trace: entry.trace,
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
@@ -2033,7 +2043,7 @@ export async function interjectQueuedSharedMessage(
   if (!repository.claimQueuedInterjection(messageId)) return [];
   const claimedMessage = repository.getSharedMessageById(messageId) ?? message;
   if (authorization.granted) {
-    for (const reply of steerable) repository.addAgentStreamEvents(reply.id, replyRunIds.get(reply.id) ?? null, [{
+    for (const reply of steerable) addLiveAgentStreamEvents(repository, reply.id, replyRunIds.get(reply.id) ?? null, [{
       kind: 'decision',
       detail: `Supervisor granted ${authorization.capability.actionIds.join(', ')} ${authorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${authorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${authorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);

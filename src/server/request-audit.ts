@@ -8,6 +8,8 @@ function realtimeTopics(path: string): RealtimeTopic[] {
   if (path.startsWith('/api/shared')) return ['shared', 'work-items', 'insights'];
   if (path.startsWith('/api/discovery')) return ['discovery', 'work-items'];
   if (path.startsWith('/api/artifacts')) return ['artifacts', 'work-items'];
+  if (path.startsWith('/api/source-connections')) return ['runtime'];
+  if (path.startsWith('/api/agent-accounts')) return ['runtime'];
   if (path.startsWith('/api/work-items') || path.startsWith('/api/agent-runs') || path.startsWith('/api/queue')) return ['work-items', 'shared', 'insights'];
   if (path.startsWith('/api/runtime')) return ['runtime', 'shared'];
   return ['work-items'];

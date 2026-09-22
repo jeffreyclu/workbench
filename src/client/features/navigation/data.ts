@@ -7,7 +7,7 @@ export const navigationQueryKeys = {
 };
 
 export function useNavigationCounts() {
-  const workItems = useQuery({ queryKey: navigationQueryKeys.workItemCounts, queryFn: api.getWorkItemCounts, refetchInterval: 5_000 });
-  const conversations = useQuery({ queryKey: navigationQueryKeys.conversationCount, queryFn: api.getConversationCount, refetchInterval: 5_000 });
+  const workItems = useQuery({ queryKey: navigationQueryKeys.workItemCounts, queryFn: api.getWorkItemCounts });
+  const conversations = useQuery({ queryKey: navigationQueryKeys.conversationCount, queryFn: api.getConversationCount });
   return { workItems, conversations };
 }

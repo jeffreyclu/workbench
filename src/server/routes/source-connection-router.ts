@@ -4,6 +4,7 @@ import { figmaScopeSchema, grafanaConnectionSchema, sourceProviderSchema } from 
 import type { RouteContext } from '../route-context.js';
 import { finishRemoteMcpOAuth } from '../remote-mcp.js';
 import { isActionFailure } from '../action-result.js';
+import { publishRealtimeEvent } from '../realtime.js';
 
 export function createSourceConnectionRouter({ repository, admin }: RouteContext) {
   const router = Router();
@@ -39,6 +40,7 @@ export function createSourceConnectionRouter({ repository, admin }: RouteContext
       const settings = await finishRemoteMcpOAuth(provider, code, state);
       const label = provider === 'confluence' ? 'Atlassian MCP · Workbench' : provider === 'figma' ? 'Figma MCP · Workbench' : provider === 'slack' ? 'Slack MCP' : 'Google Workspace MCP';
       repository.setSourceConnection(provider, label, settings as unknown as Record<string, string>);
+      publishRealtimeEvent('runtime');
       response.type('html').send(`<!doctype html><title>MCP connected</title><script>window.opener?.postMessage({type:'workbench:mcp-connected'},'*');window.close()</script><p>MCP connected. You can close this window.</p>`);
     } catch (error) { response.status(400).type('html').send(`<p>MCP connection failed: ${(error instanceof Error ? error.message : 'Unknown error').replace(/[<>&]/g, '')}</p>`); }
   });

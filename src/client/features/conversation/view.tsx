@@ -404,7 +404,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     queryKey: conversationQueryKeys.agentEvents(conversationId),
     queryFn: () => conversationData.listAgentEvents(conversationId!),
     enabled: decisionTreeOpen && Boolean(conversationId),
-    refetchInterval: decisionTreeOpen ? 2_000 : false,
   });
   const [pendingSelectedConversation, setPendingSelectedConversation] = useState<{ id: string; title: string } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -526,8 +525,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const conversationVirtualizer = useVirtualizer({ count: conversationStackRows.length, getScrollElement: () => conversationScrollRef.current, estimateSize: (index) => (conversationStackRows[index]?.type === 'header' ? 38 : CONVERSATION_CARD_ESTIMATE) + CONVERSATION_ROW_GAP, overscan: 5, initialRect: { width: 250, height: 600 } });
   const conversationRows = conversationVirtualizer.getVirtualItems();
   const displayedConversationRows = conversationRows.length ? conversationRows : conversationStackRows.map((row, index) => ({ index, start: conversationStackRows.slice(0, index).reduce((total, item) => total + (item.type === 'header' ? 38 : CONVERSATION_CARD_ESTIMATE) + CONVERSATION_ROW_GAP, 0) }));
-  // The 1s conversation/activity polls hand back brand-new array references
-  // every tick even when nothing visible changed, so keying this off
+  // Realtime conversation/activity refreshes hand back brand-new array
+  // references even when nothing visible changed, so keying this off
   // conversationStackRows itself forced a full remeasure (and a visible jump
   // under a mid-scroll finger) every second. Key off the row shape instead --
   // it only changes when a card actually moves between groups or a header
@@ -700,7 +699,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const changesAvailability = useConversationChangesAvailability(workspaceDiffScope, githubCandidateUrls, conversationIsRunning);
   // IDE LEGACY-AFFECTING: A completed agent run refreshes change availability,
   // but must not replace the conversation the reviewer is reading with Changes.
-  const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts, refetchInterval: 5_000 });
+  const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts });
   const accountProfiles = useMemo(() => {
     const configured = agentAccounts.data?.accounts ?? [];
     return configured.some((account) => account.name === composerSelection.accountProfile)
@@ -1222,7 +1221,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     }
   }
 
-  const previewStatus = useQuery({ queryKey: ['runtime-preview-status'], queryFn: api.getRuntimePreviewStatus, refetchInterval: 2_000 });
+  const previewStatus = useQuery({ queryKey: ['runtime-preview-status'], queryFn: api.getRuntimePreviewStatus });
   const promotionInFlight = conversationMessages.some((message) =>
     message.author === 'system' && message.status === 'running' && /approval received|promot/i.test(message.body));
   const agentWorkInFlight = conversationMessages.some((message) =>

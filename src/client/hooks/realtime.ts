@@ -33,21 +33,28 @@ const MAX_WEBSOCKET_RECONNECT_ATTEMPTS = 3;
 const REALTIME_INVALIDATION_BATCH_MS = 250;
 const HTTPS_FALLBACK_POLL_MS = 1_500;
 const HTTPS_FALLBACK_WS_PROBE_MS = 30_000;
-const AGENT_POLL_TOPICS: readonly RealtimeTopic[] = ['shared', 'work-items', 'insights'];
+const HTTPS_FALLBACK_TOPICS: readonly RealtimeTopic[] = realtimeTopics;
 
 const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
   'work-items': [
     ['work-items'], ['work-item'], ['work-item-counts'], ['archived-work-items'],
     ['pinned-reminder'], ['conversation-linkable-tasks'], ['dependency-candidates'], ['task-link-candidates'],
+    ['work-item-workspaces'], ['workspace-diff-status'],
   ],
   shared: [
     ['shared-conversations'], ['shared-conversation'], ['shared-messages'], ['shared-message-activity'],
     ['conversation-count'], ['notification-conversations'], ['conversation-unread-count'], ['conversation-attention-count'], ['shared-search'],
+    ['shared-agent-events'], ['conversation-workspaces'], ['workspace-diff-status'],
+    ['promotion-queue-status'], ['agent-accounts'],
   ],
-  'shared-messages': [['shared-messages']],
+  'shared-messages': [
+    ['shared-messages'], ['shared-agent-events'], ['shared-message-activity'],
+    ['workspace-diff-status'],
+    ['work-item-workspaces'], ['conversation-workspaces'], ['promotion-queue-status'], ['runtime-preview-status'],
+  ],
   discovery: [['discovery'], ['discovery-merge-targets']],
-  runtime: [['runtime-preview-status']],
-  insights: [['insights'], ['usage']],
+  runtime: [['runtime-preview-status'], ['promotion-queue-status'], ['health'], ['agent-accounts'], ['source-connections'], ['figma-scope']],
+  insights: [['insights'], ['usage'], ['memory-diagnostics'], ['mcp-quality']],
   artifacts: [['artifacts'], ['artifact']],
 };
 
@@ -88,8 +95,12 @@ export function realtimeUrl(location: Pick<Location, 'protocol' | 'host'> = wind
 }
 
 export function invalidateRealtimeTopics(queryClient: QueryClient, topics: readonly RealtimeTopic[]): void {
+  const invalidated = new Set<string>();
   for (const topic of new Set(topics)) {
     for (const queryKey of topicQueryKeys[topic]) {
+      const signature = JSON.stringify(queryKey);
+      if (invalidated.has(signature)) continue;
+      invalidated.add(signature);
       void queryClient.invalidateQueries({ queryKey });
     }
   }
@@ -162,8 +173,8 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
       // makes TanStack Query fetch their normal HTTPS endpoints, preserving
       // live agent output when a proxy, VPN, or browser policy rejects WS.
       setConnectionState('polling');
-      invalidateRealtimeTopics(queryClient, AGENT_POLL_TOPICS);
-      pollingTimer = window.setInterval(() => invalidateRealtimeTopics(queryClient, AGENT_POLL_TOPICS), HTTPS_FALLBACK_POLL_MS);
+      invalidateRealtimeTopics(queryClient, HTTPS_FALLBACK_TOPICS);
+      pollingTimer = window.setInterval(() => invalidateRealtimeTopics(queryClient, HTTPS_FALLBACK_TOPICS), HTTPS_FALLBACK_POLL_MS);
       // Stay useful over HTTPS, but periodically make one recovery probe.
       // A failed probe returns here without fast retries; the next probe is
       // still bounded to this low-frequency interval.
@@ -189,6 +200,10 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
         try {
           const message: unknown = JSON.parse(typeof event.data === 'string' ? event.data : '');
           if (!isRealtimeMessage(message)) return;
+          // A reconnect may have missed invalidations while the socket was
+          // down. Refresh every active realtime-backed query once when the
+          // server confirms this connection, then stay event-driven.
+          if (message.type === 'ready') queueInvalidations(realtimeTopics);
           if (message.type === 'invalidate') queueInvalidations(message.topics);
           if (message.type === 'notification') onNotification(message);
           if (message.type === 'diff-confidence' || message.type === 'review-score') for (const listener of realtimeMessageListeners) listener(message);

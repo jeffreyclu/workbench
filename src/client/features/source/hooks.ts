@@ -4,8 +4,6 @@ import type { BrokerConnection } from '../../../shared/contracts';
 import { sourceData, sourceQueryKeys } from './data';
 import { initialSourceAuthorizationState, reduceSourceAuthorization } from './state';
 
-export const SOURCE_AUTHORIZATION_POLL_INTERVAL_MS = 2_000;
-
 export function useSourceConnections() {
   // Connections change through explicit mutations and the shared realtime
   // invalidation channel. Polling this dialog duplicates requests without
@@ -32,12 +30,6 @@ export function useSourceAuthorization(connection: BrokerConnection) {
       });
     }
   }, [connection.id, queryClient]);
-
-  useEffect(() => {
-    if (state.status !== 'awaiting-auth') return;
-    const timer = window.setTimeout(checkAuthorization, SOURCE_AUTHORIZATION_POLL_INTERVAL_MS);
-    return () => window.clearTimeout(timer);
-  }, [checkAuthorization, state.status]);
 
   useEffect(() => {
     const previousState = previousConnectionState.current;

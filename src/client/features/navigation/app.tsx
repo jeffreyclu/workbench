@@ -95,11 +95,10 @@ function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong
 
 export function App() {
   const queryClient = useQueryClient();
-  const health = useQuery({ queryKey: ['health'], queryFn: api.getHealth, refetchInterval: 15_000 });
+  const health = useQuery({ queryKey: ['health'], queryFn: api.getHealth });
   const attentionCount = useQuery({
     queryKey: ['conversation-attention-count'],
     queryFn: api.getAttentionConversationCount,
-    refetchInterval: 15_000,
   });
   useAttentionIndicator(attentionCount.data?.count ?? 0);
   const loadedBuildId = useRef<string | null>(null);
@@ -226,7 +225,8 @@ export function App() {
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: view === 'active' || view === 'workbench' || isArchiveView,
   });
-  const pinnedReminder = useQuery({ queryKey: ['pinned-reminder'], queryFn: () => api.listWorkItems('active', ''), staleTime: 60_000, refetchInterval: PINNED_REMINDER_INTERVAL_MS });
+  const pinnedReminder = useQuery({ queryKey: ['pinned-reminder'], queryFn: () => api.listWorkItems('active', ''), staleTime: 60_000 });
+  const [pinnedReminderTick, setPinnedReminderTick] = useState(0);
   const syncedConversationId = useRef<string | null>(route.name === 'conversations' ? route.conversationId : null);
   function openConversation(conversationId: string) {
     navigate({ name: 'conversations', conversationId });
@@ -270,7 +270,11 @@ export function App() {
     const key = 'workbench:pinned-reminder-shown-at';
     const lastShown = Number(window.localStorage.getItem(key) ?? 0);
     const now = Date.now();
-    if (now - lastShown < PINNED_REMINDER_INTERVAL_MS) return;
+    const remaining = PINNED_REMINDER_INTERVAL_MS - (now - lastShown);
+    if (remaining > 0) {
+      const timer = window.setTimeout(() => setPinnedReminderTick((tick) => tick + 1), remaining);
+      return () => window.clearTimeout(timer);
+    }
     window.localStorage.setItem(key, String(now));
     toast.info(`${count} pinned task${count === 1 ? '' : 's'} waiting for you.`, {
       action: () => {
@@ -279,7 +283,9 @@ export function App() {
       },
       actionLabel: 'Open pinned',
     });
-  }, [pinnedReminder.data]);
+    const timer = window.setTimeout(() => setPinnedReminderTick((tick) => tick + 1), PINNED_REMINDER_INTERVAL_MS);
+    return () => window.clearTimeout(timer);
+  }, [pinnedReminder.data, pinnedReminderTick]);
   useEffect(() => {
     if (route.name !== 'task' || resolvedTaskId === route.taskId) return;
     const taskId = route.taskId;
@@ -310,7 +316,7 @@ export function App() {
       });
     return () => { canceled = true; };
   }, [queryClient, resolvedTaskId, route]);
-  const queueAgentActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: api.listSharedMessageActivity, refetchInterval: 5_000 });
+  const queueAgentActivity = useQuery({ queryKey: ['shared-message-activity'], queryFn: api.listSharedMessageActivity });
   const queueAgentStatusSignature = (queueAgentActivity.data?.messages ?? []).map((message) => `${message.id}:${message.status}`).join('|');
   useEffect(() => {
     if (queueAgentStatusSignature) void queryClient.invalidateQueries({ queryKey: ['work-items'] });

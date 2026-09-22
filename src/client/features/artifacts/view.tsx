@@ -257,7 +257,7 @@ export function ArtifactLibraryView({ onOpenTask, onOpenConversation }: {
 }
 
 export function ArtifactNav({ active, onClick }: { active: boolean; onClick: () => void }) {
-  const library = useQuery({ queryKey: ['artifacts', 'published'], queryFn: () => api.listArtifacts('published'), refetchInterval: 10_000 });
+  const library = useQuery({ queryKey: ['artifacts', 'published'], queryFn: () => api.listArtifacts('published') });
   const openComments = library.data?.counts?.openComments ?? 0;
   return (
     <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}>

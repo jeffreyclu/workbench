@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { McpQualityAutomationStatus } from '../shared/contracts.js';
 import type { WorkItemRepository } from './repository.js';
 import { OWNER_ID } from './scheduler.js';
+import { publishRealtimeEvent } from './realtime.js';
 
 export const MCP_QUALITY_CADENCE_MS = 24 * 60 * 60 * 1_000;
 export const MCP_QUALITY_RETRY_MS = 60 * 60 * 1_000;
@@ -63,16 +64,19 @@ export function startMcpQualityMonitor(
     if (repository.hasRuntimeWork(OWNER_ID) || repository.hasOwnedAgentWork(OWNER_ID)) {
       nextAt = now() + IDLE_RECHECK_MS;
       status = { ...status, nextRunAt: new Date(nextAt).toISOString() };
+      publishRealtimeEvent('insights');
       return;
     }
     try {
       child = spawnCheck();
       child.unref();
       status = { ...status, running: true, nextRunAt: null, lastError: null };
+      publishRealtimeEvent('insights');
       child.once('error', (error) => {
         child = null;
         nextAt = now() + MCP_QUALITY_RETRY_MS;
         status = { ...status, running: false, nextRunAt: new Date(nextAt).toISOString(), lastError: error.message };
+        publishRealtimeEvent('insights');
       });
       child.once('exit', (code, signal) => {
         child = null;
@@ -84,10 +88,12 @@ export function startMcpQualityMonitor(
           nextRunAt: new Date(nextAt).toISOString(),
           lastError: passed ? null : `Automatic MCPJam check exited ${signal ? `on ${signal}` : `with code ${code ?? 'unknown'}`}.`,
         };
+        publishRealtimeEvent('insights');
       });
     } catch (error) {
       nextAt = now() + MCP_QUALITY_RETRY_MS;
       status = { ...status, running: false, nextRunAt: new Date(nextAt).toISOString(), lastError: error instanceof Error ? error.message : String(error) };
+      publishRealtimeEvent('insights');
     }
   };
 

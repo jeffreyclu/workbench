@@ -172,9 +172,9 @@ function CursingInsight({ data }: { data: RunInsights['cursing'] }) {
 export function InsightsView() {
   const [timeframe, setTimeframe] = useState<InsightsTimeframe>('all');
   const [selectedTab, setSelectedTab] = useState<InsightsTab>(readInsightsTab);
-  const insights = useQuery({ queryKey: ['insights', timeframe], queryFn: () => api.getInsights(timeframe), refetchInterval: 10_000, enabled: selectedTab !== 'system' });
-  const memoryDiagnostics = useQuery({ queryKey: ['memory-diagnostics'], queryFn: api.getMemoryDiagnostics, refetchInterval: 10_000, enabled: selectedTab === 'system' });
-  const mcpQuality = useQuery({ queryKey: ['mcp-quality'], queryFn: api.getMcpQualityHistory, refetchInterval: 10_000, enabled: selectedTab === 'system' });
+  const insights = useQuery({ queryKey: ['insights', timeframe], queryFn: () => api.getInsights(timeframe), enabled: selectedTab !== 'system' });
+  const memoryDiagnostics = useQuery({ queryKey: ['memory-diagnostics'], queryFn: api.getMemoryDiagnostics, enabled: selectedTab === 'system' });
+  const mcpQuality = useQuery({ queryKey: ['mcp-quality'], queryFn: api.getMcpQualityHistory, enabled: selectedTab === 'system' });
   const data = insights.data;
   const selectTab = (tab: InsightsTab) => {
     setSelectedTab(tab);

@@ -209,7 +209,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
     },
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ['work-items'] }),
   });
-  const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts, refetchInterval: 5_000 });
+  const agentAccounts = useQuery({ queryKey: ['agent-accounts'], queryFn: api.listAgentAccounts });
   const startAccountLogin = useMutation({
     mutationFn: ({ provider, name }: { provider: 'codex' | 'claude'; name: string }) => api.startAgentAccountLogin(provider, name),
     onSuccess: ({ accounts }) => {

@@ -18,13 +18,13 @@ function invalidateDiscovery(queryClient: ReturnType<typeof useQueryClient>, inc
 }
 
 export function useDiscoveryNav() {
-  return useQuery({ queryKey: discoveryQueryKeys.inbox('pending'), queryFn: () => discoveryData.getInbox('pending'), refetchInterval: 10_000 });
+  return useQuery({ queryKey: discoveryQueryKeys.inbox('pending'), queryFn: () => discoveryData.getInbox('pending') });
 }
 
 export function useDiscoveryInbox() {
   const queryClient = useQueryClient();
   const { inboxView, setInboxView, selected, setSelected } = useDiscoveryInboxState();
-  const inbox = useQuery({ queryKey: discoveryQueryKeys.inbox(inboxView), queryFn: () => discoveryData.getInbox(inboxView), refetchInterval: 10_000 });
+  const inbox = useQuery({ queryKey: discoveryQueryKeys.inbox(inboxView), queryFn: () => discoveryData.getInbox(inboxView) });
   const activeTasks = useQuery({ queryKey: discoveryQueryKeys.mergeTargets, queryFn: discoveryData.getMergeTargets });
   const scan = useMutation({
     mutationFn: discoveryData.scan,

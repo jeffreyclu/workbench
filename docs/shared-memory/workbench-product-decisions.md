@@ -47,8 +47,9 @@ Jeffrey message has no assistant reply yet, do not create a partial fork.
 
 ### Open diffs stay stable; updates require an explicit refresh
 
-*Decision from Jeffrey, 2026-08-25.* During an active task, Workbench may poll
-for a newer local workspace revision, but it must not replace or re-render the
+*Decision from Jeffrey, 2026-08-25; transport updated 2026-09-21.* During an
+active task, Workbench detects a newer local workspace revision from realtime
+run events, but it must not replace or re-render the
 diff someone is reading. Keep the open diff as a stable snapshot. When a newer
 revision is detected, show an orange **Refresh changes** button; only that
 explicit action loads the new patch. This follows GitHub's review behavior and
@@ -583,6 +584,15 @@ remains the source of truth: do not put full records or agent text on the
 socket. Keep polling only as a data-refresh fallback until process-to-process
 event delivery is durable.
 
+*Decision from Jeffrey, 2026-09-21.* Feature queries must not run independent
+polling intervals alongside the socket. Insights, navigation, discovery,
+tasks, conversations, workspace-diff status, artifacts, source authorization,
+runtime state, and review scoring refresh from WebSocket invalidations. After a
+reconnect, one `ready` catch-up invalidation refreshes active queries that may
+have missed an event. Repeating HTTPS invalidation remains only as the shared
+transport fallback after the socket exhausts its reconnect attempts, and it
+must stop as soon as a WebSocket opens.
+
 *Decision from Jeffrey, 2026-08-24.* Suppress a toast whose update concerns
 the task or conversation the user is currently viewing. The active surface
 already provides the relevant context; avoid duplicating that update as an
@@ -990,13 +1000,18 @@ back the cache-reuse figure. Verified: `tsc --noEmit` clean; full
 `src/client/features/navigation/app.tsx` previously gated on a
 `workbench:pinned-reminder-date` localStorage key, so it showed at most once
 per calendar day regardless of session length. Changed to a rolling 30-minute
-gate: the `pinned-reminder` query now sets `refetchInterval: 30 * 60_000`
-(`PINNED_REMINDER_INTERVAL_MS`), and the effect stores a
+gate: the effect stores a
 `workbench:pinned-reminder-shown-at` timestamp, re-showing the toast whenever
 `Date.now()` has advanced 30+ minutes past the last showing (count of pinned
 items still gates it entirely — zero pinned means no toast). Verified:
 `tsc --noEmit` clean; `vitest run src/client/App.test.tsx` 85/85 passing,
 including the existing pinned-reminder-toast navigation test.
+
+*Transport correction, 2026-09-21.* The reminder no longer refetches the task
+list every 30 minutes. Work-item WebSocket events keep the cached pinned count
+current, while a local one-shot timeout re-evaluates the existing 30-minute
+toast gate without issuing an HTTP request. HTTPS query polling remains only
+the shared realtime transport fallback after repeated socket failures.
 
 ### Agent debugger only shows recorded rationale
 

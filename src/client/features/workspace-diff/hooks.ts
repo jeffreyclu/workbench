@@ -59,7 +59,6 @@ export function useWorkspaceDiffChanges(scope: WorkspaceDiffScope, revision: str
     queryKey: workspaceDiffQueryKeys.status(scope, workspacePath, revision ?? ''),
     queryFn: () => workspaceDiffData.getStatus(scope, revision!),
     enabled: Boolean(revision) && isRunning,
-    refetchInterval: isRunning ? 1_500 : false,
     select: ({ changed }) => changed,
   });
   return status.data ?? false;
