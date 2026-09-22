@@ -41,7 +41,6 @@ export function useAutoReviewScores(scope: { workItemId: string | null; conversa
       conversationId ? { conversationId, revision: revision! } : { workItemId: workItemId!, revision: revision! },
     ),
     enabled: Boolean(revision) && Boolean(workItemId || conversationId),
-    staleTime: 30_000,
   });
 
   useEffect(() => {

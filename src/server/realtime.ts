@@ -3,7 +3,7 @@ import type { Socket } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { isRequestAuthorized } from './auth.js';
 
-export const realtimeTopics = ['work-items', 'shared', 'shared-messages', 'discovery', 'runtime', 'insights', 'artifacts'] as const;
+export const realtimeTopics = ['work-items', 'shared', 'shared-metadata', 'shared-messages', 'discovery', 'runtime', 'insights', 'artifacts'] as const;
 export type RealtimeTopic = typeof realtimeTopics[number];
 export type RealtimeNotification = {
   type: 'notification';

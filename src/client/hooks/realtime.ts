@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { ToastTone } from '../state/toast-store';
 
-const realtimeTopics = ['work-items', 'shared', 'shared-messages', 'discovery', 'runtime', 'insights', 'artifacts'] as const;
+const realtimeTopics = ['work-items', 'shared', 'shared-metadata', 'shared-messages', 'discovery', 'runtime', 'insights', 'artifacts'] as const;
 type RealtimeTopic = typeof realtimeTopics[number];
 
 type RealtimeMessage =
@@ -35,13 +35,23 @@ const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
   'work-items': [
     ['work-items'], ['work-item'], ['work-item-counts'], ['archived-work-items'],
     ['pinned-reminder'], ['conversation-linkable-tasks'], ['dependency-candidates'], ['task-link-candidates'],
-    ['work-item-workspaces'], ['workspace-diff-status'],
+    ['work-item-workspaces'], ['projects'], ['stale-references'],
+    ['workspace-diff'], ['workspace-diff-snapshots'], ['workspace-diff-refs'], ['workspace-diff-ref'],
+    ['workspace-diff-ref-commits'], ['workspace-diff-file-source'], ['workspace-diff-status'],
+    ['review-auto-score'], ['review-assist-cache'],
   ],
   shared: [
     ['shared-conversations'], ['shared-conversation'], ['shared-messages'], ['shared-message-activity'],
-    ['conversation-count'], ['notification-conversations'], ['conversation-unread-count'], ['conversation-attention-count'], ['shared-search'],
+    ['conversation-count'], ['notification-conversations'], ['conversation-unread-count'], ['conversation-attention-count'], ['shared-conversation-search'],
     ['shared-agent-events'], ['conversation-workspaces'], ['workspace-diff-status'],
+    ['workspace-diff'], ['workspace-diff-snapshots'], ['workspace-diff-refs'], ['workspace-diff-ref'],
+    ['workspace-diff-ref-commits'], ['workspace-diff-file-source'],
+    ['review-auto-score'], ['review-assist-cache'], ['retrieved-memory'],
     ['promotion-queue-status'], ['agent-accounts'],
+  ],
+  'shared-metadata': [
+    ['shared-conversations'], ['shared-conversation'], ['conversation-count'],
+    ['notification-conversations'], ['conversation-unread-count'], ['conversation-attention-count'],
   ],
   // ['shared-messages'] and ['shared-agent-events'] are deliberately absent
   // here: this topic fires on every streamed token from every running agent
@@ -55,9 +65,9 @@ const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
     ['work-item-workspaces'], ['conversation-workspaces'], ['promotion-queue-status'], ['runtime-preview-status'],
   ],
   discovery: [['discovery'], ['discovery-merge-targets']],
-  runtime: [['runtime-preview-status'], ['promotion-queue-status'], ['health'], ['agent-accounts'], ['source-connections'], ['figma-scope']],
-  insights: [['insights'], ['usage'], ['memory-diagnostics'], ['mcp-quality']],
-  artifacts: [['artifacts'], ['artifact']],
+  runtime: [['runtime-preview-status'], ['promotion-queue-status'], ['health'], ['agent-accounts'], ['ai-provider-availability'], ['source-connections'], ['figma-scope']],
+  insights: [['insights'], ['usage'], ['memory-diagnostics'], ['mcp-quality'], ['global-memory-search']],
+  artifacts: [['artifacts'], ['artifact'], ['artifact-link-candidates']],
 };
 
 function isRealtimeMessage(value: unknown): value is RealtimeMessage {
@@ -217,6 +227,10 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
           if (message.type === 'ready') queueInvalidations(realtimeTopics);
           if (message.type === 'invalidate') queueInvalidations(message.topics, message.conversationId);
           if (message.type === 'notification') onNotification(message);
+          if (message.type === 'review-score' && message.completed >= message.total) {
+            const scopeId = 'conversationId' in message.scope ? message.scope.conversationId : message.scope.workItemId;
+            void queryClient.invalidateQueries({ queryKey: ['review-auto-score', scopeId, message.revision] });
+          }
           if (message.type === 'diff-confidence' || message.type === 'review-score') for (const listener of realtimeMessageListeners) listener(message);
         } catch {
           // Ignore malformed frames. The server never sends application data.

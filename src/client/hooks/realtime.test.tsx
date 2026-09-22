@@ -44,10 +44,23 @@ describe('realtime invalidation', () => {
       ['work-items'], ['work-item'], ['work-item-counts'], ['pinned-reminder'],
       ['shared-conversations'], ['shared-messages'], ['shared-message-activity'], ['shared-agent-events'],
       ['work-item-workspaces'], ['conversation-workspaces'], ['workspace-diff-status'],
+      ['workspace-diff'], ['workspace-diff-snapshots'], ['workspace-diff-refs'], ['workspace-diff-ref'],
       ['discovery'], ['runtime-preview-status'], ['promotion-queue-status'], ['health'], ['agent-accounts'],
       ['insights'], ['memory-diagnostics'], ['mcp-quality'], ['artifacts'],
     ]) expect(invalidateQueries).toHaveBeenCalledWith({ queryKey });
     expect(invalidateQueries.mock.calls.filter(([input]) => JSON.stringify(input) === JSON.stringify({ queryKey: ['workspace-diff-status'] }))).toHaveLength(1);
+  });
+
+  it('keeps metadata-only conversation reads away from message and task caches', () => {
+    const client = new QueryClient();
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
+
+    invalidateRealtimeTopics(client, ['shared-metadata']);
+
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-conversations'] });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['conversation-unread-count'] });
+    expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['shared-messages'] });
+    expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['work-item'] });
     expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['workspace-diff'] });
   });
 

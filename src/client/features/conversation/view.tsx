@@ -297,6 +297,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId ?? null);
   const isCreatingConversationRef = useRef(false);
   const [locallyReadConversationIds, setLocallyReadConversationIds] = useState<Set<string>>(new Set());
+  const markedReadSignaturesRef = useRef(new Map<string, string>());
   const [exitingMessageIds, setExitingMessageIds] = useState<Set<string>>(new Set());
   const [retryingMessageIds, setRetryingMessageIds] = useState<Set<string>>(new Set());
   // Codex+Claude dual replies flip a message's row between 'single' and
@@ -590,7 +591,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       const items = [...active.items, ...workbench.items].filter((task) => (seen.has(task.id) ? false : (seen.add(task.id), true)));
       return { items };
     },
-    staleTime: 30_000,
   });
   const retrievedMemoryDetail = useQuery({
     queryKey: ['retrieved-memory', retrievedMemoryMessageId],
@@ -669,7 +669,10 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     if (!conversationId || !nextOlderMessagesCursor || isLoadingEarlierMessages) return;
     setIsLoadingEarlierMessages(true);
     try {
-      const page = await api.listSharedMessages(conversationId, nextOlderMessagesCursor, MESSAGES_PAGE_SIZE);
+      const page = await queryClient.fetchQuery({
+        queryKey: ['shared-messages-page', conversationId, nextOlderMessagesCursor, MESSAGES_PAGE_SIZE],
+        queryFn: () => api.listSharedMessages(conversationId, nextOlderMessagesCursor, MESSAGES_PAGE_SIZE),
+      });
       setOlderMessagePages((current) => [...current, page]);
     } finally {
       setIsLoadingEarlierMessages(false);
@@ -1111,15 +1114,20 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // far the single most frequent API call in the activity log. A message
     // only becomes newly-unread when it's appended or finishes, so key off
     // count + status instead of the constantly-growing streamed body length.
-    if (!conversationId) return;
+    if (!conversationId || !messages.isSuccess) return;
+    const readSignature = `${latestMessage?.id ?? 'empty'}:${latestMessage?.status ?? 'none'}`;
+    if (markedReadSignaturesRef.current.get(conversationId) === readSignature) return;
+    markedReadSignaturesRef.current.set(conversationId, readSignature);
     setLocallyReadConversationIds((current) => current.has(conversationId) ? current : new Set(current).add(conversationId));
     void api.markSharedConversationRead(conversationId)
       .then(() => Promise.all([
         queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
         queryClient.invalidateQueries({ queryKey: ['conversation-unread-count'] }),
       ]))
-      .catch(() => undefined);
-  }, [conversationId, messages.data?.messages.length, latestMessage?.status, queryClient]);
+      .catch(() => {
+        if (markedReadSignaturesRef.current.get(conversationId) === readSignature) markedReadSignaturesRef.current.delete(conversationId);
+      });
+  }, [conversationId, messages.isSuccess, latestMessage?.id, latestMessage?.status, queryClient]);
   useEffect(() => {
     // Only follow new streaming output while the user is already near the
     // bottom; once they scroll up to read history, stop yanking them back

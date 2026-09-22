@@ -225,7 +225,7 @@ export function App() {
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: view === 'active' || view === 'workbench' || isArchiveView,
   });
-  const pinnedReminder = useQuery({ queryKey: ['pinned-reminder'], queryFn: () => api.listWorkItems('active', ''), staleTime: 60_000 });
+  const pinnedReminder = useQuery({ queryKey: ['pinned-reminder'], queryFn: () => api.listWorkItems('active', '') });
   const [pinnedReminderTick, setPinnedReminderTick] = useState(0);
   const syncedConversationId = useRef<string | null>(route.name === 'conversations' ? route.conversationId : null);
   function openConversation(conversationId: string) {

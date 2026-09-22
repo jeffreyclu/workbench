@@ -2,6 +2,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createWorkbenchQueryClient } from '../../app/query-client.js';
 import { useWorkspaceDiff, workspaceExplorerQueryKey } from './hooks.js';
 
 afterEach(() => {
@@ -31,9 +32,9 @@ function stubWorkbench(initialPath: string) {
 describe('useWorkspaceDiff', () => {
   const wrapperFor = (client: QueryClient) => ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 
-  it('refreshes when the review surface is reopened so it cannot retain a clean prior worktree', async () => {
+  it('reuses the cached diff when the same idle review surface is reopened', async () => {
     const { diffCalls } = stubWorkbench('/tmp/workbench');
-    const wrapper = wrapperFor(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    const wrapper = wrapperFor(createWorkbenchQueryClient());
 
     const first = renderHook(() => useWorkspaceDiff({ workItemId: 'work-item-1' }), { wrapper });
     await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
@@ -42,7 +43,7 @@ describe('useWorkspaceDiff', () => {
     const second = renderHook(() => useWorkspaceDiff({ workItemId: 'work-item-1' }), { wrapper });
     await waitFor(() => expect(second.result.current.isSuccess).toBe(true));
 
-    expect(diffCalls()).toBe(2);
+    expect(diffCalls()).toBe(1);
   });
 
   it('never shows the previous repository once Repo Explorer selects another one', async () => {

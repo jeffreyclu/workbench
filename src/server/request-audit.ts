@@ -4,7 +4,11 @@ import { publishRealtimeEvent, type RealtimeTopic } from './realtime.js';
 
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-function realtimeTopics(path: string): RealtimeTopic[] {
+export function realtimeTopicsForMutation(path: string): RealtimeTopic[] {
+  // Reading a conversation only changes its unread/rail metadata. Treating it
+  // as a broad shared mutation invalidates the message body Jeffrey just
+  // opened, so navigation immediately re-downloads the same idle thread.
+  if (/^\/api\/shared\/conversations\/[^/]+\/read(?:\/|$)/.test(path)) return ['shared-metadata'];
   if (path.startsWith('/api/shared')) return ['shared', 'work-items', 'insights'];
   if (path.startsWith('/api/discovery')) return ['discovery', 'work-items'];
   if (path.startsWith('/api/artifacts')) return ['artifacts', 'work-items'];
@@ -35,7 +39,7 @@ export function createRequestAuditMiddleware(repository: WorkItemRepository): Re
         // SQLite writer briefly holds the lock. The failure remains observable.
         console.error('Could not record API mutation:', error);
       }
-      if (response.statusCode < 400) publishRealtimeEvent(...realtimeTopics(request.path));
+      if (response.statusCode < 400) publishRealtimeEvent(...realtimeTopicsForMutation(request.path));
     });
     next();
   };

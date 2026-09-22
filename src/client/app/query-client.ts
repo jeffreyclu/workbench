@@ -1,0 +1,23 @@
+import { QueryClient, type DefaultOptions } from '@tanstack/react-query';
+
+/**
+ * REST is the durable record transport, not a navigation lifecycle hook.
+ *
+ * A successful read stays valid for this browser session. Server mutations and
+ * background work explicitly invalidate affected keys over WebSocket; user
+ * refresh controls call `refetch()` directly. Remounting a route, focusing the
+ * window, reconnecting the browser, or waiting for a timer must never create a
+ * request by itself.
+ */
+export const workbenchQueryDefaults = {
+  queries: {
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  },
+} satisfies DefaultOptions;
+
+export function createWorkbenchQueryClient(defaultOptions: DefaultOptions = workbenchQueryDefaults): QueryClient {
+  return new QueryClient({ defaultOptions });
+}

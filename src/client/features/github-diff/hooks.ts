@@ -9,7 +9,6 @@ export function useGitHubPullRequestDiff(url: string | null) {
     initialPageParam: 1,
     getNextPageParam: (lastPage) => lastPage.diff.nextPage,
     enabled: url !== null,
-    staleTime: 30_000,
   });
 }
 
@@ -19,7 +18,6 @@ export function useGitHubPullRequestCommits(url: string | null) {
     queryKey: githubDiffQueryKeys.commits(url ?? ''),
     queryFn: () => githubDiffData.getCommits(url!),
     enabled: url !== null,
-    staleTime: 30_000,
   });
 }
 
@@ -52,7 +50,6 @@ export function useGitHubPullRequestDiffPreviews(urls: string[]) {
       // them makes the infinite observer read a non-existent `pages` array.
       queryKey: githubDiffQueryKeys.preview(url),
       queryFn: () => githubDiffData.getPullRequest(url, 1),
-      staleTime: 30_000,
     })),
   });
 }

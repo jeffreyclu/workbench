@@ -7,6 +7,7 @@ import { App, SharedWorkspace, TaskDetail } from './App';
 import { hideWorkbenchControlBlocks, humanizeRunOutput } from '../lib/run-output';
 import { Toaster } from '../components/toast/toast';
 import { getToasts, toast } from '../state/toast-store';
+import { createWorkbenchQueryClient, workbenchQueryDefaults } from './query-client';
 
 class TestWebSocket {
   static instances: TestWebSocket[] = [];
@@ -1665,6 +1666,48 @@ describe('shared room', () => {
     fireEvent.click(screen.getByRole('button', { name: /Second conversation/ }));
     await screen.findByRole('heading', { name: 'Second conversation' });
     expect(screen.queryByText('notes.txt')).toBeNull();
+  });
+
+  it('does not repeat REST reads when returning to the same idle conversation', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const firstId = '00000000-0000-4000-8000-000000000081';
+    const secondId = '00000000-0000-4000-8000-000000000082';
+    const conversations = [
+      { id: firstId, title: 'Cached first conversation', workItemId: null, archivedAt: null, state: 'finished', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: secondId, title: 'Cached second conversation', workItemId: null, archivedAt: null, state: 'finished', createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'POST' && url.endsWith('/read')) return new Response(JSON.stringify({ conversation: conversations.find((entry) => url.includes(entry.id)) }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/conversations?')) return new Response(JSON.stringify({ conversations, nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages?activity=1')) return new Response(JSON.stringify({ messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/api/shared/messages?')) return new Response(JSON.stringify({ messages: [], nextCursor: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/workspace-diff/snapshots')) return new Response(JSON.stringify({ snapshots: [] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/workspace-diff')) return new Response(JSON.stringify({ diff: { workspacePath: '/tmp/workbench', branch: 'main', revision: 'idle', changedFiles: 0, additions: 0, deletions: 0, publish: { branch: 'main', hasOrigin: true, ahead: 0, hasChanges: false, reason: null }, files: [] } }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.endsWith('/workspaces')) return new Response(JSON.stringify({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench', selected: true }] }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/shared/conversations/')) return new Response(JSON.stringify({ conversation: conversations.find((entry) => url.endsWith(entry.id)) }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ accounts: [], pending: false, messages: [] }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createWorkbenchQueryClient({ queries: { ...workbenchQueryDefaults.queries, retry: false } });
+    render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={firstId} /></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: 'Cached first conversation' });
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    const firstConversationReads = () => fetchMock.mock.calls.filter(([input, init]) => (init?.method ?? 'GET') === 'GET' && String(input).includes(firstId)).length;
+    const initialReads = firstConversationReads();
+    const firstMarkReadWrites = () => fetchMock.mock.calls.filter(([input, init]) => init?.method === 'POST' && String(input) === `/api/shared/conversations/${firstId}/read`).length;
+    const initialMarkReadWrites = firstMarkReadWrites();
+
+    fireEvent.click(screen.getByRole('button', { name: /Cached second conversation/i }));
+    await screen.findByRole('heading', { name: 'Cached second conversation' });
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    fireEvent.click(screen.getByRole('button', { name: /Cached first conversation/i }));
+    await screen.findByRole('heading', { name: 'Cached first conversation' });
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+
+    expect(firstConversationReads()).toBe(initialReads);
+    expect(firstMarkReadWrites()).toBe(initialMarkReadWrites);
   });
 
   it('blocks sending until the conversation has finished initializing', async () => {

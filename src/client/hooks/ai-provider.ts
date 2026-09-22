@@ -41,6 +41,5 @@ export function useAiProviderAvailability(provider: AiProviderChoice, accountPro
   return useQuery({
     queryKey: ['ai-provider-availability', provider, accountProfile ?? null],
     queryFn: () => api.getAiProviderAvailability(provider, accountProfile),
-    staleTime: 60_000,
   });
 }

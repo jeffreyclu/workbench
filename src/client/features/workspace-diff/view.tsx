@@ -97,9 +97,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     // A run can receive its detached worktree after this panel is mounted.
     // Realtime run events refresh this tiny explorer payload; the full diff
     // remains explicit unless its selected workspace actually changes.
-    staleTime: 0,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: 'always',
   });
   const selectWorkspace = useMutation({
     mutationFn: (workspacePath: string) => conversationId ? conversationClient.selectConversationWorkspace(conversationId, workspacePath) : sourceClient.selectWorkItemWorkspace(workItemId!, workspacePath),
@@ -361,7 +358,6 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     queryKey: ['stale-references', workItemId, reviewRevision],
     queryFn: () => sourceClient.getStaleReferences(workItemId!),
     enabled: Boolean(workItemId) && reviewSource === 'workspace',
-    staleTime: 60_000,
   });
   const selectedDecision = orderedDecisions.find((decision) => decision.id === selectedDecisionId) ?? orderedDecisions[0] ?? null;
   // A decision groups hunks by subject, and a subject routinely spans several

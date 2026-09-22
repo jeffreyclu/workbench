@@ -25,9 +25,6 @@ export function useSelectedWorkspacePath(scope: WorkspaceDiffScope | null) {
     queryKey: workspaceExplorerQueryKey(scope),
     queryFn: () => conversationId ? conversationClient.getConversationWorkspaces(conversationId) : sourceClient.getWorkItemWorkspaces(workItemId!),
     enabled: Boolean(conversationId || workItemId),
-    staleTime: 0,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: 'always',
   });
   // A standalone review owns one repository for its whole life: there is no
   // picker, so there is nothing to resolve and nothing to wait for.
@@ -43,13 +40,8 @@ export function useWorkspaceDiff(scope: WorkspaceDiffScope | null) {
     queryKey: workspaceDiffQueryKeys.detail(scope ?? { workItemId: '' }, workspacePath),
     queryFn: () => workspaceDiffData.get(scope!),
     enabled: Boolean(scope) && isResolved,
-    // Never reuse a clean diff from a previous visit: the server may have
-    // selected a detached agent worktree since this panel was last visible.
-    // We still do not poll the full patch while it is being read; the status
-    // endpoint handles that separately.
-    staleTime: 0,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: 'always',
+    // Agent completion and workspace selection invalidate this key over the
+    // realtime channel. Navigation itself is not evidence that Git changed.
   });
 }
 
@@ -65,23 +57,25 @@ export function useWorkspaceDiffChanges(scope: WorkspaceDiffScope, revision: str
 }
 
 export function useWorkspaceDiffSnapshots(scope: WorkspaceDiffScope | null, revision: string | undefined) {
+  const queryClient = useQueryClient();
   const { workspacePath, isResolved } = useSelectedWorkspacePath(scope);
+  const detailUpdatedAt = scope
+    ? queryClient.getQueryState(workspaceDiffQueryKeys.detail(scope, workspacePath))?.dataUpdatedAt ?? 0
+    : 0;
   const query = useQuery({
     queryKey: workspaceDiffQueryKeys.snapshots(scope ?? { workItemId: '' }, workspacePath),
     queryFn: () => workspaceDiffData.getSnapshots(scope!),
     enabled: Boolean(scope) && isResolved,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: 'always',
   });
+  const { dataUpdatedAt, refetch } = query;
   // The current-diff route writes its immutable record before replying. Fetch
   // again when that revision arrives so a racing initial timeline request does
   // not omit the just-captured version. This stays a refetch rather than part
   // of the key: the timeline already loaded is still this repository's, and
   // dropping it would blank the History control every time the diff moves.
   useEffect(() => {
-    if (revision) void query.refetch();
-  }, [revision, query.refetch]);
+    if (revision && dataUpdatedAt < detailUpdatedAt) void refetch();
+  }, [revision, detailUpdatedAt, dataUpdatedAt, refetch]);
   return query;
 }
 
@@ -93,7 +87,6 @@ export function useWorkspaceRefs(scope: WorkspaceDiffScope | null) {
     queryKey: workspaceDiffQueryKeys.refs(scope ?? { workItemId: '' }, workspacePath),
     queryFn: () => workspaceDiffData.getRefs(scope!),
     enabled: Boolean(scope) && isResolved,
-    staleTime: 30_000,
   });
 }
 
@@ -105,7 +98,6 @@ export function useWorkspaceRefDiff(scope: WorkspaceDiffScope | null, ref: strin
     queryKey: workspaceDiffQueryKeys.refDiff(scope ?? { workItemId: '' }, workspacePath, ref ?? ''),
     queryFn: () => workspaceDiffData.getRefDiff(scope!, ref!),
     enabled: Boolean(scope) && Boolean(ref) && isResolved,
-    staleTime: 0,
   });
 }
 
@@ -119,7 +111,6 @@ export function useWorkspaceRefCommits(scope: WorkspaceDiffScope | null, ref: st
     queryKey: workspaceDiffQueryKeys.refCommits(scope ?? { workItemId: '' }, workspacePath, ref ?? ''),
     queryFn: () => workspaceDiffData.getRefCommits(scope!, ref),
     enabled: Boolean(scope) && isResolved,
-    staleTime: 30_000,
   });
 }
 
@@ -197,9 +188,7 @@ export function useWorkspaceFileSource(scope: WorkspaceDiffScope | null, filePat
     queryKey: workspaceDiffQueryKeys.fileSource(scope ?? { workItemId: '' }, workspacePath, filePath ?? '', revision),
     queryFn: () => workspaceDiffData.getFileSource(scope!, filePath!, revision),
     enabled: Boolean(scope) && Boolean(filePath) && enabled && isResolved,
-    // A committed revision is immutable; the working tree is re-read whenever
-    // the reader comes back to it.
-    staleTime: revision ? Infinity : 0,
-    refetchOnWindowFocus: revision ? false : 'always',
+    // Working-tree changes arrive through realtime invalidation. A committed
+    // revision is immutable. Neither case treats remount/focus as a refresh.
   });
 }

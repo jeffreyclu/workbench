@@ -1,5 +1,18 @@
 ## Workbench product decisions
 
+### REST reads are session-cached and event-invalidated
+
+*Decision from Jeffrey, 2026-09-22.* A successful REST query remains cached for the lifetime of the
+browser tab. Route remounts, elapsed time, window focus, and browser reconnect are never refresh
+signals. Successful mutations and server-side background changes invalidate their affected query
+roots over the realtime WebSocket; explicit Refresh and Retry controls may refetch directly.
+
+Query-specific finite `staleTime`, finite `gcTime`, `refetchOnMount: 'always'`, and
+`refetchOnWindowFocus: 'always'` are forbidden because they recreate navigation-driven REST traffic.
+Marking a conversation read is metadata-only: it may invalidate conversation rails and unread counts,
+but never message bodies, workspace diffs, or task details. Imperative paginated reads use
+`queryClient.fetchQuery` with a complete identity key instead of component state as their only cache.
+
 ### Outcome-rating collection is retired
 
 *Decision from Jeffrey, 2026-09-18.* Workbench no longer asks for a rating after completing a task

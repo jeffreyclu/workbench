@@ -11,7 +11,7 @@ import { ProjectColorDot } from './project-color';
  * changes when a project is used.
  */
 function useProjects() {
-  return useQuery({ queryKey: ['projects'], queryFn: api.getProjects, staleTime: 60_000 });
+  return useQuery({ queryKey: ['projects'], queryFn: api.getProjects });
 }
 
 type ProjectOutcome =
