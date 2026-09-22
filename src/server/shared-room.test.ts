@@ -1095,12 +1095,13 @@ describe('isCodexDecisionPreamble', () => {
     ])).toBe('Fixed the route and verified the focused test.');
   });
 
-  it('joins every item of a steered turn instead of dropping the pre-interjection reply', () => {
+  it('keeps only the terminal answer after an interjection instead of replaying progress', () => {
     expect(codexFinalReply([
       'Decision: Inspect the failing route before editing.',
-      'Fixed the route and verified the focused test.',
-      'Also renamed the helper per your interjection.',
-    ], true)).toBe('Fixed the route and verified the focused test.\n\nAlso renamed the helper per your interjection.');
+      'I am tracing the exact UI flow now.',
+      'I found the form controls and am checking the submission result.',
+      '## Problem\nThe form sent the wrong auth payload.\n\n## Solution\n- Send `kind: "dcr"`.\n- Verify the commit request succeeds.\n\n## Context\nThe final answer replaces the live progress feed.',
+    ], true)).toBe('## Problem\nThe form sent the wrong auth payload.\n\n## Solution\n- Send `kind: "dcr"`.\n- Verify the commit request succeeds.\n\n## Context\nThe final answer replaces the live progress feed.');
   });
 });
 

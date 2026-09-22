@@ -132,7 +132,7 @@ export function registerActiveReplySteering(messageId: string, steer: ActiveRepl
 
 /** Gives an active provider an unambiguous instruction to react in this turn. */
 export function interjectionSteeringPrompt(body: string): string {
-  return `The user is interjecting into your active response. Acknowledge and apply this direction immediately; do not wait for a later turn or start a separate response:\n\n${body}`;
+  return `The user is interjecting into your active response. Apply this direction immediately. Continue the same work, then end with one fresh, self-contained final answer that replaces every earlier progress update and fully reflects this direction. Do not wait for a later turn or replay the progress log:\n\n${body}`;
 }
 
 /**
@@ -286,14 +286,15 @@ export function isMissingClaudeSessionError(error: unknown): boolean {
  * The live feed includes every visible Codex message, including interim status
  * updates. Completion must retain only the final authored response, matching
  * Claude's terminal-result boundary instead of replaying that live transcript.
- * An interjected turn is the exception: `turn/steer` produces a genuinely
- * separate item per exchange (the pre-interjection reply, then the reply to
- * the steer), and both are real answer content the human already saw stream
- * in — dropping the earlier one loses the answer, not just progress noise.
+ * `turn/steer` can produce several agent-message items, but those items also
+ * include progress notes emitted before tool calls. The terminal item is the
+ * provider's replacement answer after applying every interjection; persisting
+ * earlier items replays the activity feed inside the final response and sends
+ * that transcript through the fallback formatter.
  */
-export function codexFinalReply(itemTexts: Iterable<string>, steered = false): string {
+export function codexFinalReply(itemTexts: Iterable<string>, _steered = false): string {
   const items = Array.from(itemTexts).filter((text) => !isCodexDecisionPreamble(text));
-  return (steered ? items.join('\n\n') : items.at(-1) ?? '').trim();
+  return (items.at(-1) ?? '').trim();
 }
 
 export function codexTurnStartParams(threadId: string, cwd: string, prompt: string): Record<string, unknown> {

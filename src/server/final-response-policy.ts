@@ -61,23 +61,19 @@ export function finalResponseEditingEnabled(): boolean {
   return !process.env.VITEST || process.env.WORKBENCH_TEST_FINAL_RESPONSE_POLICY === '1';
 }
 
-function plainParagraph(value: string): string {
-  const words = value
+function cleanSectionMarkdown(value: string): string {
+  const cleaned = value
     .replace(/<workbench-plan>[\s\S]*?<\/workbench-plan>/gi, '')
-    .replace(/```(?:\w+)?/g, '')
-    .replace(/^\s*(?:[-*#>]+|\d+[.)])\s*/gm, '')
-    .replace(/\b(?:Problem|Solution|Context):\s*/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(Boolean);
-  if (!words.length) return 'No usable detail was returned.';
-  return words.join(' ');
+    .replace(/^\s*(?:#{1,6}\s+)?(?:Problem|Solution|Context):?\s*$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return cleaned || 'No usable detail was returned.';
 }
 
-export function fallbackFinalResponse(draft: string, objective: string, verbose = false): string {
-  if (verbose) return `## Problem\n${plainParagraph(objective)}\n\n## Solution\n${draft.trim()}\n\n## Context\nNo additional context.`;
-  return `## Problem\n${plainParagraph(objective)}\n\n## Solution\n${plainParagraph(draft)}\n\n## Context\nNo additional context.`;
+export function fallbackFinalResponse(draft: string, objective: string, _verbose = false): string {
+  const problem = cleanSectionMarkdown(objective).replace(/\n+/g, ' ');
+  const solution = cleanSectionMarkdown(draft);
+  return `## Problem\n${problem}\n\n## Solution\n${solution}\n\n## Context\nNo additional context.`;
 }
 
 type FinalResponseOptions = { verbose?: boolean };

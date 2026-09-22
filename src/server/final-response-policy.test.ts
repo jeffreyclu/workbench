@@ -58,7 +58,7 @@ describe('final response policy', () => {
     const editor = vi.fn(async () => '## Problem\nThe local app was down.\n\n## Solution\nRestarted it.\n\n## Context\nHealth returned 200.');
     const output = await editFinalResponse('The daemon failed.\n\nI restarted several processes.', 'Restart the local app.', editor);
 
-    expect(output).toBe('## Problem\nRestart the local app.\n\n## Solution\nThe daemon failed. I restarted several processes.\n\n## Context\nNo additional context.');
+    expect(output).toBe('## Problem\nRestart the local app.\n\n## Solution\nThe daemon failed.\n\nI restarted several processes.\n\n## Context\nNo additional context.');
     expect(editor).not.toHaveBeenCalled();
   });
 
@@ -66,7 +66,7 @@ describe('final response policy', () => {
     const editor = vi.fn(async () => { throw new Error('must not run'); });
     const output = await editFinalResponse('The service was restarted.\n\nHealth returned 200.', 'Restart the service.', editor);
     expect(finalResponsePolicyViolation(output)).toBeNull();
-    expect(output).toContain('The service was restarted. Health returned 200.');
+    expect(output).toContain('The service was restarted.\n\nHealth returned 200.');
     expect(output).toContain('## Context\nNo additional context.');
     expect(output).not.toContain('editor');
     expect(editor).not.toHaveBeenCalled();
@@ -80,5 +80,14 @@ describe('final response policy', () => {
     expect(output).toContain('result-159 FINAL-RESULT');
     expect(output).not.toContain('…');
     expect(finalResponsePolicyViolation(output)).toBeNull();
+  });
+
+  it('preserves Markdown lists when wrapping an unstructured final answer', () => {
+    const draft = 'Test the fixed flow:\n\n1. Open **Connectors**.\n2. Submit the DCR form.\n3. Confirm `kind: "dcr"` in the request.';
+    const output = fallbackFinalResponse(draft, 'Explain how to test the feature.');
+
+    expect(output).toContain('## Solution\nTest the fixed flow:\n\n1. Open **Connectors**.');
+    expect(output).toContain('2. Submit the DCR form.');
+    expect(output).toContain('3. Confirm `kind: "dcr"` in the request.');
   });
 });
