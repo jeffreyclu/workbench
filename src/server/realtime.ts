@@ -28,7 +28,7 @@ export type RealtimeReviewScore = {
   completed: number;
   total: number;
 };
-export type RealtimeMessage = { type: 'ready' } | { type: 'invalidate'; topics: RealtimeTopic[] } | RealtimeNotification | RealtimeDiffConfidence | RealtimeReviewScore;
+export type RealtimeMessage = { type: 'ready' } | { type: 'invalidate'; topics: RealtimeTopic[]; conversationId?: string } | RealtimeNotification | RealtimeDiffConfidence | RealtimeReviewScore;
 
 type RealtimeSink = (message: Exclude<RealtimeMessage, { type: 'ready' }>) => void;
 let sink: RealtimeSink | null = null;
@@ -37,6 +37,16 @@ let liveSocketServer: WebSocketServer | null = null;
 /** Safe no-op before a runtime has attached a socket server (including unit tests). */
 export function publishRealtimeEvent(...topics: RealtimeTopic[]): void {
   sink?.({ type: 'invalidate', topics });
+}
+
+/**
+ * Same as `publishRealtimeEvent('shared-messages')`, but carries which
+ * conversation actually changed. Agent activity fires this constantly across
+ * every conversation running at once; without the id, every open client
+ * refetches its own conversation's messages even when nothing in it changed.
+ */
+export function publishRealtimeMessagesEvent(conversationId: string): void {
+  sink?.({ type: 'invalidate', topics: ['shared-messages'], conversationId });
 }
 
 /** Sends a user-facing event. Records still come from REST after any invalidation frame. */

@@ -7,7 +7,7 @@ type RealtimeTopic = typeof realtimeTopics[number];
 
 type RealtimeMessage =
   | { type: 'ready' }
-  | { type: 'invalidate'; topics: RealtimeTopic[] }
+  | { type: 'invalidate'; topics: RealtimeTopic[]; conversationId?: string }
   | { type: 'notification'; tone: ToastTone; message: string; description?: string; duration?: number; action?: { label: string; route: string } }
   | { type: 'diff-confidence'; assessments: Record<string, { risk: number | null; reasoning: string }> }
   | { type: 'review-score'; scope: { workItemId: string } | { conversationId: string }; revision: string; decisionId: string; answer: string | null; error: string | null; completed: number; total: number };
@@ -47,8 +47,14 @@ const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
     ['shared-agent-events'], ['conversation-workspaces'], ['workspace-diff-status'],
     ['promotion-queue-status'], ['agent-accounts'],
   ],
+  // ['shared-messages'] and ['shared-agent-events'] are deliberately absent
+  // here: this topic fires on every streamed token from every running agent
+  // across every conversation, so invalidating those two broadly would
+  // refetch the conversation Jeffrey has open on someone else's unrelated
+  // agent activity. invalidateRealtimeTopics scopes those two to the
+  // conversation id the server actually sent, when it sent one.
   'shared-messages': [
-    ['shared-messages'], ['shared-agent-events'], ['shared-message-activity'],
+    ['shared-message-activity'],
     ['workspace-diff-status'],
     ['work-item-workspaces'], ['conversation-workspaces'], ['promotion-queue-status'], ['runtime-preview-status'],
   ],
@@ -94,7 +100,19 @@ export function realtimeUrl(location: Pick<Location, 'protocol' | 'host'> = wind
   return `${protocol}//${location.host}/api/realtime`;
 }
 
-export function invalidateRealtimeTopics(queryClient: QueryClient, topics: readonly RealtimeTopic[]): void {
+/**
+ * `messagesConversationIds` are the conversations the server actually named
+ * for a batch of 'shared-messages' events. When every event in the batch
+ * named one, only those conversations' message/event queries are refetched
+ * instead of every open conversation's. An empty set (a 'ready' resync, or
+ * the HTTPS polling fallback, which carries no per-event ids) falls back to
+ * invalidating both broadly.
+ */
+export function invalidateRealtimeTopics(
+  queryClient: QueryClient,
+  topics: readonly RealtimeTopic[],
+  messagesConversationIds: ReadonlySet<string> = new Set(),
+): void {
   const invalidated = new Set<string>();
   for (const topic of new Set(topics)) {
     for (const queryKey of topicQueryKeys[topic]) {
@@ -103,6 +121,16 @@ export function invalidateRealtimeTopics(queryClient: QueryClient, topics: reado
       invalidated.add(signature);
       void queryClient.invalidateQueries({ queryKey });
     }
+  }
+  if (!topics.includes('shared-messages')) return;
+  if (messagesConversationIds.size > 0) {
+    for (const conversationId of messagesConversationIds) {
+      void queryClient.invalidateQueries({ queryKey: ['shared-messages', conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ['shared-agent-events', conversationId] });
+    }
+  } else {
+    void queryClient.invalidateQueries({ queryKey: ['shared-messages'] });
+    void queryClient.invalidateQueries({ queryKey: ['shared-agent-events'] });
   }
 }
 
@@ -151,6 +179,11 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
     let recoveryProbeTimer: number | null = null;
     let invalidationTimer: number | null = null;
     const pendingInvalidationTopics = new Set<RealtimeTopic>();
+    const pendingMessagesConversationIds = new Set<string>();
+    // Any 'shared-messages' event this batch that did not name a
+    // conversation (there is none today, but nothing guarantees that stays
+    // true) forces a broad fallback rather than silently under-invalidating.
+    let pendingMessagesBroad = false;
     let attempts = 0;
     let disposed = false;
     let manualRetryRequested = false;
@@ -158,12 +191,18 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
     const flushInvalidations = () => {
       invalidationTimer = null;
       if (disposed || pendingInvalidationTopics.size === 0) return;
-      invalidateRealtimeTopics(queryClient, [...pendingInvalidationTopics]);
+      invalidateRealtimeTopics(queryClient, [...pendingInvalidationTopics], pendingMessagesBroad ? new Set() : pendingMessagesConversationIds);
       pendingInvalidationTopics.clear();
+      pendingMessagesConversationIds.clear();
+      pendingMessagesBroad = false;
     };
 
-    const queueInvalidations = (topics: readonly RealtimeTopic[]) => {
+    const queueInvalidations = (topics: readonly RealtimeTopic[], conversationId?: string) => {
       for (const topic of topics) pendingInvalidationTopics.add(topic);
+      if (topics.includes('shared-messages')) {
+        if (conversationId) pendingMessagesConversationIds.add(conversationId);
+        else pendingMessagesBroad = true;
+      }
       if (invalidationTimer === null) invalidationTimer = window.setTimeout(flushInvalidations, REALTIME_INVALIDATION_BATCH_MS);
     };
 
@@ -204,7 +243,7 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
           // down. Refresh every active realtime-backed query once when the
           // server confirms this connection, then stay event-driven.
           if (message.type === 'ready') queueInvalidations(realtimeTopics);
-          if (message.type === 'invalidate') queueInvalidations(message.topics);
+          if (message.type === 'invalidate') queueInvalidations(message.topics, message.conversationId);
           if (message.type === 'notification') onNotification(message);
           if (message.type === 'diff-confidence' || message.type === 'review-score') for (const listener of realtimeMessageListeners) listener(message);
         } catch {

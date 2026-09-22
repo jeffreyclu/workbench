@@ -7,7 +7,7 @@ import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WOR
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
-import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
+import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
 import { agentAccountEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
@@ -49,10 +49,12 @@ function addLiveAgentStreamEvents(
   repository: WorkItemRepository,
   messageId: string,
   runId: string | null,
+  conversationId: string | null,
   events: Array<Pick<AgentStreamEvent, 'kind' | 'detail' | 'trace'>>,
 ): void {
   repository.addAgentStreamEvents(messageId, runId, events);
-  publishRealtimeEvent('shared-messages');
+  if (conversationId) publishRealtimeMessagesEvent(conversationId);
+  else publishRealtimeEvent('shared-messages');
 }
 
 function pullRequestUrls(value: string): string[] {
@@ -149,11 +151,12 @@ function persistNonTerminalAgentUpdate(operation: () => void): void {
   }
 }
 
-function updateLiveSharedBody(repository: WorkItemRepository, messageId: string, body: string, runId?: string): void {
+function updateLiveSharedBody(repository: WorkItemRepository, messageId: string, body: string, conversationId: string | null, runId?: string): void {
   persistNonTerminalAgentUpdate(() => {
     repository.updateSharedMessage(messageId, { body });
     if (runId) repository.updateRun(runId, { output: body });
-    publishRealtimeEvent('shared-messages');
+    if (conversationId) publishRealtimeMessagesEvent(conversationId);
+    else publishRealtimeEvent('shared-messages');
   });
 }
 
@@ -1438,7 +1441,7 @@ export async function runSharedBackgroundJob(
 
   activeReplies.set(messageId, controller);
   try {
-    const body = await job(controller.signal, (partial) => updateLiveSharedBody(repository, messageId, partial));
+    const body = await job(controller.signal, (partial) => updateLiveSharedBody(repository, messageId, partial, target?.conversationId ?? null));
     repository.updateSharedMessage(messageId, { body, status: 'completed' });
   } catch (error) {
     // Once the durable lease is gone, this process is fenced out. The process
@@ -1601,7 +1604,7 @@ export async function replyInSharedRoom(
     })));
     const connectedContext = externalEvidence.find((entry) => entry.snapshot.kind === 'connected_source_context')?.payload;
     const connectionContext = [typeof connectedContext === 'string' ? connectedContext : '', evidencePromptBlock(externalEvidence)].filter(Boolean).join('\n\n');
-    for (const entry of externalEvidence) addLiveAgentStreamEvents(repository, messageId, runId ?? null, [{
+    for (const entry of externalEvidence) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{
       kind: 'decision',
       detail: `Supervisor supplied ${entry.snapshot.kind} from one immutable local snapshot (${entry.snapshot.id}); ${entry.reused ? 'reused' : 'fetched once'} for dispatch ${entry.snapshot.dispatchGroupId}.`,
     }]);
@@ -1677,8 +1680,8 @@ export async function replyInSharedRoom(
     const lineageDecision = linkedItem && linkedRun
       ? await verifyAuthoritativeMutationLineage(repository, linkedItem, externalAuthorization, sourceCwd, linkedRun)
       : null;
-    if (lineageDecision) addLiveAgentStreamEvents(repository, messageId, runId ?? null, [{ kind: 'decision', detail: lineageDecision }]);
-    if (externalAuthorization.granted) addLiveAgentStreamEvents(repository, messageId, runId ?? null, [{
+    if (lineageDecision) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{ kind: 'decision', detail: lineageDecision }]);
+    if (externalAuthorization.granted) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);
@@ -1737,11 +1740,11 @@ export async function replyInSharedRoom(
     const runCodexReply = async (codexPrompt: string, resumeThreadId?: string | null, expiredThreadPrompt?: string) =>
       runSteerableCodex(codexPrompt, cwd, controller.signal, (partial) => {
         if (controller.signal.aborted) return;
-        updateLiveSharedBody(repository, messageId, partial, runId);
+        updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
       }, (steer) => {
         registerActiveReplySteering(messageId, steer);
         void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
-      }, (event) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, [event])), (usage) => {
+      }, (event) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [event])), (usage) => {
         persistNonTerminalAgentUpdate(() => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
           repository.updateSharedMessage(messageId, telemetry);
@@ -1760,7 +1763,7 @@ export async function replyInSharedRoom(
       requiredWorkbenchTools,
       onProgress: (partial) => {
         if (controller.signal.aborted) return;
-        updateLiveSharedBody(repository, messageId, partial, runId);
+        updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
       },
       onUsage: (usage) => persistNonTerminalAgentUpdate(() => {
         const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
@@ -1768,7 +1771,7 @@ export async function replyInSharedRoom(
         if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, 'palmyra', 'usage', telemetry); }
       }),
       onAudit: (entries) => persistNonTerminalAgentUpdate(() => {
-        addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
+        addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
         })));
@@ -1786,7 +1789,7 @@ export async function replyInSharedRoom(
       : agent === 'palmyra' ? await runPalmyraReply(guardedPrompt)
       : await runAgentCommandWithFallback(agent, cwd, claudeScopeRecoveryPrompt(guardedPrompt, cwd), (partial) => {
       if (controller.signal.aborted) return;
-      updateLiveSharedBody(repository, messageId, partial, runId);
+      updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
     }, controller.signal, (fallback, reason) => {
       persistNonTerminalAgentUpdate(() => {
         repository.updateSharedMessage(messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: agent, fallbackReason: reason.slice(0, 500) });
@@ -1799,7 +1802,7 @@ export async function replyInSharedRoom(
         if (runId) repository.updateRun(runId, telemetry);
         if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'usage', telemetry);
       });
-    }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
+    }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, entries.map((entry) => ({
       kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
       trace: entry.trace,
     })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, agent === 'claude' ? (steer) => {
@@ -1820,14 +1823,14 @@ export async function replyInSharedRoom(
       repository.updateSharedMessage(messageId, { body: '● Claude session expired. Restarting this turn in a fresh session…' });
       result = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {
         if (controller.signal.aborted) return;
-        updateLiveSharedBody(repository, messageId, partial, runId);
+        updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
       }, controller.signal, undefined, profile, (usage) => {
         persistNonTerminalAgentUpdate(() => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
           repository.updateSharedMessage(messageId, telemetry);
           if (runId) repository.updateRun(runId, telemetry);
         });
-      }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
+      }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
         trace: entry.trace,
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
@@ -1848,14 +1851,14 @@ export async function replyInSharedRoom(
         const full = claudeScopeRecoveryPrompt(`${freshPrompt}\n\n${requirement}`, cwd);
         return runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(requirement, cwd), (partial) => {
           if (controller.signal.aborted) return;
-          updateLiveSharedBody(repository, messageId, partial, runId);
+          updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
         }, controller.signal, undefined, profile, (usage) => {
           persistNonTerminalAgentUpdate(() => {
             const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
             repository.updateSharedMessage(messageId, telemetry);
             if (runId) repository.updateRun(runId, telemetry);
           });
-        }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
+        }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
         })))), runKind, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
@@ -1886,14 +1889,14 @@ export async function replyInSharedRoom(
       repository.updateSharedMessage(messageId, { body: `● ${reason} Restarting the same Claude turn in a clean session…` });
       const recovered = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {
         if (controller.signal.aborted) return;
-        updateLiveSharedBody(repository, messageId, partial, runId);
+        updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
       }, controller.signal, undefined, profile, (usage) => {
         persistNonTerminalAgentUpdate(() => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
           repository.updateSharedMessage(messageId, telemetry);
           if (runId) repository.updateRun(runId, telemetry);
         });
-      }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, entries.map((entry) => ({
+      }, (entries) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
         trace: entry.trace,
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
@@ -2075,7 +2078,7 @@ export async function interjectQueuedSharedMessage(
   if (!repository.claimQueuedInterjection(messageId)) return [];
   const claimedMessage = repository.getSharedMessageById(messageId) ?? message;
   if (authorization.granted) {
-    for (const reply of steerable) addLiveAgentStreamEvents(repository, reply.id, replyRunIds.get(reply.id) ?? null, [{
+    for (const reply of steerable) addLiveAgentStreamEvents(repository, reply.id, replyRunIds.get(reply.id) ?? null, message.conversationId, [{
       kind: 'decision',
       detail: `Supervisor granted ${authorization.capability.actionIds.join(', ')} ${authorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${authorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${authorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);

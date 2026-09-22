@@ -10,7 +10,7 @@ import { agentAccountEnv, agentSubprocessEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
 import { classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, type ExternalActionAuthorization } from './external-action-authorization.js';
 import { WorkItemRepository } from './repository.js';
-import { publishRealtimeEvent, publishRealtimeNotification } from './realtime.js';
+import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
 import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isManagedRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
@@ -34,10 +34,12 @@ function addLiveAgentStreamEvents(
   repository: WorkItemRepository,
   messageId: string,
   runId: string,
+  conversationId: string | null,
   events: Array<Pick<AgentStreamEvent, 'kind' | 'detail' | 'trace'>>,
 ): void {
   repository.addAgentStreamEvents(messageId, runId, events);
-  publishRealtimeEvent('shared-messages');
+  if (conversationId) publishRealtimeMessagesEvent(conversationId);
+  else publishRealtimeEvent('shared-messages');
 }
 
 const MAX_OUTPUT_BYTES = 1_000_000;
@@ -2071,8 +2073,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
     const lineageDecision = await verifyAuthoritativeMutationLineage(repository, item, externalAuthorization, sourceWorkspace ?? cwd, run);
-    if (lineageDecision && run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, [{ kind: 'decision', detail: lineageDecision }]);
-    if (externalAuthorization.granted && run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, [{
+    if (lineageDecision && run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, [{ kind: 'decision', detail: lineageDecision }]);
+    if (externalAuthorization.granted && run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, [{
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);
@@ -2126,7 +2128,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         repository.updateRun(run.id, { output: partialOutput });
         if (run.messageId) {
           repository.updateSharedMessage(run.messageId, { body: partialOutput });
-          publishRealtimeEvent('shared-messages');
+          if (run.conversationId) publishRealtimeMessagesEvent(run.conversationId); else publishRealtimeEvent('shared-messages');
         }
       }, onUsage: (usage) => {
         const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
@@ -2137,7 +2139,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         for (const entry of entries) repository.addAuditEntry(entry.category, 'palmyra', entry.detail, item.id);
         for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, 'palmyra', 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
         for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
-        if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, entries.map((entry) => ({
+        if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
         })));
@@ -2146,7 +2148,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.updateRun(run.id, { output: partialOutput });
       if (run.messageId) {
         repository.updateSharedMessage(run.messageId, { body: partialOutput });
-        publishRealtimeEvent('shared-messages');
+        if (run.conversationId) publishRealtimeMessagesEvent(run.conversationId); else publishRealtimeEvent('shared-messages');
       }
     }, controller.signal, (fallback, reason) => {
       repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
@@ -2162,7 +2164,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
       for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
       for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
-      if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, entries.map((entry) => ({
+      if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
         trace: entry.trace,
       })));
@@ -2188,7 +2190,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       }, (entries, producingAgent) => {
         for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
         for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
-        if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, entries.map((entry) => ({
+        if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
         })));
@@ -2235,7 +2237,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
         for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
         for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
-        if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, entries.map((entry) => ({
+        if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
         })));
@@ -2268,7 +2270,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
           for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
           for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
-          if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, entries.map((entry) => ({
+          if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
             kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
             trace: entry.trace,
           })));
