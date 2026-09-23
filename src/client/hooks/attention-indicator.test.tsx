@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { render } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useAttentionIndicator } from './attention-indicator';
+
+const { sendDesktopNotification } = vi.hoisted(() => ({ sendDesktopNotification: vi.fn() }));
+
+vi.mock('./desktop-notifications', () => ({ sendDesktopNotification }));
 
 function Indicator({ count }: { count: number }) {
   useAttentionIndicator(count);
@@ -11,6 +15,8 @@ function Indicator({ count }: { count: number }) {
 afterEach(() => {
   document.title = 'Workbench';
   document.head.querySelector('link[rel="icon"]')?.remove();
+  sendDesktopNotification.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe('attention indicator', () => {
@@ -43,6 +49,27 @@ describe('attention indicator', () => {
 
     expect(document.title).toBe('Original title');
     expect(favicon.href).toContain('original');
+  });
+
+  it('alerts about newly actionable work while Workbench is backgrounded', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const { rerender } = render(<Indicator count={0} />);
+
+    rerender(<Indicator count={1} />);
+
+    expect(sendDesktopNotification).toHaveBeenCalledWith({
+      title: 'Workbench needs attention',
+      body: '1 agent run is ready for you.',
+    });
+  });
+
+  it('does not alert for existing work or while Workbench is frontmost', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const { rerender } = render(<Indicator count={1} />);
+
+    rerender(<Indicator count={2} />);
+
+    expect(sendDesktopNotification).not.toHaveBeenCalled();
   });
 
 });
