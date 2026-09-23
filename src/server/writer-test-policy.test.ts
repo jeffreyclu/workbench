@@ -63,6 +63,13 @@ describe('Writer agent test command guard', () => {
     expect(blockedPersistentForegroundCommand('pnpm dev >/tmp/app.log 2>&1 &')).toBe(false);
     expect(blockedPersistentForegroundCommand('npm run build')).toBe(false);
     expect(blockedPersistentForegroundCommand('./scripts/worktree-start.sh --help')).toBe(true);
+    expect(blockedPersistentForegroundCommand('echo "=== vite proxy /next ===" && grep -rn "3100|/next" apps/service.writer-app/vite.config.ts')).toBe(false);
+    expect(blockedPersistentForegroundCommand('echo "pnpm dev"')).toBe(false);
+    expect(blockedPersistentForegroundCommand('grep -n "next dev" package.json')).toBe(false);
+    expect(blockedPersistentForegroundCommand("cat > package.json <<'EOF'\n{\"scripts\":{\"dev\":\"next dev --port 3100\"}}\nEOF")).toBe(false);
+    expect(blockedPersistentForegroundCommand('pnpm exec vite dev --port 5185')).toBe(true);
+    expect(blockedPersistentForegroundCommand('npx vite build')).toBe(false);
+    expect(blockedPersistentForegroundCommand('npx vite build --watch')).toBe(true);
   });
   it.each([
     ['npm', ['test']], ['npm', ['run', 'test']], ['npm', ['--prefix', 'frontend', 'test']], ['pnpm', ['--filter', 'frontend', 'test:unit']], ['pnpm', ['test', '--', 'use-manage-connectors-view-model']], ['yarn', ['test']],

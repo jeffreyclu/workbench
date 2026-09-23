@@ -191,7 +191,64 @@ export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountPr
 const WRITER_TEST_FILE_ARGUMENT = /(?:^|\/)[^\s/]+\.(?:test|spec)\.[cm]?[jt]sx?(?=$|\s)/i;
 
 function shellCommandSegments(command: string): string[] {
-  return command.replace(/\\\n/g, ' ').split(/(?:&&|\|\||;|\n|(?<!\|)\|(?!\|))/).map((segment) => segment.trim()).filter(Boolean);
+  const withoutHeredocBodies: string[] = [];
+  let heredocDelimiter: string | null = null;
+  for (const line of command.replace(/\\\n/g, ' ').split('\n')) {
+    if (heredocDelimiter) {
+      if (line.trim() === heredocDelimiter) heredocDelimiter = null;
+      continue;
+    }
+    withoutHeredocBodies.push(line);
+    const heredoc = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(line);
+    if (heredoc) heredocDelimiter = heredoc[2];
+  }
+
+  const segments: string[] = [];
+  let current = '';
+  let quote: "'" | '"' | '`' | null = null;
+  let escaped = false;
+  const source = withoutHeredocBodies.join('\n');
+  const finish = () => {
+    const value = current.trim();
+    if (value) segments.push(value);
+    current = '';
+  };
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && quote !== "'") {
+      current += character;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      current += character;
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+      current += character;
+      continue;
+    }
+    const pair = source.slice(index, index + 2);
+    if (pair === '&&' || pair === '||') {
+      finish();
+      index += 1;
+      continue;
+    }
+    if (character === ';' || character === '\n' || character === '|') {
+      finish();
+      continue;
+    }
+    current += character;
+  }
+  finish();
+  return segments;
 }
 
 const COMMAND_PREFIX = String.raw`(?:(?:env|command|time)\s+)*(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+)\s+)*`;
@@ -243,18 +300,18 @@ export function blockedWorkbenchDependencyBootstrapCommand(command: string): boo
  * returns promptly.
  */
 export function blockedPersistentForegroundCommand(command: string): boolean {
-  const normalized = command.replace(/\\\n/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!normalized) return false;
-  // An explicit background/timeout wrapper gives the command a bounded shell
-  // lifecycle. Do not second-guess it here.
-  if (/(?:^|\s)(?:timeout|gtimeout)\s+\S+/i.test(normalized) || /(?:^|\s)nohup\s+/i.test(normalized) || /(?:^|[^&])&\s*(?:$|[;])/i.test(normalized)) return false;
-  return normalized.split(/(?:&&|\|\||;|\n)/).some((segment) => {
-    const value = segment.trim();
+  if (!command.trim()) return false;
+  return shellCommandSegments(command).some((segment) => {
+    const value = segment.replace(/\s+/g, ' ').trim();
     if (!value) return false;
-    if (/(?:^|\s)(?:\.\/)?scripts\/worktree-start\.sh(?:\s|$)/i.test(value)) return true;
-    if (/(?:^|\s)(?:tail\s+-f|while\s+(?:true|:)|watch\s+-n)(?:\s|$)/i.test(value)) return true;
-    if (/(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|serve|start)(?:\s|$)/i.test(value)) return true;
-    const vite = /(?:^|\s)(?:npx(?:\s+--[^\s]+)*\s+)?vite(?:\s+([^;&|]*))?$/i.exec(value);
+    // A bounded or explicitly backgrounded segment returns control by design.
+    if (new RegExp(`^${COMMAND_PREFIX}(?:(?:timeout|gtimeout)\\s+\\S+|nohup\\s+)`, 'i').test(value) || /(?:^|[^&])&\s*$/.test(value)) return false;
+    const invocation = value.replace(new RegExp(`^${COMMAND_PREFIX}`, 'i'), '');
+    if (/^(?:\.\/)?scripts\/worktree-start\.sh(?:\s|$)/i.test(invocation)) return true;
+    if (/^(?:tail\s+-f|while\s+(?:true|:)|watch\s+-n)(?:\s|$)/i.test(invocation)) return true;
+    if (/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|serve|start)(?:\s|$)/i.test(invocation)) return true;
+    if (/^(?:npm|pnpm|yarn|bun|npx|node|tsx|tsc|vitest|jest|vite|next|webpack|rollup|esbuild)\b[^;&|]*(?:^|\s)--watch(?:All)?(?:\s|=|$)/i.test(invocation)) return true;
+    const vite = /^(?:(?:npx(?:\s+--[^\s]+)*|pnpm\s+(?:exec|dlx)|npm\s+exec(?:\s+--)?)\s+)?vite(?:\s+([^;&|]*))?$/i.exec(invocation);
     if (vite) {
       const args = (vite[1] ?? '').replace(/["']/g, ' ').trim().split(/\s+/).filter(Boolean);
       // `vite` defaults to the persistent dev server, as do `dev`, `serve`,
@@ -262,8 +319,7 @@ export function blockedPersistentForegroundCommand(command: string): boolean {
       // remain executable unless the build itself explicitly enables watch.
       if (!args.includes('build') && !args.some((argument) => /^(?:--help|-h|--version|-v)$/.test(argument))) return true;
     }
-    if (/(?:^|\s)(?:next\s+dev|webpack(?:-dev-server)?)(?:\s|$)/i.test(value)) return true;
-    return /(?:^|\s)(?:--watch|--watchAll)(?:\s|$)/.test(value);
+    return /^(?:(?:npx|pnpm\s+(?:exec|dlx)|npm\s+exec(?:\s+--)?)\s+)?(?:next\s+dev|webpack(?:-dev-server)?)(?:\s|$)/i.test(invocation);
   });
 }
 
