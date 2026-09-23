@@ -101,6 +101,9 @@ nav { display: grid; gap: 3px; }
 .discovery-workspace { grid-column: 2 / -1; min-width: 0; height: 100vh; overflow: auto; padding: 0 clamp(22px, 5vw, 72px) 60px; background: var(--panel); animation: view-enter var(--motion-standard) var(--motion-ease); }
 @keyframes view-enter { from { opacity: 0; transform: translate3d(0, 6px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
 .discovery-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 112px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.discovery-header-actions, .freshness-control { display: flex; align-items: center; gap: 8px; }
+.freshness-control { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.freshness-control time { font-variant-numeric: tabular-nums; }
 .discovery-header h2 { margin: 3px 0 2px; font-size: 25px; }.discovery-header p { margin: 0; color: var(--muted); font-size: 11px; }
 .discovery-status { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 18px 0; color: var(--muted); font: 10px 'DM Mono'; }
 .discovery-status strong { color: var(--acid); }.discovery-status .error-message { color: #ff9384; }

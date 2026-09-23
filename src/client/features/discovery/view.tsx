@@ -2,6 +2,7 @@ import { ArrowUpRight, Check, LoaderCircle, RefreshCw, Search, Sparkles } from '
 import type { DiscoveryCandidate, WorkItem } from '../../../shared/contracts';
 import { MarkdownComposer } from '../../components/markdown/markdown-composer.js';
 import { DiscoveryCardSkeleton } from '../../components/skeleton/skeleton';
+import { FreshnessControl } from '../../components/freshness-control';
 import { Tabs } from '../../components/tabs/tabs';
 import { useDiscoveryCard, useDiscoveryInbox, useDiscoveryNav } from './hooks';
 
@@ -13,6 +14,7 @@ export function DiscoveryNav({ active, onClick }: { active: boolean; onClick: ()
 }
 
 export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (id: string) => void; onOpenStack: () => void }) {
+  // 81bb6f51-57d4-4778-aec4-8fb22e3ba617 LEGACY-AFFECTING: Discovery’s header now exposes inbox freshness and refetches the visible inbox and merge targets.
   const { inboxView, setInboxView, selected, setSelected, inbox, activeTasks, scan, resolveCandidate, bulkResolve, restore, resolveMerge } = useDiscoveryInbox();
   const pendingActionFor = (candidateId: string) => {
     if (resolveCandidate.isPending && resolveCandidate.variables?.candidate.id === candidateId) return resolveCandidate.variables.action;
@@ -26,9 +28,12 @@ export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (i
   return <section className="discovery-workspace">
     <header className="discovery-header">
       <div><span className="eyebrow">Morning review</span><h2>Discovered overnight</h2><p>Nothing enters your stack until you approve it.</p></div>
-      <button className="button secondary compact" onClick={() => scan.mutate()} disabled={isScanning}>
-        {isScanning ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} {isScanning ? 'Scanning sources…' : 'Scan now'}
-      </button>
+      <div className="discovery-header-actions">
+        <FreshnessControl updatedAt={Math.max(inbox.dataUpdatedAt, activeTasks.dataUpdatedAt)} isRefreshing={inbox.isFetching || activeTasks.isFetching} onRefresh={() => void Promise.all([inbox.refetch(), activeTasks.refetch()])} />
+        <button className="button secondary compact" onClick={() => scan.mutate()} disabled={isScanning}>
+          {isScanning ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} {isScanning ? 'Scanning sources…' : 'Scan now'}
+        </button>
+      </div>
     </header>
     {scan.isError && <p className="error-message" role="alert">Could not start the discovery scan: {scan.error.message} <button className="button secondary compact" onClick={() => scan.mutate()}>Retry</button></p>}
     <div className="discovery-status">

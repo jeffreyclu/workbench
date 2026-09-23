@@ -45,6 +45,7 @@ import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedCon
 import { api } from '../../data/api';
 import { ArtifactLibraryView } from '../artifacts/view';
 import { AttachmentLink, AttachmentPreview } from '../../components/attachment-preview';
+import { FreshnessControl } from '../../components/freshness-control';
 import { ConfirmationDialog } from '../../components/dialogs/confirmation-dialog';
 import { InsightsView } from '../insights/view';
 import { navigate, parseRoute, routePath, useRoute, type StackName } from '../../lib/router';
@@ -82,6 +83,7 @@ import type { AgentAccountProfile } from '../../data/runtime-client';
  * longer moves the page into a large patch automatically.
  */
 export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCreated, onRemoving }: { id: string; onClose: () => void; onOpenConversation: (conversationId: string) => void; onOpenTask: (taskId: string) => void; onCreated: (item: WorkItem) => void; onRemoving?: (id: string) => Promise<void> }) {
+  // 81bb6f51-57d4-4778-aec4-8fb22e3ba617 LEGACY-AFFECTING: The task header now exposes WebSocket-backed freshness and an explicit refetch.
   const queryClient = useQueryClient();
   const detail = useTaskDetail(id);
   const [showFollowUp, setShowFollowUp] = useState(false);
@@ -456,6 +458,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         </div>
         <div className="detail-links">
           {item.sourceUrl && <a href={item.sourceUrl} target="_blank" rel="noreferrer">{sourceLinkLabel(item.sourceUrl)} <ArrowUpRight size={13} /></a>}
+          <FreshnessControl updatedAt={detail.dataUpdatedAt} isRefreshing={detail.isFetching} onRefresh={() => void detail.refetch()} />
           <button className="mobile-detail-close icon-button" onClick={onClose} aria-label="Close details"><X size={16} /></button>
         </div>
       </div>
