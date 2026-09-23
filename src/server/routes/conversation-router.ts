@@ -310,6 +310,10 @@ export function createConversationRouter({ repository, database, capabilities, a
     response.json({ count: repository.countActiveConversations() });
   });
 
+  router.get('/api/shared/conversations-archived-count', (_request, response) => {
+    response.json({ count: repository.countArchivedConversations() });
+  });
+
   router.post('/api/shared/conversations', (request, response) => {
     const input = createSharedConversationSchema.parse(request.body);
     response.status(201).json({ conversation: repository.createConversation(input.title) });

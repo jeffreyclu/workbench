@@ -16,6 +16,7 @@ export const conversationClient = {
     const page = await request<ConversationPage>('/api/shared/conversations?view=active&limit=1');
     return { count: page.totalCount };
   },
+  getArchivedConversationCount: () => request<{ count: number }>('/api/shared/conversations-archived-count'),
   getSharedConversation: (id: string) => request<{ conversation: SharedConversation }>(`/api/shared/conversations/${id}`),
   getConversationWorkspaces: (id: string) => request<WorkspaceExplorerResponse>(`/api/shared/conversations/${id}/workspaces`),
   selectConversationWorkspace: (id: string, workspacePath: string) => request<WorkspaceExplorerResponse>(`/api/shared/conversations/${id}/workspaces/selection`, { method: 'PUT', body: JSON.stringify({ workspacePath }) }),

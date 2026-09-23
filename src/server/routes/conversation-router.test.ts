@@ -429,6 +429,17 @@ describe('conversation router', () => {
       expect((await request('/api/shared/conversations-attention-count')).status).toBe(200);
       expect((await request('/api/shared/conversations-count')).status).toBe(200);
     });
+
+    it('reports the archived conversation count', async () => {
+      const before = await (await request('/api/shared/conversations-archived-count')).json() as { count: number };
+
+      const toArchive = await createConversation('Archive me');
+      const archiveResponse = await request(`/api/shared/conversations/${toArchive.id}/archive`, 'POST');
+      expect(archiveResponse.status).toBe(200);
+
+      const after = await (await request('/api/shared/conversations-archived-count')).json() as { count: number };
+      expect(after.count).toBe(before.count + 1);
+    });
   });
 
   describe('search and memory', () => {

@@ -119,6 +119,12 @@ export class ConversationRepository {
     `).get() as { count: number }).count);
   }
 
+  countArchived(): number {
+    return Number((this.database.prepare(`
+      SELECT COUNT(*) AS count FROM shared_conversations WHERE archived_at IS NOT NULL AND deleted_at IS NULL
+    `).get() as { count: number }).count);
+  }
+
   countUnread(): number {
     return Number((this.database.prepare(`
       SELECT COUNT(*) AS count FROM shared_conversations

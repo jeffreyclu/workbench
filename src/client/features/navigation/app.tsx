@@ -62,7 +62,7 @@ import { StackHeader } from '../../components/stack-header';
 import { StackList } from '../../components/stack-list';
 import { ProjectColorDot } from '../../components/project/project-color';
 import { InlineProjectEditor } from '../../components/project/project-field';
-import { useValuePulse } from '../../hooks/use-value-pulse';
+import { PulseCount } from '../../components/pulse-count';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
 import { SourcesDialog } from '../source';
 import { KeyboardHelpDialog, SettingsDialog } from '../settings';
@@ -86,11 +86,6 @@ const PINNED_REMINDER_INTERVAL_MS = 30 * 60_000;
 
 function isEditableTarget(target: EventTarget | null) {
   return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName));
-}
-
-function PulseCount({ value, as: Tag = 'strong' }: { value: number; as?: 'strong' | 'span' }) {
-  const pulse = useValuePulse(value);
-  return <Tag className={pulse}>{value}</Tag>;
 }
 
 export function App() {
@@ -622,7 +617,7 @@ export function App() {
           />
           {taskSearch && <button type="button" className="icon-button" aria-label="Clear task search" onClick={() => setTaskSearch('')}><X size={13} /></button>}
         </div>
-        <div className="stack-view-filter task-view-filter" role="group" aria-label="Task view"><button type="button" className={!isArchiveView ? 'active' : ''} aria-pressed={!isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench' : 'active' })}>Active</button><button type="button" className={isArchiveView ? 'active' : ''} aria-pressed={isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench-archive' : 'archive' })}>Archive <PulseCount as="span" value={isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? 0 : workItemCounts.data?.attentionArchive ?? 0} /></button></div>
+        <div className="stack-view-filter task-view-filter" role="group" aria-label="Task view"><button type="button" className={!isArchiveView ? 'active' : ''} aria-pressed={!isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench' : 'active' })}>Active <PulseCount as="span" value={!isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbench ?? 0 : workItemCounts.data?.active ?? 0} /></button><button type="button" className={isArchiveView ? 'active' : ''} aria-pressed={isArchiveView} onClick={() => navigate({ name: 'stack', stack: isWorkbenchScope ? 'workbench-archive' : 'archive' })}>Archive <PulseCount as="span" value={isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? 0 : workItemCounts.data?.attentionArchive ?? 0} /></button></div>
         {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: isArchiveView ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{isArchiveView ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{isWorkbenchScope && <small>Workbench is filtered to the Workbench project.</small>}</div>}
         {items.data?.pages[0]?.proposal && (
           <div className="proposal-banner">

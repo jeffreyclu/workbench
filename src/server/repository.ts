@@ -480,6 +480,10 @@ export class WorkItemRepository {
     return this.conversations.countActive();
   }
 
+  countArchivedConversations(): number {
+    return this.conversations.countArchived();
+  }
+
   countUnreadConversations(): number {
     return this.conversations.countUnread();
   }
