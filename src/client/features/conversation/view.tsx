@@ -43,7 +43,7 @@ import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAG
 import type { AiProviderChoice } from '../../../shared/ai-providers';
 import { ComposerProviderSelect, type ComposerProvider } from '../../components/composer-provider-select';
 import { ComposerModelSelect } from '../../components/composer-model-select';
-import { PulseCount } from '../../components/pulse-count';
+import { CountBadge } from '../../components/count-badge';
 import { StackHeader } from '../../components/stack-header';
 import { StackList } from '../../components/stack-list';
 import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedConversation, SharedMessage, SharedMessagePage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
@@ -1346,8 +1346,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         ) : (
           <>
             <Tabs ariaLabel="Conversation view" className="conversation-view-tabs" panelClassName="conversation-tab-panel" selected={conversationView} onSelect={selectConversationView} items={[
-              { value: 'active', label: <>Active <PulseCount as="span" value={conversationView === 'active' ? conversations.data?.pages[0]?.totalCount ?? 0 : activeConversationCount.data?.count ?? 0} /></> },
-              { value: 'archive', label: <>Archive <PulseCount as="span" value={conversationView === 'archive' ? conversations.data?.pages[0]?.totalCount ?? 0 : archivedConversationCount.data?.count ?? 0} /></> },
+              { value: 'active', label: <>Active <CountBadge as="span" value={conversationView === 'active' ? conversations.data?.pages[0]?.totalCount ?? 0 : activeConversationCount.data?.count ?? 0} /></> },
+              { value: 'archive', label: <>Archive <CountBadge as="span" value={conversationView === 'archive' ? conversations.data?.pages[0]?.totalCount ?? 0 : archivedConversationCount.data?.count ?? 0} /></> },
             ]}>
             <StackList scrollRef={conversationScrollRef} className="conversation-tabs">
               <div className="virtual-list" style={{ height: conversationVirtualizer.getTotalSize() }}>

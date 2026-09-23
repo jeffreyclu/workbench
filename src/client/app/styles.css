@@ -189,8 +189,8 @@ nav { display: grid; gap: 3px; }
 @keyframes queue-card-enter { from { opacity: 0; transform: translate3d(-18px, 0, 0) scale(.985); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
 @keyframes queue-card-exit { to { max-height: 0; margin: 0; opacity: 0; transform: translate3d(36px, -6px, 0) scale(.96); } }
 @media (prefers-reduced-motion: reduce) { .task-group-row { animation: none; } }
-.value-pulse { display: inline-block; animation: value-pulse var(--motion-standard) var(--motion-ease); }
-@keyframes value-pulse { 0% { transform: scale(1.35); } 100% { transform: scale(1); } }
+.count-badge { display: inline-block; animation: count-badge-in var(--motion-standard) var(--motion-ease); }
+@keyframes count-badge-in { 0% { transform: scale(1.35); } 100% { transform: scale(1); } }
 .stack-card { display: grid; gap: 6px; width: 100%; min-height: 88px; padding: 12px 10px; color: #e2e1d9; background: #121318; border: 1px solid #292d3d; border-radius: 8px; text-align: left; cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease; }
 .queue-list.is-dragging .stack-card { transition: none; }
 .queue-item { position: relative; display: grid; grid-template-columns: 27px minmax(0, 1fr); gap: 8px; align-items: start; width: 100%; min-height: 88px; padding: 14px 10px; color: inherit; background: #121318; border: 1px solid #292d3d; border-radius: 8px; text-align: left; cursor: pointer; touch-action: manipulation; }

@@ -9,7 +9,7 @@ import { InsightsNav } from '../insights/view';
 import { memorySourceLabel } from '../../lib/formatters';
 import { api } from '../../data/api';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton';
-import { useValuePulse } from '../../hooks/use-value-pulse';
+import { CountBadge } from '../../components/count-badge';
 import { useDebouncedValue } from '../conversation/hooks';
 
 export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts' | 'context' | 'discovery' | 'insights';
@@ -289,17 +289,14 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
     // Pointer navigation should not leave the rail expanded; keyboard focus must.
     if (event.detail > 0) (event.target as HTMLElement).closest<HTMLButtonElement>('button')?.blur();
   };
-  const activePulse = useValuePulse(counts?.active);
-  const workbenchPulse = useValuePulse(counts?.workbench);
-  const conversationPulse = useValuePulse(conversationCount);
   const globalSearch = useGlobalSearch(onSelectGlobalSearchResult);
   return <aside id="primary-nav" className="sidebar">
     <div className="brand"><PromotionQueueStatus /><span>Workbench</span></div>
     <nav onClick={releasePointerFocus}>
-      <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={onOpenActive}><Command size={16} /> Attention stack <span className={activePulse}>{counts?.active ?? '…'}</span></button>
-      <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <span className={workbenchPulse}>{counts?.workbench ?? '…'}</span></button>
+      <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={onOpenActive}><Command size={16} /> Attention stack <CountBadge as="span" value={counts?.active} /></button>
+      <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <CountBadge as="span" value={counts?.workbench} /></button>
       <DiscoveryNav active={view === 'discovery'} onClick={onOpenDiscovery} />
-      <button className={`nav-item mobile-conversation-nav ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <span className={conversationPulse}>{conversationCount ?? '…'}</span></button>
+      <button className={`nav-item mobile-conversation-nav ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <CountBadge as="span" value={conversationCount} /></button>
       <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
         <div className="mobile-global-search global-search"><GlobalSearchTrigger search={globalSearch} /></div>
         <ArtifactNav active={view === 'artifacts'} onClick={onOpenArtifacts} />

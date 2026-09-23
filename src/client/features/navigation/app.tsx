@@ -62,7 +62,7 @@ import { StackHeader } from '../../components/stack-header';
 import { StackList } from '../../components/stack-list';
 import { ProjectColorDot } from '../../components/project/project-color';
 import { InlineProjectEditor } from '../../components/project/project-field';
-import { PulseCount } from '../../components/pulse-count';
+import { CountBadge } from '../../components/count-badge';
 import { Tabs } from '../../components/tabs/tabs';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
 import { SourcesDialog } from '../source';
@@ -619,8 +619,8 @@ export function App() {
           {taskSearch && <button type="button" className="icon-button" aria-label="Clear task search" onClick={() => setTaskSearch('')}><X size={13} /></button>}
         </div>
         <Tabs ariaLabel="Task view" className="stack-view-filter task-view-filter" panelClassName="queue-tab-panel" selected={isArchiveView ? 'archive' : 'active'} onSelect={(value) => navigate({ name: 'stack', stack: value === 'archive' ? (isWorkbenchScope ? 'workbench-archive' : 'archive') : (isWorkbenchScope ? 'workbench' : 'active') })} items={[
-          { value: 'active', label: <>Active <PulseCount as="span" value={!isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbench ?? 0 : workItemCounts.data?.active ?? 0} /></> },
-          { value: 'archive', label: <>Archive <PulseCount as="span" value={isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? 0 : workItemCounts.data?.attentionArchive ?? 0} /></> },
+          { value: 'active', label: <>Active <CountBadge as="span" value={!isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbench ?? 0 : workItemCounts.data?.active ?? 0} /></> },
+          { value: 'archive', label: <>Archive <CountBadge as="span" value={isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? 0 : workItemCounts.data?.attentionArchive ?? 0} /></> },
         ]}>
         {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: isArchiveView ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{isArchiveView ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{isWorkbenchScope && <small>Workbench is filtered to the Workbench project.</small>}</div>}
         {items.data?.pages[0]?.proposal && (
