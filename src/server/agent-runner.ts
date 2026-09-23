@@ -20,7 +20,7 @@ import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-respo
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
-import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisedRetryPrompt, supervisorRetryError, supervisorPromptContract } from './supervisor.js';
+import { currentTurnAuthorityContract, finalizeSupervisedOutput, isStatusOnlyTurn, superviseDraft, superviseExternalAction, supervisedRetryPrompt, supervisorRetryError, supervisorPromptContract } from './supervisor.js';
 import { listCandidateWorkspaces } from './workspace-candidates.js';
 import { inferTaskRepositories, repositoryRoutingPrompt, routedWorkspacePaths } from './workspace-routing.js';
 import { groundAuthoritativeWorkItem, needsAuthoritativeWorkItemGrounding } from './work-item-grounding.js';
@@ -407,6 +407,8 @@ export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', e
 
 ${supervisorContract}
 
+${currentTurnAuthorityContract(run.instructions)}
+
 ${persona}
 
 Task: ${compactPromptSection(item.title, 300)}
@@ -456,6 +458,8 @@ Continue the existing task session. The prior task, source context, shared conte
 
 ${supervisorPromptContract(run.kind, [run.instructions, item.sourceUrl, item.description, item.title].filter(Boolean).join('\n'))}
 
+${currentTurnAuthorityContract(run.instructions)}
+
 ${personaFor(item, run)}
 
 Task: ${compactPromptSection(item.title, 300)}
@@ -481,6 +485,10 @@ ${compactPromptSection(shortTermContext || 'No active conversation memory yet.',
 
 ${memoryContext}
 `;
+}
+
+export function providerSessionForTaskTurn(sessionId: string | null | undefined, currentRequest: string): string | undefined {
+  return isStatusOnlyTurn(currentRequest) ? undefined : sessionId ?? undefined;
 }
 
 /**
@@ -2047,17 +2055,23 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // The resolved workspace is explicit in the CLI command and surfaced in
     // activity so a run's filesystem boundary is never implicit.
     repository.addActivity(item.id, 'system', 'progress', `Workspace resolved to ${cwd}.`);
-    const resumeSessionId = run.agent === 'claude' && run.kind === 'execute' && run.conversationId
+    const storedClaudeSessionId = run.agent === 'claude' && run.kind === 'execute' && run.conversationId
       ? repository.getConversation(run.conversationId)?.claudeSessionId ?? undefined
       : undefined;
-    const palmyraContext = run.agent === 'palmyra' && run.conversationId
+    const resumeSessionId = providerSessionForTaskTurn(storedClaudeSessionId, run.instructions);
+    const storedPalmyraContext = run.agent === 'palmyra' && run.conversationId
       ? (await import('./palmyra-agent.js')).parsePalmyraContext(repository.getConversationPalmyraContext(run.conversationId))
       : undefined;
+    const palmyraContext = isStatusOnlyTurn(run.instructions) ? undefined : storedPalmyraContext;
     // A conversation id alone is not enough: the first turn still needs the
     // complete task prompt. Once Claude has returned a session id, --resume
     // retains its original context. Resumed prompts still receive the newest
     // bounded on-disk short-term memory and any selectively retrieved history.
     const resumesSession = Boolean(resumeSessionId || palmyraContext?.length);
+    if ((storedClaudeSessionId || storedPalmyraContext?.length) && !resumesSession && run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, [{
+      kind: 'decision',
+      detail: 'Supervisor started a fresh provider session for this status-only turn so earlier execution authority cannot be replayed.',
+    }]);
     const shortTermMemory = repository.getSharedContextWithItems(undefined, { workItemId: item.id, conversationId: run.conversationId ?? undefined, query: run.instructions });
     const shortTermContext = shortTermMemory.text;
     const sharedContext = [shortTermContext, externalContext].filter(Boolean).join('\n\n');
@@ -2104,6 +2118,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       shortTermMemoryCount: shortTermMemory.items.length,
       longTermMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryChars: memoryContext.length,
+      providerSessionResetReason: (storedClaudeSessionId || storedPalmyraContext?.length) && !resumesSession ? 'status_only_turn' : null,
     });
     if (run.messageId) repository.updateSharedMessage(run.messageId, { executionProfile: 'routing' });
     const decision: { profile: ExecutionProfile; source: ExecutionProfileSource } = run.executionProfile && run.executionProfile !== 'palmyra-x5' && run.executionProfile !== 'palmyra-x6'
