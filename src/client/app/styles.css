@@ -353,6 +353,7 @@ nav { display: grid; gap: 3px; }
 .stack-view-filter button:last-child { border-right: 0; }
 .stack-view-filter button.active { color: #d9d8d0; background: #252522; }
 .stack-view-filter button span { margin-left: 5px; opacity: .75; }
+.queue-tab-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .detail-links { display: flex; align-items: center; gap: 10px; }
 .mobile-detail-close { display: none; }
 .detail-topline a { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); text-decoration: none; font-size: 10px; }
