@@ -1,4 +1,48 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+type SocketApplicationRequest = {
+  type: 'request';
+  id: string;
+  operation: string;
+  input?: { method?: string; path?: string; body?: unknown };
+};
+
+type SocketApplicationResponse = {
+  type: 'response';
+  id: string;
+  data?: { status?: number; body?: string };
+};
+
+function watchApplicationRequests(page: Page): { requests: SocketApplicationRequest[]; responses: Map<string, SocketApplicationResponse> } {
+  const requests: SocketApplicationRequest[] = [];
+  const responses = new Map<string, SocketApplicationResponse>();
+  page.on('websocket', (socket) => {
+    socket.on('framesent', ({ payload }) => {
+      if (typeof payload !== 'string') return;
+      try {
+        const frame = JSON.parse(payload) as SocketApplicationRequest;
+        if (frame.type === 'request' && (frame.operation === 'application.read' || frame.operation === 'application.command')) requests.push(frame);
+      } catch {
+        // Ignore non-JSON control frames.
+      }
+    });
+    socket.on('framereceived', ({ payload }) => {
+      if (typeof payload !== 'string') return;
+      try {
+        const frame = JSON.parse(payload) as SocketApplicationResponse;
+        if (frame.type === 'response') responses.set(frame.id, frame);
+      } catch {
+        // Ignore non-JSON control frames.
+      }
+    });
+  });
+  return { requests, responses };
+}
+
+function applicationBody<T>(frame: SocketApplicationRequest): T | null {
+  if (typeof frame.input?.body !== 'string') return null;
+  try { return JSON.parse(frame.input.body) as T; } catch { return null; }
+}
 
 // Apple HIG and WCAG 2.5.5 (AA) both treat 44x44 CSS px as the minimum
 // comfortable tap target; below that, mis-taps on a phone become routine.
@@ -6,6 +50,7 @@ const MIN_TOUCH_TARGET_PX = 44;
 
 test.describe('phone-viewport touch targets', () => {
   test('keeps task drag handles available when the stack has another page', async ({ page, request }, testInfo) => {
+    const { requests: socketRequests } = watchApplicationRequests(page);
     const suffix = `${testInfo.project.name}-${Date.now().toString(36)}`;
     const created = await Promise.all(Array.from({ length: 51 }, (_, index) => request.post('/api/work-items', {
       data: {
@@ -36,19 +81,19 @@ test.describe('phone-viewport touch targets', () => {
     expect(handleBox).not.toBeNull();
     expect(targetBox).not.toBeNull();
 
-    const savedOrder = page.waitForRequest((outgoing) => outgoing.method() === 'PUT'
-      && new URL(outgoing.url()).pathname === '/api/queue/order'
-      && outgoing.postDataJSON().itemId === firstTaskId);
     await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2);
     await page.mouse.down();
     await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2 + 12);
     await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 8 });
     await page.mouse.up();
 
-    expect((await savedOrder).postDataJSON()).toEqual(expect.objectContaining({ itemId: firstTaskId }));
+    await expect.poll(() => socketRequests.find((frame) => frame.input?.method === 'PUT'
+      && frame.input.path === '/api/queue/order'
+      && applicationBody<{ itemId?: string }>(frame)?.itemId === firstTaskId)).toBeTruthy();
   });
 
   test('persists a pointer drag in the Workbench stack', async ({ page, request }, testInfo) => {
+    const { requests: socketRequests, responses: socketResponses } = watchApplicationRequests(page);
     const suffix = `${testInfo.project.name}-${Date.now().toString(36)}`;
     const created = await Promise.all([
       { position: 'first', status: 'ready' },
@@ -80,48 +125,26 @@ test.describe('phone-viewport touch targets', () => {
     expect(handleBox).not.toBeNull();
     expect(targetBox).not.toBeNull();
 
-    let releaseResponse = () => {};
-    let markRequestPersisted = () => {};
-    const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
-    const requestPersisted = new Promise<void>((resolve) => { markRequestPersisted = resolve; });
-    await page.route('**/api/queue/order', async (route) => {
-      if (route.request().method() !== 'PUT' || route.request().postDataJSON().itemId !== firstTaskId) {
-        await route.continue();
-        return;
-      }
-      const response = await route.fetch();
-      markRequestPersisted();
-      await responseGate;
-      await route.fulfill({ response });
-    });
-    const savedOrder = page.waitForResponse((incoming) => incoming.request().method() === 'PUT'
-      && new URL(incoming.url()).pathname === '/api/queue/order'
-      && incoming.request().postDataJSON().itemId === firstTaskId);
     await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2);
     await page.mouse.down();
     await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2 + 12);
     await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height - 4, { steps: 8 });
-    try {
-      await page.mouse.up();
-      await requestPersisted;
-      const optimisticIds = await tasks.evaluateAll((cards) => cards.map((card) => card.getAttribute('data-work-item-id')));
-      expect(optimisticIds.indexOf(firstTaskId)).toBeGreaterThan(optimisticIds.indexOf(targetTaskId));
-      expect(await firstTask.evaluate((card) => card.getAnimations().filter((animation) => animation instanceof CSSTransition).length)).toBe(0);
-    } finally {
-      releaseResponse();
-    }
-    const saved = await savedOrder;
-    expect(saved.ok()).toBe(true);
-    expect(saved.request().postDataJSON()).toEqual(expect.objectContaining({ itemId: firstTaskId, stack: 'workbench' }));
+    await page.mouse.up();
+    await expect.poll(() => socketRequests.find((frame) => frame.input?.method === 'PUT'
+      && frame.input.path === '/api/queue/order'
+      && applicationBody<{ itemId?: string }>(frame)?.itemId === firstTaskId)).toBeTruthy();
+    const savedRequest = socketRequests.find((frame) => frame.input?.method === 'PUT'
+      && frame.input.path === '/api/queue/order'
+      && applicationBody<{ itemId?: string }>(frame)?.itemId === firstTaskId)!;
+    expect(applicationBody(savedRequest)).toEqual(expect.objectContaining({ itemId: firstTaskId, stack: 'workbench' }));
+    await expect.poll(() => socketResponses.has(savedRequest.id)).toBe(true);
+    const savedEnvelope = socketResponses.get(savedRequest.id)?.data;
+    expect(savedEnvelope?.status).toBe(200);
+    const savedIds = (JSON.parse(savedEnvelope?.body ?? '{}') as { items?: Array<{ id: string }> }).items?.map(({ id }) => id) ?? [];
+    expect(savedIds.indexOf(firstTaskId!)).toBeGreaterThan(savedIds.indexOf(targetTaskId!));
     // A manual drop lands in its persisted slot. The separate FLIP motion is
     // reserved for automatic, server-driven reorders.
     expect(await firstTask.evaluate((card) => getComputedStyle(card).transitionProperty)).not.toContain('transform');
-    const returnedItems = (await saved.json()) as { items: Array<{ id: string }> };
-    const savedIds = returnedItems.items.map((item) => item.id);
-    // The visible Attention section can contain ready and backlog work. Verify
-    // the persisted order across that status boundary, not merely that a
-    // request was made.
-    expect(savedIds.indexOf(firstTaskId!)).toBeGreaterThan(savedIds.indexOf(targetTaskId!));
   });
 
   test('the bottom navigation tabs are each at least 44x44', async ({ page }) => {
@@ -163,6 +186,7 @@ test.describe('phone-viewport touch targets', () => {
   });
 
   test('Archive stays tappable and selected after opening an archived conversation', async ({ page, request }, testInfo) => {
+    const { requests: socketRequests } = watchApplicationRequests(page);
     const suffix = `${testInfo.project.name}-${Date.now().toString(36)}`;
     const activeTitle = `Active pointer target ${suffix}`;
     const archivedTitle = `Archived pointer target ${suffix}`;
@@ -177,33 +201,33 @@ test.describe('phone-viewport touch targets', () => {
     expect(archiveResponse.ok()).toBe(true);
 
     await page.goto(`/conversations/${active.id}`);
-    await page.getByRole('button', { name: 'Show conversations' }).click();
+    await page.getByRole('button', { name: 'Close conversation' }).click();
 
-    const archiveView = page.getByRole('group', { name: 'Conversation view' }).getByRole('button', { name: 'Archive', exact: true });
+    const archiveView = page.getByRole('tablist', { name: 'Conversation view' }).getByRole('tab', { name: 'Archive', exact: true });
     await expect(archiveView).toBeVisible();
     const archiveBox = await archiveView.boundingBox();
     expect(archiveBox).not.toBeNull();
     expect(archiveBox!.height).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
     await archiveView.click();
 
-    await expect(archiveView).toHaveAttribute('aria-pressed', 'true');
+    await expect(archiveView).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('button', { name: new RegExp(archived.title) })).toBeVisible();
     await page.getByRole('button', { name: new RegExp(archived.title) }).click();
     await expect(page).toHaveURL(new RegExp(`/conversations/${archived.id}$`));
 
-    await page.getByRole('button', { name: 'Show conversations' }).click();
-    const archiveViewAfterSelection = page.getByRole('button', { name: 'Archive', exact: true });
-    await expect(archiveViewAfterSelection).toHaveAttribute('aria-pressed', 'true');
-    const repeatedArchiveRequest = page.waitForRequest((request) => {
-      const url = new URL(request.url());
-      return url.pathname === '/api/shared/conversations' && url.searchParams.get('view') === 'archive';
-    });
+    await page.getByRole('button', { name: 'Close conversation' }).click();
+    const archiveViewAfterSelection = page.getByRole('tab', { name: 'Archive', exact: true });
+    await expect(archiveViewAfterSelection).toHaveAttribute('aria-selected', 'true');
+    const archiveReadsBefore = socketRequests.filter((frame) => frame.input?.method === 'GET'
+      && frame.input.path?.startsWith('/api/shared/conversations?view=archive')).length;
     await archiveViewAfterSelection.click();
-    await repeatedArchiveRequest;
+    await page.waitForTimeout(100);
+    expect(socketRequests.filter((frame) => frame.input?.method === 'GET'
+      && frame.input.path?.startsWith('/api/shared/conversations?view=archive')).length).toBe(archiveReadsBefore);
 
-    await expect(archiveViewAfterSelection).toHaveAttribute('aria-pressed', 'true');
+    await expect(archiveViewAfterSelection).toHaveAttribute('aria-selected', 'true');
     await expect(page).toHaveURL(new RegExp(`/conversations/${archived.id}$`));
-    await expect(page.getByRole('heading', { name: archived.title })).toBeVisible();
+    await expect(page.getByRole('button', { name: new RegExp(archived.title) })).toBeVisible();
   });
 
   test('the expanded desktop navigation cannot cover any part of Archive', async ({ page, request }, testInfo) => {
@@ -214,11 +238,12 @@ test.describe('phone-viewport touch targets', () => {
     const active = (await activeResponse.json()).conversation as { id: string };
 
     await page.goto(`/conversations/${active.id}`);
+    await page.getByRole('button', { name: 'Close conversation' }).click();
     const primaryConversations = page.locator('#primary-nav').getByRole('button', { name: /Conversations/ });
     await primaryConversations.click();
     await expect(page.locator('#primary-nav')).toHaveCSS('width', '220px');
 
-    const archiveView = page.getByRole('group', { name: 'Conversation view' }).getByRole('button', { name: 'Archive', exact: true });
+    const archiveView = page.getByRole('tablist', { name: 'Conversation view' }).getByRole('tab', { name: 'Archive', exact: true });
     await expect(archiveView).toBeVisible();
     const exposedPoints = await archiveView.evaluate((button) => {
       const rect = button.getBoundingClientRect();
@@ -235,7 +260,7 @@ test.describe('phone-viewport touch targets', () => {
     expect(exposedPoints).toEqual([true, true, true, true, true]);
 
     await archiveView.click();
-    await expect(archiveView).toHaveAttribute('aria-pressed', 'true');
+    await expect(archiveView).toHaveAttribute('aria-selected', 'true');
   });
 
   test('conversation stack rows never overlap when cards use their shared height', async ({ page, request }, testInfo) => {

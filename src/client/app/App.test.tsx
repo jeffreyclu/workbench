@@ -8,20 +8,27 @@ import { hideWorkbenchControlBlocks, humanizeRunOutput } from '../lib/run-output
 import { Toaster } from '../components/toast/toast';
 import { getToasts, toast } from '../state/toast-store';
 import { createWorkbenchQueryClient, workbenchQueryDefaults } from './query-client';
+import { resetSocketTransportForTests } from '../data/socket-transport';
+import { REALTIME_PROTOCOL_VERSION } from '../../shared/realtime-protocol';
 
 class TestWebSocket {
   static instances: TestWebSocket[] = [];
   readonly listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
+  readonly sent: string[] = [];
+  readyState: number = WebSocket.CONNECTING;
+  bufferedAmount = 0;
 
   constructor() { TestWebSocket.instances.push(this); }
   addEventListener(type: string, listener: (event: { data?: unknown }) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
-  close() { this.emit('close'); }
+  send(payload: string) { this.sent.push(payload); }
+  close() { this.readyState = WebSocket.CLOSED; this.emit('close'); }
+  open() { this.readyState = WebSocket.OPEN; this.emit('open'); }
   emit(type: string, data?: unknown) { for (const listener of this.listeners.get(type) ?? []) listener({ data }); }
 }
 
 // The URL is real navigation state now, so it has to be reset between tests
 // the same way the store and the DOM are.
-afterEach(() => { cleanup(); toast.clear(); TestWebSocket.instances = []; window.localStorage.clear(); window.history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); resetSocketTransportForTests(); toast.clear(); TestWebSocket.instances = []; window.localStorage.clear(); window.history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
 
 describe('primary navigation', () => {
   it('opens keyboard help from Settings or ? but not while typing', () => {
@@ -207,6 +214,7 @@ describe('primary navigation', () => {
 
   it('opens the Discovery inbox from a socket notification', async () => {
     vi.stubGlobal('WebSocket', TestWebSocket);
+    resetSocketTransportForTests();
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const body = url.startsWith('/api/discovery')
@@ -222,9 +230,13 @@ describe('primary navigation', () => {
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
     const socket = TestWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emit('message', JSON.stringify({ type: 'ready', protocol: REALTIME_PROTOCOL_VERSION, sessionId: 'session', sequence: 0, resumed: true }));
+    });
     act(() => socket.emit('message', JSON.stringify({
-      type: 'notification', tone: 'info', message: '1 new discovery ready to review.',
-      action: { label: 'Review discoveries', route: '/discovery' },
+      type: 'event', protocol: REALTIME_PROTOCOL_VERSION, sequence: 1,
+      event: { kind: 'notification', tone: 'info', message: '1 new discovery ready to review.', action: { label: 'Review discoveries', route: '/discovery' } },
     })));
 
     expect(await screen.findByText('1 new discovery ready to review.')).toBeTruthy();
@@ -1668,7 +1680,7 @@ describe('shared room', () => {
     expect(screen.queryByText('notes.txt')).toBeNull();
   });
 
-  it('does not repeat REST reads when returning to the same idle conversation', async () => {
+  it('does not repeat socket reads when returning to the same idle conversation', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     const firstId = '00000000-0000-4000-8000-000000000081';
     const secondId = '00000000-0000-4000-8000-000000000082';

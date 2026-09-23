@@ -81,6 +81,7 @@ import { pullRequestUrls, pullRequestUrlsInText } from '../github-diff/logic.js'
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { WorkspaceDiffScope } from '../../data/source-client';
 import { conversationCacheSpendWarning } from './cache-spend';
+import { AttachmentLink } from '../../components/attachment-preview';
 
 const CONVERSATION_ROW_GAP = 6;
 // Stack cards and task cards share an 88px minimum height. Keeping the
@@ -489,7 +490,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // A conversation may be promoted while an archive/delete is in flight.
     // Preserve every cached row except the one we just removed; replacing the
     // whole paginated result with an out-of-order response can hide that newly
-    // promoted row until another poll happens.
+    // promoted row until a later server event arrives.
     queryClient.setQueriesData<{ pages: Array<{ conversations: SharedConversation[] }> }>({ queryKey: ['shared-conversations'] }, (current) => current && ({
       ...current,
       pages: current.pages.map((page) => ({ ...page, conversations: page.conversations.filter((conversation) => conversation.id !== removedId) })),
@@ -1295,7 +1296,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     // Only the conversation that has actually produced completed agent work is
     // a useful place to offer approval. A completed promotion consumes every
     // preceding agent turn: the preview-status query can still be carrying its
-    // pre-switch `pending` response for a poll interval, and must not recreate
+    // pre-switch `pending` response until the promotion event, and must not recreate
     // the banner for the release that just completed.
     && latestCompletedAgentIndex > latestPreviewPromotionIndex
     && Boolean(previewStatus.data?.pending) && !promotionInFlight && !agentWorkInFlight;
@@ -1478,9 +1479,9 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                 {message.status === 'canceled' && <p className="muted">Response canceled.</p>}
                 {isProviderMessage(message) && (message.status === 'failed' || message.status === 'canceled') && <div className="message-actions"><button onClick={() => retryReply.mutate(message)} disabled={isRetrying} aria-live="polite">{isRetrying ? <><LoaderCircle className="spin" size={12} /> Retrying…</> : <><RefreshCw size={12} /> Retry / continue</>}</button></div>}
                 {message.attachments.length > 0 && <div className="message-files">{message.attachments.map((file) => (
-                  <a key={file.path} href={`/api/artifacts/raw?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(message.conversationId)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}>
+                  <AttachmentLink key={file.path} url={`/api/artifacts/raw?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(message.conversationId)}`} file={file}>
                     <Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span>
-                  </a>
+                  </AttachmentLink>
                 ))}</div>}
                 {message.error && <p className="error-message">{message.error}</p>}
                 {message.status === 'completed' && message.author !== 'jeffrey' && (message.author !== 'system' || message.body.startsWith('Synthesis:')) && <div className="message-actions"><button onClick={() => createTasks.mutate({ messageId: message.id, conversationId: conversationId! })} disabled={createTasks.isPending && createTasks.variables?.conversationId === conversationId}>{createTasks.isPending && createTasks.variables?.messageId === message.id && createTasks.variables.conversationId === conversationId ? <><LoaderCircle className="spin" size={12} /> Extracting findings…</> : <><Plus size={12} /> Turn findings into tasks</>}</button></div>}

@@ -1,17 +1,24 @@
 ## Workbench product decisions
 
-### REST reads are session-cached and event-invalidated
+### Application data uses WebSockets only
 
-*Decision from Jeffrey, 2026-09-22.* A successful REST query remains cached for the lifetime of the
-browser tab. Route remounts, elapsed time, window focus, and browser reconnect are never refresh
-signals. Successful mutations and server-side background changes invalidate their affected query
-roots over the realtime WebSocket; explicit Refresh and Retry controls may refetch directly.
+*Decision from Jeffrey, 2026-09-22; corrected after the invalidation-only implementation was found.*
+The browser makes no REST requests for Workbench application data. Initial reads, cache misses,
+explicit Refresh and Retry actions, mutations, long-running results, and server-authored updates all
+use the authenticated application WebSocket. HTTP remains only for static assets, the WebSocket
+upgrade, MCP/external protocol callbacks, and operational endpoints used outside the browser app.
 
-Query-specific finite `staleTime`, finite `gcTime`, `refetchOnMount: 'always'`, and
-`refetchOnWindowFocus: 'always'` are forbidden because they recreate navigation-driven REST traffic.
-Marking a conversation read is metadata-only: it may invalidate conversation rails and unread counts,
-but never message bodies, workspace diffs, or task details. Imperative paginated reads use
-`queryClient.fetchQuery` with a complete identity key instead of component state as their only cache.
+Build this in order: first prove the connection/RPC foundation (versioned handshake, correlated
+requests, cancellation, reconnect, replay, duplicate protection, backpressure, authentication, and
+visible failure state); then migrate every browser REST path. Do not remove an HTTP path until its
+WebSocket operation passes the same surface-level behavior. Server updates carry scoped events;
+they may patch records directly or invalidate only the affected cache keys for a WebSocket snapshot.
+They must never cause a REST refetch. Reconnect resumes from the last event sequence and requests
+only a scoped WebSocket snapshot when replay is impossible; it never reloads every feature.
+
+Cached data remains for the browser session. Route remounts, elapsed time, focus, and reconnect are
+not refresh signals. Marking a conversation read updates rail metadata only and never reloads its
+messages, diffs, or task details.
 
 ### Outcome-rating collection is retired
 
@@ -589,23 +596,18 @@ Project color is a visible identity, not a decorative dot. A named project must 
 
 *Jeffrey explicitly chose WebSockets for Workbench realtime updates on 2026-08-23.*
 
-Use the authenticated `/api/realtime` WebSocket for cache invalidations **and
-every server-authored user notification**. Notifications are typed toast frames
-with tone, text, optional duration, and an internal action route; the client
-must render them directly rather than inferring them from polling state. REST
-remains the source of truth: do not put full records or agent text on the
-socket.
+Use the authenticated `/api/realtime` WebSocket for all browser application
+reads, commands, pushed records/deltas, long-running progress, and
+server-authored notifications. Notifications are typed toast frames with tone,
+text, optional duration, and an internal action route; the client renders them
+directly.
 
-*Decision from Jeffrey, 2026-09-21.* Feature queries must not run independent
-polling intervals alongside the socket. Insights, navigation, discovery,
-tasks, conversations, workspace-diff status, artifacts, source authorization,
-runtime state, and review scoring refresh from WebSocket invalidations. After a
-reconnect, one `ready` catch-up invalidation refreshes active queries that may
-have missed an event. There is no timer-based HTTPS polling fallback. If the
-socket disconnects, keep reconnecting with capped exponential backoff and show
-the disconnected state. Initial loads, mutation responses, and the one `ready`
-catch-up may use REST; ongoing refreshes must be triggered only by WebSocket
-events.
+No feature may run REST polling or use REST as initial-load, reconnect,
+cache-miss, mutation, Refresh, Retry, or fallback transport. If the socket
+disconnects, keep reconnecting with capped exponential backoff and show the
+disconnected state. Resume from the last received sequence. When the replay
+window cannot cover the gap, request scoped snapshots over the socket rather
+than invalidating the entire app.
 
 *Decision from Jeffrey, 2026-08-24.* Suppress a toast whose update concerns
 the task or conversation the user is currently viewing. The active surface

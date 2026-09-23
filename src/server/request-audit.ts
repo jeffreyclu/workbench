@@ -1,6 +1,6 @@
 import type { RequestHandler } from 'express';
 import type { WorkItemRepository } from './repository.js';
-import { publishRealtimeEvent, type RealtimeTopic } from './realtime.js';
+import { publishRealtimeEvent, publishRealtimeWorkItemEvent, type RealtimeTopic } from './realtime.js';
 
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -39,7 +39,11 @@ export function createRequestAuditMiddleware(repository: WorkItemRepository): Re
         // SQLite writer briefly holds the lock. The failure remains observable.
         console.error('Could not record API mutation:', error);
       }
-      if (response.statusCode < 400) publishRealtimeEvent(...realtimeTopicsForMutation(request.path));
+      if (response.statusCode < 400) {
+        const topics = realtimeTopicsForMutation(request.path);
+        if (workItemId && topics.includes('work-items')) publishRealtimeWorkItemEvent(workItemId, ...topics.filter((topic) => topic !== 'work-items'));
+        else publishRealtimeEvent(...topics);
+      }
     });
     next();
   };

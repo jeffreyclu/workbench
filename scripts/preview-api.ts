@@ -5,6 +5,7 @@ import { warmFastTaskDraftModel } from '../src/server/fast-task-draft-ai.js';
 import { previewRuntimeCapabilities } from '../src/server/runtime-capabilities.js';
 import { createServer } from 'node:http';
 import { attachRealtimeServer } from '../src/server/realtime.js';
+import { createApplicationSocketHandler } from '../src/server/socket-application.js';
 import { shutdownMemoryIndexMaintenance } from '../src/server/memory-index-maintenance.js';
 import { shutdownMemorySemanticWorker } from '../src/server/memory-semantic-worker.js';
 
@@ -16,7 +17,7 @@ warmFastTaskDraftModel();
 // Preview starts from a fresh production snapshot but deliberately does not start
 // a second scheduler. Agent ownership and durable mutations remain with live.
 const server = createServer(app);
-attachRealtimeServer(server);
+attachRealtimeServer(server, { handleRequest: createApplicationSocketHandler(app) });
 server.listen(port, '127.0.0.1', () => {
   console.log(`Workbench preview API listening on http://127.0.0.1:${port}`);
 });

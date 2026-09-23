@@ -1,7 +1,8 @@
 import { QueryClient, type DefaultOptions } from '@tanstack/react-query';
 
 /**
- * REST is the durable record transport, not a navigation lifecycle hook.
+ * The application WebSocket is the durable record transport, not a navigation
+ * lifecycle hook.
  *
  * A successful read stays valid for this browser session. Server mutations and
  * background work explicitly invalidate affected keys over WebSocket; user

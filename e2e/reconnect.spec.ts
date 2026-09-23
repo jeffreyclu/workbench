@@ -15,10 +15,16 @@ test('warns that cached data is being shown while the realtime connection reconn
   await expect(page.getByText('Reconnecting… showing cached data')).toBeVisible({ timeout: 5_000 });
 });
 
-test('falls back to HTTPS polling when reconnect attempts stay unavailable', async ({ page }) => {
+test('never falls back to HTTPS polling when reconnect attempts stay unavailable', async ({ page }) => {
+  const applicationHttpRequests: string[] = [];
+  page.on('request', (request) => {
+    if (['fetch', 'xhr', 'eventsource'].includes(request.resourceType()) && new URL(request.url()).pathname.startsWith('/api/')) applicationHttpRequests.push(request.url());
+  });
   await page.routeWebSocket('**/api/realtime', (socket) => socket.close());
   await page.goto('/');
-  await expect(page.getByText('Live agent updates are polling over HTTPS')).toBeVisible({ timeout: 12_000 });
+  await expect(page.getByText('Reconnecting… showing cached data')).toBeVisible({ timeout: 12_000 });
+  await page.waitForTimeout(2_000);
+  expect(applicationHttpRequests).toEqual([]);
 });
 
 test('retry now triggers an immediate reconnect attempt instead of waiting on backoff', async ({ page }) => {

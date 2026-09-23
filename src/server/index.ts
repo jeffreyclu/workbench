@@ -10,6 +10,7 @@ import { shutdownReviewAssist, warmReviewAssist } from './review-assist-ai.js';
 import { liveRuntimeCapabilities } from './runtime-capabilities.js';
 import { createServer } from 'node:http';
 import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
+import { createApplicationSocketHandler } from './socket-application.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
 import { shutdownTurnGroundingClassifier, warmTurnGroundingClassifier } from './turn-grounding-ai.js';
 import { configureRuntimeRetirement } from './runtime-retirement.js';
@@ -44,7 +45,7 @@ warmReviewAssist();
 warmTurnGroundingClassifier();
 
 const server = createServer(app);
-attachRealtimeServer(server);
+attachRealtimeServer(server, { handleRequest: createApplicationSocketHandler(app) });
 server.listen(port, () => {
   console.log(`Workbench API listening on http://localhost:${port}`);
   requestMemoryIndexRefresh();

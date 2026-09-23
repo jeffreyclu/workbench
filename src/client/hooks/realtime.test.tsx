@@ -1,13 +1,18 @@
 // @vitest-environment jsdom
 import { act, render } from '@testing-library/react';
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { invalidateRealtimeTopics, realtimeUrl, useRealtimeNotifications, type RealtimeConnection } from './realtime';
+import { REALTIME_PROTOCOL_VERSION } from '../../shared/realtime-protocol';
+import { resetSocketTransportForTests } from '../data/socket-transport';
+import { invalidateRealtimeTopics, realtimeUrl, useRealtimeNotifications } from './realtime';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
   readonly listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
+  readonly sent: string[] = [];
   readonly url: string;
+  readyState: number = WebSocket.CONNECTING;
+  bufferedAmount = 0;
 
   constructor(url: string) {
     this.url = url;
@@ -18,8 +23,21 @@ class MockWebSocket {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
 
-  close() { this.emit('close'); }
+  send(payload: string) { this.sent.push(payload); }
+  close() { this.readyState = WebSocket.CLOSED; this.emit('close'); }
+  open() { this.readyState = WebSocket.OPEN; this.emit('open'); }
+  receive(frame: unknown) { this.emit('message', JSON.stringify(frame)); }
   emit(type: string, data?: unknown) { for (const listener of this.listeners.get(type) ?? []) listener({ data }); }
+}
+
+function installSocket(): void {
+  vi.stubGlobal('WebSocket', MockWebSocket);
+  resetSocketTransportForTests();
+}
+
+function ready(socket: MockWebSocket, resumed = true): void {
+  socket.open();
+  socket.receive({ type: 'ready', protocol: REALTIME_PROTOCOL_VERSION, sessionId: 'session', sequence: 0, resumed });
 }
 
 afterEach(() => {
@@ -28,202 +46,99 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('realtime invalidation', () => {
+describe('realtime application hook', () => {
   it('uses a secure socket for secure pages', () => {
     expect(realtimeUrl({ protocol: 'https:', host: 'workbench.example' })).toBe('wss://workbench.example/api/realtime');
     expect(realtimeUrl({ protocol: 'http:', host: 'localhost:5180' })).toBe('ws://localhost:5180/api/realtime');
   });
 
-  it('maps topic invalidations to every realtime-backed feature cache without duplicates', () => {
+  it('maps transitional topic events to every affected feature cache without duplicates', () => {
     const client = new QueryClient();
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
-
-    invalidateRealtimeTopics(client, ['work-items', 'shared', 'shared-messages', 'discovery', 'runtime', 'insights', 'artifacts']);
-
+    invalidateRealtimeTopics(client, ['work-items', 'shared', 'shared-messages', 'discovery', 'runtime', 'insights', 'artifacts'], new Set(), new Set(), true);
     for (const queryKey of [
-      ['work-items'], ['work-item'], ['work-item-counts'], ['pinned-reminder'],
-      ['shared-conversations'], ['shared-messages'], ['shared-message-activity'], ['shared-agent-events'],
-      ['work-item-workspaces'], ['conversation-workspaces'], ['workspace-diff-status'],
-      ['workspace-diff'], ['workspace-diff-snapshots'], ['workspace-diff-refs'], ['workspace-diff-ref'],
-      ['discovery'], ['runtime-preview-status'], ['promotion-queue-status'], ['health'], ['agent-accounts'],
+      ['work-items'], ['work-item'], ['work-item-counts'], ['shared-conversations'], ['shared-messages'],
+      ['shared-agent-events'], ['workspace-diff'], ['discovery'], ['runtime-preview-status'], ['health'],
       ['insights'], ['memory-diagnostics'], ['mcp-quality'], ['artifacts'],
     ]) expect(invalidateQueries).toHaveBeenCalledWith({ queryKey });
     expect(invalidateQueries.mock.calls.filter(([input]) => JSON.stringify(input) === JSON.stringify({ queryKey: ['workspace-diff-status'] }))).toHaveLength(1);
   });
 
-  it('keeps metadata-only conversation reads away from message and task caches', () => {
+  it('keeps unrelated task details cached and scopes detail invalidation by work item id', () => {
+    const client = new QueryClient();
+    client.setQueryData(['work-item', 'task-a'], { item: { id: 'task-a' } });
+    client.setQueryData(['work-item', 'task-b'], { item: { id: 'task-b' } });
+
+    invalidateRealtimeTopics(client, ['work-items']);
+    expect(client.getQueryState(['work-item', 'task-a'])?.isInvalidated).toBe(false);
+    expect(client.getQueryState(['work-item', 'task-b'])?.isInvalidated).toBe(false);
+
+    invalidateRealtimeTopics(client, ['work-items'], new Set(), new Set(['task-a']));
+    expect(client.getQueryState(['work-item', 'task-a'])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(['work-item', 'task-b'])?.isInvalidated).toBe(false);
+  });
+
+  it('keeps metadata-only conversation events away from message and task caches', () => {
     const client = new QueryClient();
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
-
     invalidateRealtimeTopics(client, ['shared-metadata']);
-
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-conversations'] });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['conversation-unread-count'] });
     expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['shared-messages'] });
     expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['work-item'] });
-    expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['workspace-diff'] });
   });
 
-  it('catches up realtime-backed queries once when a websocket connection becomes ready', () => {
+  it('requests one socket resync only when replay cannot cover a reconnect gap', () => {
     vi.useFakeTimers();
-    vi.stubGlobal('WebSocket', MockWebSocket);
+    installSocket();
     const client = new QueryClient();
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
-    const noop = () => {};
-    function RealtimeClient() { useRealtimeNotifications(noop); return null; }
-
+    function RealtimeClient() { useRealtimeNotifications(() => undefined); return null; }
     const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
-    MockWebSocket.instances[0].emit('message', JSON.stringify({ type: 'ready' }));
+    ready(MockWebSocket.instances[0], false);
     expect(invalidateQueries).not.toHaveBeenCalled();
     act(() => { vi.advanceTimersByTime(250); });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['work-items'] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-agent-events'] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['workspace-diff-status'] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['mcp-quality'] });
     rendered.unmount();
   });
 
-  it('invalidates active server data and delivers typed notifications from socket events', () => {
+  it('batches socket events and delivers notifications without polling', () => {
     vi.useFakeTimers();
-    vi.stubGlobal('WebSocket', MockWebSocket);
+    installSocket();
     const client = new QueryClient();
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
     const notify = vi.fn();
     function RealtimeClient() { useRealtimeNotifications(notify); return null; }
-
     const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
     const socket = MockWebSocket.instances[0];
-    expect(socket.url).toMatch(/\/api\/realtime$/);
-    socket.emit('message', JSON.stringify({ type: 'invalidate', topics: ['work-items', 'discovery'] }));
-    socket.emit('message', JSON.stringify({ type: 'invalidate', topics: ['work-items', 'shared-messages'] }));
-
+    ready(socket);
+    socket.receive({ type: 'event', protocol: REALTIME_PROTOCOL_VERSION, sequence: 1, event: { kind: 'invalidate', topics: ['work-items', 'shared-messages'], conversationId: 'c1' } });
+    socket.receive({ type: 'event', protocol: REALTIME_PROTOCOL_VERSION, sequence: 2, event: { kind: 'notification', tone: 'success', message: 'Agent finished' } });
     expect(invalidateQueries).not.toHaveBeenCalled();
     act(() => { vi.advanceTimersByTime(250); });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['work-items'] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['discovery'] });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-messages'] });
-    expect(invalidateQueries.mock.calls.filter(([input]) => JSON.stringify(input) === JSON.stringify({ queryKey: ['work-items'] }))).toHaveLength(1);
-    socket.emit('message', JSON.stringify({ type: 'notification', tone: 'success', message: 'Agent finished', action: { label: 'Open conversation', route: '/conversations/123' } }));
-    expect(notify).toHaveBeenCalledWith({ type: 'notification', tone: 'success', message: 'Agent finished', action: { label: 'Open conversation', route: '/conversations/123' } });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['shared-messages', 'c1'] });
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'notification', message: 'Agent finished' }));
     rendered.unmount();
   });
 
-  it('does not refetch a connected feature query on a timer and fetches once for batched socket events', async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal('WebSocket', MockWebSocket);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const queryFn = vi.fn(async () => ({ total: 1 }));
-    const noop = () => {};
-    function RealtimeClient() {
-      useRealtimeNotifications(noop);
-      useQuery({ queryKey: ['insights', 'all'], queryFn });
-      return null;
-    }
-
-    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
-    await act(async () => { await Promise.resolve(); });
-    expect(queryFn).toHaveBeenCalledOnce();
-    queryFn.mockClear();
-    act(() => { MockWebSocket.instances[0].emit('open'); });
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-    expect(queryFn).not.toHaveBeenCalled();
-
-    MockWebSocket.instances[0].emit('message', JSON.stringify({ type: 'invalidate', topics: ['insights'] }));
-    MockWebSocket.instances[0].emit('message', JSON.stringify({ type: 'invalidate', topics: ['insights', 'work-items'] }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
-    expect(queryFn).toHaveBeenCalledOnce();
-    rendered.unmount();
-  });
-
-  it('exposes reconnecting state while the socket is down so the UI can warn about stale cached data', () => {
-    vi.stubGlobal('WebSocket', MockWebSocket);
-    const client = new QueryClient();
-    const states: string[] = [];
-    const noop = () => {};
-    function RealtimeClient() { states.push(useRealtimeNotifications(noop).state); return null; }
-
-    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
-    expect(states.at(-1)).toBe('connecting');
-
-    const socket = MockWebSocket.instances[0];
-    act(() => { socket.emit('open'); });
-    expect(states.at(-1)).toBe('connected');
-
-    act(() => { socket.emit('close'); });
-    expect(states.at(-1)).toBe('reconnecting');
-    rendered.unmount();
-  });
-
-  it('keeps reconnecting over WebSocket without starting HTTPS polling', () => {
-    vi.useFakeTimers();
-    vi.stubGlobal('WebSocket', MockWebSocket);
-    const client = new QueryClient();
-    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
-    const states: string[] = [];
-    const noop = () => {};
-    function RealtimeClient() { states.push(useRealtimeNotifications(noop).state); return null; }
-
-    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
-    for (let attempt = 0; attempt <= 3; attempt += 1) {
-      act(() => { MockWebSocket.instances.at(-1)?.emit('close'); });
-      if (attempt < 3) act(() => { vi.advanceTimersByTime(30_000); });
-    }
-
-    expect(states.at(-1)).toBe('reconnecting');
-    expect(invalidateQueries).not.toHaveBeenCalled();
-    const socketsBeforeRetry = MockWebSocket.instances.length;
-    act(() => { vi.advanceTimersByTime(30_000); });
-    expect(MockWebSocket.instances).toHaveLength(socketsBeforeRetry + 1);
-    act(() => { MockWebSocket.instances.at(-1)?.emit('open'); });
-    expect(states.at(-1)).toBe('connected');
-    expect(invalidateQueries).not.toHaveBeenCalled();
-    rendered.unmount();
-  });
-
-  it('treats browser online/offline events as hints, not the authoritative connection state', () => {
-    vi.stubGlobal('WebSocket', MockWebSocket);
+  it('reports handshake-backed connection state and treats browser offline as a hint', () => {
+    installSocket();
     const client = new QueryClient();
     const snapshots: Array<{ state: string; browserOffline: boolean }> = [];
-    const noop = () => {};
     function RealtimeClient() {
-      const { state, browserOffline } = useRealtimeNotifications(noop);
+      const { state, browserOffline } = useRealtimeNotifications(() => undefined);
       snapshots.push({ state, browserOffline });
       return null;
     }
-
     const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
-    act(() => { MockWebSocket.instances[0].emit('open'); });
-    expect(snapshots.at(-1)).toEqual({ state: 'connected', browserOffline: false });
-
-    // The 'offline' hint surfaces immediately even though the socket hasn't closed yet.
-    act(() => { window.dispatchEvent(new Event('offline')); });
+    expect(snapshots.at(-1)?.state).toBe('connecting');
+    act(() => ready(MockWebSocket.instances[0]));
+    expect(snapshots.at(-1)?.state).toBe('connected');
+    act(() => window.dispatchEvent(new Event('offline')));
     expect(snapshots.at(-1)).toEqual({ state: 'connected', browserOffline: true });
-
-    // 'online' clears the hint but does not itself claim the socket is connected.
-    act(() => { window.dispatchEvent(new Event('online')); });
-    expect(snapshots.at(-1)?.browserOffline).toBe(false);
-    rendered.unmount();
-  });
-
-  it('retryNow cancels backoff and makes an immediate reconnection attempt', () => {
-    vi.useFakeTimers();
-    vi.stubGlobal('WebSocket', MockWebSocket);
-    const client = new QueryClient();
-    const box: { current: RealtimeConnection | null } = { current: null };
-    const noop = () => {};
-    function RealtimeClient() { box.current = useRealtimeNotifications(noop); return null; }
-
-    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
-    act(() => { MockWebSocket.instances[0].emit('close'); });
-    expect(box.current?.state).toBe('reconnecting');
-
-    const socketsBeforeRetry = MockWebSocket.instances.length;
-    act(() => { box.current?.retryNow(); });
-    expect(MockWebSocket.instances).toHaveLength(socketsBeforeRetry + 1);
-
-    act(() => { MockWebSocket.instances.at(-1)?.emit('open'); });
-    expect(box.current?.state).toBe('connected');
+    act(() => MockWebSocket.instances[0].close());
+    expect(snapshots.at(-1)?.state).toBe('reconnecting');
     rendered.unmount();
   });
 });

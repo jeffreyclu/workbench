@@ -16,8 +16,8 @@ const SCORE_ATTEMPTS = 3;
 type Block = { key: string; lines: string[] };
 type Assessment = { risk: number | null; reasoning: string };
 
-/** Scores small groups independently. Results arrive over the shared WebSocket
- * as each group completes; HTTPS remains the recovery path when WS is down. */
+/** Scores small groups independently. Requests and incremental results both use
+ * the shared application WebSocket; reconnect/replay is the recovery path. */
 export function useDiffBlockConfidence(blocks: Block[]) {
   // Read from the shared selector rather than a prop: every surface that spends
   // an AI turn reads the same choice, and threading it through the diff tree

@@ -44,7 +44,7 @@ import { isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAGE, SELF_ASSIGNED_OWNER_ME
 import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedConversation, SharedMessage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
 import { api } from '../../data/api';
 import { ArtifactLibraryView } from '../artifacts/view';
-import { AttachmentPreview } from '../../components/attachment-preview';
+import { AttachmentLink, AttachmentPreview } from '../../components/attachment-preview';
 import { ConfirmationDialog } from '../../components/dialogs/confirmation-dialog';
 import { InsightsView } from '../insights/view';
 import { navigate, parseRoute, routePath, useRoute, type StackName } from '../../lib/router';
@@ -520,7 +520,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
           const expanded = expandedAttachments.has(file.path);
           return <span key={file.path}>
             {previewable && <button type="button" className="icon-button" aria-expanded={expanded} aria-label={expanded ? `Hide preview of ${file.name}` : `Preview ${file.name}`} title={expanded ? 'Hide preview' : 'Preview'} onClick={() => toggleAttachmentPreview(file.path)}>{expanded ? <EyeOff size={11} /> : <Eye size={11} />}</button>}
-            <a href={`/api/work-items/${item.id}/attachments/${encodeURIComponent(file.path)}`} target="_blank" rel="noreferrer" title={`${file.mimeType} · ${formatFileSize(file.size)}`}><Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span></a>
+            <AttachmentLink url={`/api/work-items/${item.id}/attachments/${encodeURIComponent(file.path)}`} file={file}><Paperclip size={11} /> {file.name} <span className="message-file-meta">{formatFileSize(file.size)}</span></AttachmentLink>
             {!hasBeenExecuted && <button type="button" className="icon-button" aria-label={`Remove ${file.name}`} onClick={() => removeAttachment.mutate(file.path)} disabled={removeAttachment.isPending}><X size={12} /></button>}
           </span>;
         })}</div>

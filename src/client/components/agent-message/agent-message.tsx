@@ -1,13 +1,48 @@
-import { useEffect, useId, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownCode, MarkdownPre } from '../markdown/markdown-code.js';
 import { hideWorkbenchControlBlocks, humanizeRunOutput, humanizeRunOutputBlocks } from '../../lib/run-output';
 import { splitAgentResponse } from './agent-message-logic';
+import { requestBlob } from '../../data/request';
 
 const LIVE_RUN_OUTPUT_PAGE_SIZE = 5;
 const TYPEWRITER_BASE_CHARS_PER_SEC = 60;
 const TYPEWRITER_BACKLOG_CATCHUP_RATE = 5;
+
+function LocalArtifactLink({ path, conversationId, workItemId, children }: { path: string; conversationId?: string; workItemId?: string; children: ReactNode }) {
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const open = async () => {
+    if (loading) return;
+    const preview = window.open('about:blank', '_blank');
+    if (preview) preview.opener = null;
+    setLoading(true);
+    setFailed(false);
+    try {
+      const query = new URLSearchParams({ path });
+      if (conversationId) query.set('conversationId', conversationId);
+      if (workItemId) query.set('workItemId', workItemId);
+      const blob = await requestBlob(`/api/artifacts/raw?${query}`);
+      const objectUrl = URL.createObjectURL(blob);
+      if (preview) preview.location.href = objectUrl;
+      else {
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.target = '_blank';
+        anchor.rel = 'noreferrer';
+        anchor.click();
+      }
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch {
+      preview?.close();
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return <button type="button" className="agent-artifact-link" onClick={() => void open()} disabled={loading} title={failed ? 'Could not open this file.' : undefined}>{children}{loading ? '…' : ''}</button>;
+}
 
 // The animation may advance its internal character counter through a word, but
 // rendering that partial slice makes prose and Markdown visibly break (for
@@ -95,7 +130,7 @@ export function LiveRunOutput({ output, interjections = [] }: { output: string; 
   // Existing activity should be readable immediately when opening a running
   // conversation. Newly received blocks (or additions to the live block) are
   // the ones that animate, so streaming feels continuous without replaying
-  // the whole backlog after every HTTPS fallback refetch.
+  // the whole backlog after a reconnect snapshot.
   const knownBlocksRef = useRef(new Set<string>());
   const liveStreamInitializedRef = useRef(false);
   const isNewLiveBlock = (block: string) => liveStreamInitializedRef.current && !knownBlocksRef.current.has(block);
@@ -206,8 +241,8 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
     pre: MarkdownPre,
     a: ({ href = '', children, ...props }) => {
       const external = /^(?:(?!file:)[a-z][a-z0-9+.-]*:|#)/i.test(href);
-      const artifactHref = external ? href : `/api/artifacts/open?path=${encodeURIComponent(href)}${conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ''}${workItemId ? `&workItemId=${encodeURIComponent(workItemId)}` : ''}`;
-      return <a {...props} href={artifactHref} target="_blank" rel="noreferrer">{children}</a>;
+      if (!external) return <LocalArtifactLink path={href} conversationId={conversationId} workItemId={workItemId}>{children}</LocalArtifactLink>;
+      return <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>;
     },
   }}>{content}</ReactMarkdown>;
 

@@ -3,7 +3,7 @@ import type { StaleReferenceReport } from '../../shared/stale-reference-contract
 import type { BrokerConnection, BrokerSearchResponse, BrokerSourceId, ResolvedSourceDraft } from '../../shared/contracts';
 import type { ReviewAssistTier } from '../../shared/contracts';
 import type { CreateStandaloneReviewInput, DiffBlockReview, DiffHunkReview, DiffHunkReviewState, GitHubPullRequestDiff, GitHubPullRequestFile, ReviewCommit, StandaloneReview, UpsertDiffBlockReviewInput, UpsertDiffHunkReviewsInput, WorkspaceDiff, WorkspaceDiffSnapshot, WorkspaceFileSource, WorkspaceRefs } from '../../shared/contracts';
-import { request } from './request';
+import { request, requestStream } from './request';
 
 // A conversation with no linked task still has a real workspace (see
 // resolveSharedReplyWorkingDirectory server-side), so the diff surface is
@@ -90,12 +90,6 @@ export const sourceClient = {
     tier?: ReviewAssistTier | null;
     provider?: AiProviderChoice;
   }, onDelta: (text: string) => void): Promise<string> => {
-    const response = await fetch('/api/review-assist/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    if (!response.ok) throw new Error(`AI assist request failed (${response.status}).`);
     let answer: string | null = null;
     let failure: string | null = null;
     let buffer = '';
@@ -115,17 +109,10 @@ export const sourceClient = {
         else if (event.type === 'error') failure = event.message ?? 'AI assist failed.';
       }
     };
-    if (response.body) {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        consume(decoder.decode(value, { stream: true }));
-      }
-    } else {
-      consume(await response.text());
-    }
+    await requestStream('/api/review-assist/stream', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }, consume);
     if (failure) throw new Error(failure);
     if (answer === null) throw new Error('AI assist ended without an answer.');
     return answer;

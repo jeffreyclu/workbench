@@ -1566,7 +1566,7 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .agent-markdown pre code { padding: 0; color: #c8c7bf; background: transparent; }
 .markdown-contenteditable pre { position: relative; padding: 10px; overflow-x: auto; color: #c8c7bf; background: #0b0b0a; border: 1px solid #292925; border-radius: 7px; font: 11px/1.55 'DM Mono'; }.copy-code-button { position: absolute; top: 6px; right: 6px; display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; color: #d4d3cc; background: #22221f; border: 1px solid #41413a; border-radius: 4px; font: 10px/1 'Manrope'; opacity: .78; }.copy-code-button:hover { color: #f0efe8; background: #30302b; opacity: 1; }.copy-code-button:focus-visible { opacity: 1; }.markdown-contenteditable pre .copy-code-button { top: 5px; right: 5px; }.markdown-code-block { display: block; }
 .agent-markdown blockquote { margin: 10px 0; padding-left: 12px; color: #aaa99f; border-left: 2px solid #596234; }
-.agent-markdown strong { color: #e5e4dd; }.agent-markdown a { color: #bfe153; text-decoration: underline; }
+.agent-markdown strong { color: #e5e4dd; }.agent-markdown a, .agent-markdown .agent-artifact-link { padding: 0; color: #bfe153; background: none; border: 0; font: inherit; text-decoration: underline; cursor: pointer; }
 .markdown-contenteditable a { color: #bfe153; text-decoration: underline; text-decoration-color: #7c963a; text-underline-offset: 2px; }
 .markdown-contenteditable a:hover, .markdown-contenteditable a:focus-visible { color: var(--acid); text-decoration-color: currentColor; outline: none; }
 .model-badge { display: inline-flex; align-items: center; min-width: 0; padding: 2px 6px; color: #a9b9e9; background: #171d2d; border: 1px solid #303b5c; border-radius: 999px; font: 9px/1.2 'DM Mono'; letter-spacing: .04em; text-transform: lowercase; }.model-badge-compact { display: none; }
@@ -1604,8 +1604,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .finding-progress { display: flex; align-items: center; gap: 9px; width: min(88%, 680px); padding: 12px 14px; color: #9ea675; background: #171911; border: 1px solid #383e25; border-radius: 8px; }.finding-progress span { display: grid; gap: 3px; }.finding-progress strong { font-size: 10px; }.finding-progress small { color: #6f735d; font-size: 9px; }
 .pending-files, .message-files { display: flex; flex-wrap: wrap; gap: 5px; }
 .pending-files { margin: 11px 12px 0; }.message-files { margin-top: 8px; }
-.pending-files button, .message-files a { display: flex; align-items: center; gap: 5px; padding: 5px 7px; color: #b4b3ab; background: #242421; border: 1px solid #3a3a34; border-radius: 6px; font-size: 9px; text-decoration: none; }
-.pending-files button:hover, .message-files a:hover { color: #fff; border-color: #55554c; }
+.pending-files button, .message-files a, .message-files .attachment-download-link { display: flex; align-items: center; gap: 5px; padding: 5px 7px; color: #b4b3ab; background: #242421; border: 1px solid #3a3a34; border-radius: 6px; font-size: 9px; text-decoration: none; }
+.pending-files button:hover, .message-files a:hover, .message-files .attachment-download-link:hover { color: #fff; border-color: #55554c; }
 .task-attachment-picker { display: grid; gap: 7px; margin-block: 13px; }.task-attachment-picker .muted { margin: -3px 0 0; font-size: 12px; }.task-attachment-picker .pending-files { margin: 0; }.task-attachments .message-files > span { display: inline-flex; align-items: center; gap: 4px; }.task-attachments .message-files { align-items: center; }
 .message-file-meta { color: #75746d; }
 .attachment-preview-pane { margin-top: 8px; border: 1px solid #3a3a34; border-radius: 8px; overflow: hidden; }

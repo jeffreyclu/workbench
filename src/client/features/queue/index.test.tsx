@@ -149,12 +149,14 @@ describe('next-action summary on Awaiting cards', () => {
     </QueryClientProvider>,
   );
 
-  it.each([
-    [{ agentOutcome: 'finished' } as const, 'Review reply'],
-    [{ agentOutcome: 'finished', classificationKind: 'strategy' } as const, 'Approve plan'],
-    [{ agentOutcome: 'finished', blockedBy: [{ id: 'dependency-id', title: 'A prerequisite', status: 'blocked', archivedAt: null, completedAt: null, isOpen: true }] } as const, 'Resolve blocker'],
-    [{ agentOutcome: 'finished', status: 'blocked' } as const, 'Resolve blocker'],
-  ])('shows a compact one-line summary for %o', (overrides, expectedText) => {
+  const nextActionCases: Array<[Partial<WorkItem>, string]> = [
+    [{ agentOutcome: 'finished' }, 'Review reply'],
+    [{ agentOutcome: 'finished', classificationKind: 'strategy' }, 'Approve plan'],
+    [{ agentOutcome: 'finished', blockedBy: [{ id: 'dependency-id', title: 'A prerequisite', status: 'blocked', archivedAt: null, completedAt: null, isOpen: true }] }, 'Resolve blocker'],
+    [{ agentOutcome: 'finished', status: 'blocked' }, 'Resolve blocker'],
+  ];
+
+  it.each(nextActionCases)('shows a compact one-line summary for %o', (overrides, expectedText) => {
     const { container } = renderCard(overrides);
 
     const summary = container.querySelector('.next-action-summary');

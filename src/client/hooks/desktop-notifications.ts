@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { readDesktopNotificationsEnabled, writeDesktopNotificationsEnabled } from '../lib/preferences';
+import { request } from '../data/request';
 
 export type DesktopNotificationPermission = 'default' | 'granted' | 'denied' | 'unsupported';
 
@@ -39,11 +40,10 @@ export function sendDesktopNotification({ title, body, onClick }: DesktopNotific
   if (Notification.permission !== 'granted') return;
   const fallback = () => showBrowserNotification({ title, body, onClick });
   try {
-    void fetch('/api/desktop-notifications', {
+    void request('/api/desktop-notifications', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title, body: body ?? '' }),
-    }).then((response) => { if (!response.ok) fallback(); }, fallback);
+    }).catch(fallback);
   } catch {
     fallback();
   }
