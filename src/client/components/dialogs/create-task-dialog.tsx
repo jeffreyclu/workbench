@@ -55,6 +55,7 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
     mutationFn: ({ request }: { request: Parameters<typeof api.createWorkItem>[0]; submittedDraft: NewTaskDraft }) => api.createWorkItem(request),
     onSuccess: async ({ item }, { submittedDraft }) => {
       clearSubmittedDraft(submittedDraft);
+      toast.success('Task added to queue.', { description: item.title });
       await closeBeforeShowingCreatedTask();
       await queryClient.invalidateQueries({ queryKey: ['work-items'] });
       onCreated(item);

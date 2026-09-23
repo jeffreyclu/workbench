@@ -74,6 +74,7 @@ import { useRealtimeNotifications, type RealtimeNotification } from '../../hooks
 import { useTaskDetail } from './hooks';
 import { useTaskAccountProfile, useTaskExecutionProfile } from './state';
 import { celebrate } from '../../components/celebrate';
+import { focusElement } from '../../lib/focus';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
@@ -124,6 +125,11 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const RUNS_PAGE_SIZE = 5;
   const [runsVisibleCount, setRunsVisibleCount] = useState(RUNS_PAGE_SIZE);
   const initializedExecutionPlanSelectionId = useRef<string | null>(null);
+  const titleHeadingRef = useRef<HTMLHeadingElement>(null);
+  // Opening a task (including one just created or reached via a follow-up/plan
+  // link) moves keyboard focus to its heading so screen reader users land on the
+  // result instead of the panel opening under a stale focus position.
+  useEffect(() => { if (detail.isSuccess) focusElement(titleHeadingRef.current); }, [id, detail.isSuccess]);
   const update = useMutation({
     mutationFn: (input: UpdateWorkItemInput) => api.updateWorkItem(id, input),
     onSuccess: async (_data, input) => {
@@ -150,7 +156,11 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   });
   const resolveProviderConflict = useMutation({
     mutationFn: ({ field, resolution }: { field: ProviderSyncConflict['field']; resolution: 'keep_local' | 'use_provider' }) => api.resolveProviderConflict(id, field, resolution),
-    onSuccess: async () => {
+    onSuccess: async (_data, input) => {
+      toast.success(`${providerConflictFieldLabel(input.field)} conflict resolved.`);
+      // The resolved row (and its focused button) unmounts once the conflict list
+      // refreshes, so hand focus back to a heading that survives the update.
+      focusElement(titleHeadingRef.current);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
         queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
@@ -254,6 +264,8 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         conversations: current.conversations.some((entry) => entry.id === conversation.id) ? current.conversations : [conversation, ...current.conversations],
         activity: [activity, ...current.activity],
       }));
+      toast.success('Run retry started.');
+      focusElement(titleHeadingRef.current);
       await Promise.all([queryClient.invalidateQueries({ queryKey: ['work-items'] }), queryClient.invalidateQueries({ queryKey: ['shared-conversations'] })]);
     },
     onError: (error) => toastError('Could not retry the run.', error),
@@ -261,8 +273,12 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const resolveExecutionPlan = useMutation({
     mutationFn: ({ resolution, archiveParent = false }: { resolution: 'accepted' | 'rejected'; archiveParent?: boolean }) =>
       api.resolveExecutionPlan(detail.data!.executionPlan!.id, resolution, resolution === 'accepted' ? [...selectedExecutionTaskIndexes] : undefined, archiveParent),
-    onSuccess: async () => {
+    onSuccess: async (_data, { resolution }) => {
       setExecutionPlanArchivePromptOpen(false);
+      toast.success(resolution === 'accepted' ? `Plan accepted. ${selectedExecutionTaskIndexes.size} task${selectedExecutionTaskIndexes.size === 1 ? '' : 's'} created.` : 'Plan rejected.');
+      // The plan panel unmounts once resolved, so return focus to the task
+      // heading rather than leaving it on a control that no longer exists.
+      focusElement(titleHeadingRef.current);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
         queryClient.invalidateQueries({ queryKey: ['work-item', id] }),
@@ -504,7 +520,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       {editingField === 'title' ? <input className="inline-title-editor" autoFocus value={editTitle} onChange={(event) => setEditTitle(event.target.value)} maxLength={300}
         onBlur={() => { const title = editTitle.trim(); if (title && title !== item.title) update.mutate({ title }); else setEditTitle(item.title); setEditingField(null); }}
         onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { event.currentTarget.value = item.title; setEditTitle(item.title); event.currentTarget.blur(); } }} />
-        : <h1 className="inline-editable" onClick={() => setEditingField('title')} title="Click to edit title">{item.title}</h1>}
+        : <h1 ref={titleHeadingRef} tabIndex={-1} className="inline-editable" onClick={() => setEditingField('title')} title="Click to edit title">{item.title}</h1>}
       {detail.data.parentItem && <button className="parent-task-link" onClick={() => onOpenTask(detail.data!.parentItem!.id)}><span>Follow-up to</span><strong>{detail.data.parentItem.title}</strong></button>}
       <div className="detail-controls">{editingField === 'project' ? <InlineProjectEditor initialValue={item.projectName ?? ''}
         onCommit={(projectName) => { if (projectName !== item.projectName) update.mutate({ projectName }); setEditingField(null); }}
