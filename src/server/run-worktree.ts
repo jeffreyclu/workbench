@@ -20,6 +20,27 @@ export interface RunWorkspaceBinding {
   worktree: string;
 }
 
+type ListedWorktree = { path: string; branch: string | null };
+
+function listedWorktrees(listing: string): ListedWorktree[] {
+  return listing.split(/\n\n+/).flatMap((block) => {
+    const lines = block.split('\n');
+    const path = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length).trim();
+    if (!path) return [];
+    const branch = lines.find((line) => line.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length).trim() ?? null;
+    return [{ path: resolve(path), branch }];
+  });
+}
+
+function normalizedGitName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function branchMatchesTask(branch: string | null, safeTaskKey: string): boolean {
+  if (!branch) return false;
+  return `-${normalizedGitName(branch)}-`.includes(`-${safeTaskKey}-`);
+}
+
 async function repositoryDefaultRef(repository: string): Promise<string> {
   try {
     const { stdout } = await execFile('git', ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], { cwd: repository, timeout: 5_000, maxBuffer: 32_768 });
@@ -46,7 +67,23 @@ export async function authoritativeTaskWorkspace(sourceWorkspace: string, taskKe
   const { stdout } = await execFile('git', ['rev-parse', '--show-toplevel'], { cwd: source, timeout: 5_000, maxBuffer: 32_768 });
   const repository = resolve(stdout.trim());
   const safeTaskKey = taskKey.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'task';
-  const repositoryKey = createHash('sha256').update(repository).digest('hex').slice(0, 12);
+  const { stdout: listing } = await execFile('git', ['worktree', 'list', '--porcelain'], { cwd: repository, timeout: 5_000, maxBuffer: 131_072 });
+  const worktrees = listedWorktrees(listing);
+  const primary = worktrees[0]?.path ?? repository;
+  const matchingExistingWorktree = worktrees
+    .slice(1)
+    .filter((entry) => existsSync(entry.path) && branchMatchesTask(entry.branch, safeTaskKey))
+    .sort((left, right) => {
+      const leftVisible = dirname(left.path) === DEVELOPMENT_ROOT && !isManagedRunWorktree(left.path) ? 0 : 1;
+      const rightVisible = dirname(right.path) === DEVELOPMENT_ROOT && !isManagedRunWorktree(right.path) ? 0 : 1;
+      return leftVisible - rightVisible || left.path.localeCompare(right.path);
+    })[0];
+  if (matchingExistingWorktree) {
+    provisionRunWorktreeDependencies(primary, matchingExistingWorktree.path);
+    return matchingExistingWorktree.path;
+  }
+
+  const repositoryKey = createHash('sha256').update(primary).digest('hex').slice(0, 12);
   const destination = join(WORKBENCH_RUN_WORKTREE_ROOT, `${basename(repository)}-${repositoryKey}`, 'tasks', safeTaskKey);
   const branch = `workbench/${safeTaskKey}`;
   const pending = taskWorkspaceInFlight.get(destination);
@@ -57,10 +94,11 @@ export async function authoritativeTaskWorkspace(sourceWorkspace: string, taskKe
       return destination;
     }
     mkdirSync(dirname(destination), { recursive: true });
-    const { stdout: listing } = await execFile('git', ['worktree', 'list', '--porcelain'], { cwd: repository, timeout: 5_000, maxBuffer: 131_072 });
-    const existing = listing.split(/\n\n+/).find((block) => block.split('\n').includes(`branch refs/heads/${branch}`));
-    const existingPath = existing?.split('\n').find((line) => line.startsWith('worktree '))?.slice(9);
-    if (existingPath && existsSync(existingPath)) return resolve(existingPath);
+    const existingPath = worktrees.find((entry) => entry.branch === branch)?.path;
+    if (existingPath && existsSync(existingPath)) {
+      provisionRunWorktreeDependencies(primary, existingPath);
+      return existingPath;
+    }
     const branchExists = await execFile('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: repository, timeout: 5_000, maxBuffer: 32_768 })
       .then(() => true, () => false);
     if (branchExists) await execFile('git', ['worktree', 'add', destination, branch], { cwd: repository, timeout: 60_000, maxBuffer: 131_072 });
@@ -160,8 +198,14 @@ async function untrackedPaths(cwd: string): Promise<string[]> {
  * is a source/base, never a place for an agent to write code directly. */
 export function shouldIsolateRunWorkspace(sourceWorkspace: string): boolean {
   try {
-    execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: resolve(sourceWorkspace), encoding: 'utf8', timeout: 5_000 });
-    return true;
+    const source = resolve(sourceWorkspace);
+    const repository = resolve(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: source, encoding: 'utf8', timeout: 5_000 }).trim());
+    const listing = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repository, encoding: 'utf8', timeout: 5_000, maxBuffer: 131_072 });
+    const primary = listedWorktrees(listing)[0]?.path;
+    // A task-specific worktree is already the isolation boundary. Creating a
+    // detached child for every follow-up loses the branch and hides files from
+    // Jeffrey. Workspace leases serialize writes to this existing checkout.
+    return !primary || resolve(primary) === repository;
   } catch {
     return false;
   }
@@ -214,9 +258,10 @@ export function provisionRunWorktreeDependencies(repository: string, worktree: s
  * Worktrees are retained after a run so Changes can inspect the exact files it
  * produced. The garbage collector owns eventual removal of terminal run trees.
  */
-export async function isolatedRunWorkspace(sourceWorkspace: string, runId: string, mutates: boolean, isolate = true): Promise<string> {
+export async function isolatedRunWorkspace(sourceWorkspace: string, runId: string, mutates: boolean, isolate?: boolean): Promise<string> {
   const source = resolve(sourceWorkspace);
-  if (!mutates || !isolate || process.env.VITEST) return source;
+  const needsIsolation = isolate ?? shouldIsolateRunWorkspace(source);
+  if (!mutates || !needsIsolation || process.env.VITEST) return source;
   try {
     const { stdout } = await execFile('git', ['rev-parse', '--show-toplevel'], { cwd: source, timeout: 5_000, maxBuffer: 32_768 });
     const repository = resolve(stdout.trim());

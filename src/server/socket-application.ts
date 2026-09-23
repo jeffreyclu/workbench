@@ -2,6 +2,7 @@ import { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
 import type { Express, Request, Response } from 'express';
 import type { RealtimeRequestHandler } from './realtime.js';
+import { attachApplicationRequestSignal } from './request-abort.js';
 
 type ApplicationRequestInput = {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -41,13 +42,14 @@ function parseInput(operation: string, value: unknown): ApplicationRequestInput 
  * move from HTTP route wrappers to named application operations: browser data
  * still travels exclusively over the authenticated WebSocket.
  */
-async function dispatchApplicationRequest(app: Express, input: ApplicationRequestInput, onProgress: (data: unknown) => void): Promise<ApplicationResponse> {
+async function dispatchApplicationRequest(app: Express, input: ApplicationRequestInput, onProgress: (data: unknown) => void, signal: AbortSignal): Promise<ApplicationResponse> {
   const socket = new Socket();
   // The outer WebSocket upgrade already performed authentication. Mark this
   // synthetic, in-process request as loopback so auth middleware cannot reject
   // it for lacking a browser cookie copied into application payload data.
   Object.defineProperty(socket, 'remoteAddress', { configurable: true, value: '127.0.0.1' });
   const request = new IncomingMessage(socket);
+  attachApplicationRequestSignal(request as unknown as Request, signal);
   request.method = input.method;
   request.url = input.path;
   request.headers = {
@@ -108,7 +110,7 @@ export function createApplicationSocketHandler(app: Express): RealtimeRequestHan
   return async (operation, rawInput, context) => {
     if (context.signal.aborted) throw new Error('The application request was cancelled.');
     const input = parseInput(operation, rawInput);
-    const response = await dispatchApplicationRequest(app, input, context.emit);
+    const response = await dispatchApplicationRequest(app, input, context.emit, context.signal);
     if (context.signal.aborted) throw new Error('The application request was cancelled.');
     return response;
   };

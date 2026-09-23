@@ -41,6 +41,7 @@ import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history
 import { WorkItemDependencyError, WorkItemVersionConflictError } from '../repository.js';
 import type { RouteContext } from '../route-context.js';
 import { isManagedRunWorktree } from '../run-worktree.js';
+import { abortSignalForRequest } from '../request-abort.js';
 import { listCandidateWorkspaces } from '../workspace-candidates.js';
 import { routedWorkspacePaths } from '../workspace-routing.js';
 
@@ -548,13 +549,11 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
   });
 
   router.post('/api/sources/search', async (request, response, next) => {
-    const controller = new AbortController();
-    request.once('aborted', () => controller.abort());
-    response.once('close', () => { if (!response.writableEnded) controller.abort(); });
+    const signal = abortSignalForRequest(request, response);
     try {
       const input = searchSourcesSchema.parse(request.body);
-      response.json(await searchBrokerSources(repository, input.query, input.sources, controller.signal));
-    } catch (error) { if (!controller.signal.aborted) next(error); }
+      response.json(await searchBrokerSources(repository, input.query, input.sources, signal));
+    } catch (error) { if (!signal.aborted) next(error); }
   });
 
   router.patch('/api/work-items/:id', (request, response) => {

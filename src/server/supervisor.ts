@@ -50,7 +50,7 @@ export const LOCAL_DOCUMENT_CONTRACT = `Local document policy:
 
 export const LOCAL_CODE_WORKTREE_CONTRACT = `Local code policy:
 - Every code edit must be made in a dedicated Git worktree under ~/dev. Never write code in a repository's primary checkout.
-- The selected repository is the source and routing anchor. For a mutating run, create or use its isolated ~/dev worktree before the first file edit.
+- The selected repository is the source and routing anchor. For a mutating run, reuse an existing ~/dev worktree whose branch matches the task or ticket before creating one. Never create a duplicate detached worktree for a branch that already has a live worktree.
 - Multi-repository work gets one ~/dev worktree per repository. Do not use the worktree rule as a reason to collapse a full-stack task to one repository.
 - Read-only analysis and review may inspect primary checkouts because they do not write code.`;
 
@@ -155,6 +155,15 @@ export type SupervisorDraftDecision = { accepted: true } | {
   recoveryRequirement: string;
 };
 
+export function supervisedRetryPrompt(originalPrompt: string, decision: Exclude<SupervisorDraftDecision, { accepted: true }>): string {
+  // Presentation repair must never replay a task that already used tools or
+  // mutated state. The rejected draft is embedded in the recovery requirement,
+  // so a fresh provider can rewrite it without receiving the executable task.
+  return decision.code === 'response_style'
+    ? decision.recoveryRequirement
+    : `${originalPrompt}\n\n${decision.recoveryRequirement}`;
+}
+
 export function superviseDraft(kind: AgentRun['kind'], output: string, evidence: { investigated: boolean; executed: boolean }, options: { verbose?: boolean } = {}): SupervisorDraftDecision {
   if (kind === 'review') {
     const missing = missingReviewPasses(output);
@@ -165,13 +174,10 @@ export function superviseDraft(kind: AgentRun['kind'], output: string, evidence:
     };
   }
   const styleProblem = responseStyleViolation(output, { verbose: options.verbose, review: kind === 'review' });
-  // Formatting is presentation, not execution. Replaying a task after tools or
-  // file writes have already run can duplicate external mutations and strand
-  // correct code merely because the report exceeded a word limit.
-  if (styleProblem && !(kind === 'execute' && evidence.executed)) return {
+  if (styleProblem) return {
     accepted: false, code: 'response_style',
     reason: `Response broke the global brevity rule. ${styleProblem}`,
-    recoveryRequirement: `Response style retry: return one complete replacement answer. ${styleProblem} Apply the global brevity rule: lead with the result, use plain English and short sentences, remove investigation narration and unexplained engineering shorthand, and use compact bullets for multiple findings. Preserve material findings and exact evidence by shortening each item, not by dropping it. ${kind === 'review' ? 'Keep all five named pass sections. Use one compact bullet per actual finding with the impact, fix, and file/line in parentheses; never exceed 350 words.' : 'Target 120 words and never exceed 180 words.'} This is not a verbose turn.`,
+    recoveryRequirement: `Formatting-only retry: rewrite the rejected draft below and return one complete replacement answer. Do not call tools, repeat file edits, rerun commands, or repeat external actions. ${styleProblem} Apply the global brevity rule: lead with the result, use plain English and short sentences, remove investigation narration and unexplained engineering shorthand, and use compact bullets for multiple findings. Preserve material findings and exact evidence by shortening each item, not by dropping it. ${kind === 'review' ? 'Keep all five named pass sections. Use one compact bullet per actual finding with the impact, fix, and file/line in parentheses; never exceed 350 words.' : 'Never exceed 120 words.'} This is not a verbose turn.\n\nRejected draft:\n${output}`,
   };
   if (!evidence.investigated && hasPrematureEvidenceRequest(output)) return {
     accepted: false, code: 'premature_evidence_request',

@@ -4,6 +4,7 @@ import express from 'express';
 import { createApp } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { createApplicationSocketHandler } from './socket-application.js';
+import { abortSignalForRequest } from './request-abort.js';
 
 describe('application WebSocket dispatcher', () => {
   let database: WorkbenchDatabase;
@@ -68,5 +69,20 @@ describe('application WebSocket dispatcher', () => {
     const handle = createApplicationSocketHandler(binaryApp);
     const result = await handle('application.read', { method: 'GET', path: '/api/file' }, context()) as { status: number; encoding: string; body: string };
     expect(result).toEqual(expect.objectContaining({ status: 200, encoding: 'base64', body: Buffer.from([0, 255, 12, 10]).toString('base64') }));
+  });
+
+  it('does not self-abort a slow WebSocket application request when its synthetic body ends', async () => {
+    const slowApp = express();
+    slowApp.use(express.json());
+    slowApp.post('/api/search', async (request, response) => {
+      const signal = abortSignalForRequest(request, response);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      response.json({ aborted: signal.aborted });
+    });
+    const handle = createApplicationSocketHandler(slowApp);
+
+    const result = await handle('application.command', { method: 'POST', path: '/api/search', body: '{}' }, context()) as { body: string };
+
+    expect(JSON.parse(result.body)).toEqual({ aborted: false });
   });
 });

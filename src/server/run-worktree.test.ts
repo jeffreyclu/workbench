@@ -22,7 +22,7 @@ afterEach(() => {
         // isolatedRunWorkspace groups runs under a repository-key directory.
         // Temporary repositories get a unique group, so remove that empty test
         // container too instead of leaking one managed directory per test.
-        rmSync(dirname(worktree), { recursive: true, force: true });
+        if (resolve(worktree).startsWith(`${WORKBENCH_RUN_WORKTREE_ROOT}/`)) rmSync(dirname(worktree), { recursive: true, force: true });
       }
     } catch { /* The assertion may have failed before Git/worktree setup. */ }
     try {
@@ -37,7 +37,10 @@ afterEach(() => {
 describe('isolatedRunWorkspace', () => {
   it('isolates every Git project and leaves non-Git directories alone', () => {
     expect(shouldIsolateRunWorkspace('/Users/jeffrey.lu/dev/writer-monorepo')).toBe(true);
-    expect(shouldIsolateRunWorkspace(process.cwd())).toBe(true);
+    const currentRoot = realpathSync(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: process.cwd(), encoding: 'utf8' }).trim());
+    const primaryRoot = realpathSync(execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: process.cwd(), encoding: 'utf8' })
+      .split('\n').find((line) => line.startsWith('worktree '))!.slice('worktree '.length));
+    expect(shouldIsolateRunWorkspace(process.cwd())).toBe(currentRoot === primaryRoot);
     expect(shouldIsolateRunWorkspace(tmpdir())).toBe(false);
   });
 
@@ -91,8 +94,39 @@ describe('isolatedRunWorkspace', () => {
       ]);
       expect(concurrentWorkspace).toBe(workspace);
       expect(execFileSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8' }).trim()).toBe('workbench/con-214');
+      expect(shouldIsolateRunWorkspace(workspace)).toBe(false);
       expect(execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: workspace, encoding: 'utf8' })).not.toContain('unrelated.txt');
       expect(await authoritativeTaskWorkspace(directory, 'CON-214')).toBe(workspace);
+    } finally {
+      if (previous === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previous;
+    }
+  });
+
+  it('reuses an existing visible ticket worktree instead of creating another checkout', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-existing-ticket-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', 'seed.txt'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'develop'], { cwd: directory });
+    const existing = `${directory}-CON-404-rest-dcr-auth-payload`;
+    execFileSync('git', ['worktree', 'add', '-b', 'jeffrey/CON-404/rest-dcr-auth-payload', existing, 'develop'], { cwd: directory });
+    const before = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: directory, encoding: 'utf8' });
+
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const workspace = await authoritativeTaskWorkspace(directory, 'CON-404');
+      const after = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: directory, encoding: 'utf8' });
+
+      expect(realpathSync(workspace)).toBe(realpathSync(existing));
+      expect(after).toBe(before);
+      expect(shouldIsolateRunWorkspace(workspace)).toBe(false);
+      expect(realpathSync(await isolatedRunWorkspace(workspace, 'follow-up-run', true))).toBe(realpathSync(existing));
     } finally {
       if (previous === undefined) delete process.env.VITEST;
       else process.env.VITEST = previous;

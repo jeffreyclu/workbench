@@ -7,6 +7,7 @@ import {
   missingReviewPasses,
   superviseDraft,
   superviseExternalAction,
+  supervisedRetryPrompt,
   supervisorPromptContract,
   supervisorSynthesisContract,
 } from './supervisor.js';
@@ -35,6 +36,8 @@ describe('Workbench supervisor', () => {
     const prompt = supervisorPromptContract(kind, 'Handle the request.');
     expect(prompt).toContain('Every code edit must be made in a dedicated Git worktree under ~/dev');
     expect(prompt).toContain("Never write code in a repository's primary checkout");
+    expect(prompt).toContain('reuse an existing ~/dev worktree whose branch matches the task or ticket');
+    expect(prompt).toContain('Never create a duplicate detached worktree');
     expect(prompt).toContain('one ~/dev worktree per repository');
   });
 
@@ -81,19 +84,24 @@ describe('Workbench supervisor', () => {
       .toEqual({ accepted: true });
   });
 
-  it('enforces global brevity without replaying an execute turn that already mutated state', () => {
-    const longDraft = Array.from({ length: 190 }, (_, index) => `word${index}`).join(' ');
+  it('enforces the same 120-word limit without replaying an execute turn that already mutated state', () => {
+    const longDraft = Array.from({ length: 121 }, (_, index) => `word${index}`).join(' ');
     for (const kind of kinds.filter((candidate) => candidate !== 'review' && candidate !== 'execute')) {
       expect(superviseDraft(kind, longDraft, { investigated: true, executed: true }))
         .toMatchObject({ accepted: false, code: 'response_style' });
       expect(superviseDraft(kind, longDraft, { investigated: true, executed: true }, { verbose: true }))
         .toEqual({ accepted: true });
     }
-    expect(superviseDraft('execute', longDraft, { investigated: true, executed: true })).toEqual({ accepted: true });
+    const executed = superviseDraft('execute', longDraft, { investigated: true, executed: true });
+    expect(executed).toMatchObject({ accepted: false, code: 'response_style' });
+    if (executed.accepted) throw new Error('Expected a response-style rejection.');
+    const retry = supervisedRetryPrompt('ORIGINAL EXECUTABLE TASK', executed);
+    expect(retry).not.toContain('ORIGINAL EXECUTABLE TASK');
+    expect(retry).toContain('Do not call tools');
+    expect(retry).toContain('Never exceed 120 words');
+    expect(retry).toContain('Rejected draft:');
     expect(superviseDraft('execute', longDraft, { investigated: true, executed: false }))
       .toMatchObject({ accepted: false, code: 'response_style' });
-    expect(superviseDraft('execute', `${longDraft} I will implement this next.`, { investigated: true, executed: true }))
-      .toMatchObject({ accepted: false, code: 'deferred_execution' });
   });
 
   it('keeps complete five-pass reviews but rejects dense review prose', () => {

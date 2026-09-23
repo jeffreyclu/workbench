@@ -33,8 +33,8 @@ describe('final response policy', () => {
   });
 
   it('makes brevity measurable while honoring only an explicit per-turn override', () => {
-    const long = Array.from({ length: 181 }, (_, index) => `word${index}`).join(' ');
-    expect(responseStyleViolation(long)).toContain('non-verbose limit is 180');
+    const long = Array.from({ length: 121 }, (_, index) => `word${index}`).join(' ');
+    expect(responseStyleViolation(long)).toContain('non-verbose limit is 120');
     expect(responseStyleViolation(long, { verbose: true })).toBeNull();
   });
 

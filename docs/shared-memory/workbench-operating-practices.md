@@ -8,6 +8,12 @@ work and Workbench-dispatched mutating runs. Multi-repository work gets one `~/d
 repository; the rule must not collapse a full-stack task to one checkout. Read-only analysis and
 review may inspect primary checkouts because they do not write code.
 
+*Correction from Jeffrey, 2026-09-22.* "Use a worktree" does not mean "create a new worktree per
+turn." Before allocating anything, resolve the target ticket/branch against `git worktree list` and
+reuse its existing live `~/dev` worktree. A follow-up run stays on that branch and uses the workspace
+lease for write serialization. Hidden detached run worktrees are only a fallback when the repository
+has no existing task worktree; they must never fork an already-checked-out feature branch.
+
 ### Local documents have one physical root **(always)**
 
 All personal, generated, imported, meeting, research, and durable-knowledge documents live under

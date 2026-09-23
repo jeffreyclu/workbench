@@ -1500,6 +1500,12 @@ not enter the final answer. Only an explicit request for a verbose response in
 the current turn disables the brevity limit, and that override never persists
 to a later turn.
 
+*Enforcement correction, 2026-09-22.* The normal-answer 120-word target is a
+hard provider-neutral limit, not a 180-word tolerance. It applies after tool use
+too. When a completed execution exceeds it, the supervisor sends only the
+rejected report through a formatting-only retry; it never replays the original
+task, tools, file edits, commands, or external mutations merely to shorten prose.
+
 ### The knowledge graph is a derived SQLite index, never a second source of truth
 
 *Decision from Jeffrey, 2026-09-09; corrected 2026-09-18.* Workbench's canonical

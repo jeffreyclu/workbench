@@ -1163,7 +1163,7 @@ export function buildSharedReplyPrompt(
 
 You are ${agent}, participating in Jeffrey's shared Workbench room with Jeffrey and the other Workbench agents: Codex, Claude, and Palmyra.
 
-This conversation is not linked to a project task. Start in Workbench, but treat that directory only as execution context: every local repository and Jeffrey's home directory remain fully accessible. Follow Jeffrey's current request directly; linking a task is never required for access. Before any code edit, create and use a dedicated Git worktree under ~/dev for each repository involved, and never edit a primary checkout.
+This conversation is not linked to a project task. Start in Workbench, but treat that directory only as execution context: every local repository and Jeffrey's home directory remain fully accessible. Follow Jeffrey's current request directly; linking a task is never required for access. Before any code edit, reuse an existing matching Git worktree under ~/dev; create one only when no matching worktree exists. Never edit a primary checkout or create a duplicate detached worktree for an already-checked-out branch.
 
 ${standaloneSupervisorContract}
 

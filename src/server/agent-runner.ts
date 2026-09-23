@@ -20,7 +20,7 @@ import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-respo
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
-import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisorPromptContract } from './supervisor.js';
+import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisedRetryPrompt, supervisorPromptContract } from './supervisor.js';
 import { listCandidateWorkspaces } from './workspace-candidates.js';
 import { inferTaskRepositories, repositoryRoutingPrompt, routedWorkspacePaths } from './workspace-routing.js';
 import { groundAuthoritativeWorkItem, needsAuthoritativeWorkItemGrounding } from './work-item-grounding.js';
@@ -2255,7 +2255,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const draftDecision = superviseDraft(run.kind, result.output, draftEvidence(), { verbose });
     if (!draftDecision.accepted) {
         const retryAgent = result.agent;
-        const retryPrompt = `${prompt}\n\n${draftDecision.recoveryRequirement}`;
+        const retryPrompt = supervisedRetryPrompt(prompt, draftDecision);
         const priorUsage = result.usage;
         const priorCost = result.costUsd;
         repository.addActivity(item.id, 'system', 'progress', `${draftDecision.reason} Retrying once under the supervisor requirement.`);
