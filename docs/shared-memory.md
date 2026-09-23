@@ -927,3 +927,24 @@ to tell them what to look for.
 Two failure modes to avoid: padding the body with every decision made during review so it reads as a
 changelog, and treating a previous trim as sufficient. When he says it is still too long, cut by a
 factor, not by a few sentences.
+
+## Worktrees must live directly under ~/dev, not in a hidden Workbench directory
+
+On CON-465 Jeffrey said "i can't access that fucking worktree retard, move it to ~/dev" after work
+was started in `~/dev/.workbench-worktrees/fe.web-app-<hash>/tasks/con-465`. He opens worktrees
+himself — in an editor, a terminal, and a browser dev server — so a path buried under a dotted,
+hash-named Workbench directory is unusable to him even though it is a valid git worktree.
+
+Every worktree must therefore be created as a direct, human-readable child of `~/dev`, named after
+the repository and the ticket, for example `~/dev/fe.web-app-con-465`. This holds regardless of what
+path a Workbench task routing block suggests: if routing points at `.workbench-worktrees`, create or
+move the worktree to `~/dev/<repo>-<ticket>` and work there instead.
+
+## Never start dev servers for Jeffrey — give him the command
+
+Standing instruction, stated twice on 2026-09-23 ("just tell me how to start the nextjs app ... don't do
+it yourself", then "STOP TRYING TO RUN COMMANDS JUST TELL ME"). When Jeffrey asks how to run or test
+something locally, reply with the exact shell command and working directory and stop there. Do not launch
+a dev server, watcher, or any long-running process on his behalf, even through a tracked job manager:
+agent-started servers are killed when the turn ends, so they never give him a usable running app and the
+attempt only burns the turn. Answer the question; he runs it.
