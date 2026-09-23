@@ -20,7 +20,7 @@ import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-respo
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
-import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisedRetryPrompt, supervisorPromptContract } from './supervisor.js';
+import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisedRetryPrompt, supervisorRetryError, supervisorPromptContract } from './supervisor.js';
 import { listCandidateWorkspaces } from './workspace-candidates.js';
 import { inferTaskRepositories, repositoryRoutingPrompt, routedWorkspacePaths } from './workspace-routing.js';
 import { groundAuthoritativeWorkItem, needsAuthoritativeWorkItemGrounding } from './work-item-grounding.js';
@@ -2258,8 +2258,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         const retryPrompt = supervisedRetryPrompt(prompt, draftDecision);
         const priorUsage = result.usage;
         const priorCost = result.costUsd;
-        repository.addActivity(item.id, 'system', 'progress', `${draftDecision.reason} Retrying once under the supervisor requirement.`);
-        if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● ${draftDecision.reason} Re-running this task under the supervisor requirement…` });
+        repository.addActivity(item.id, 'system', 'progress', draftDecision.code === 'response_style' ? 'Tightening the final response for brevity.' : `${draftDecision.reason} Retrying once under the supervisor requirement.`);
+        if (run.messageId) repository.updateSharedMessage(run.messageId, { body: draftDecision.code === 'response_style' ? '● Tightening the final response…' : `● ${draftDecision.reason} Re-running this task under the supervisor requirement…` });
         const recordRetryUsage = (usage: AgentUsage) => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
           repository.updateRun(run.id, telemetry);
@@ -2300,7 +2300,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           result = { ...repaired, costUsd: combinedCost };
         }
         const retryDecision = superviseDraft(run.kind, result.output, draftEvidence(), { verbose });
-        if (!retryDecision.accepted) throw new Error(`${retryDecision.reason} The response was rejected after one automatic supervisor retry.`);
+        const retryError = supervisorRetryError(retryDecision);
+        if (retryError) throw new Error(retryError);
     }
     if (result.agent === 'palmyra' && run.conversationId && 'messages' in result && result.messages) {
       repository.setConversationPalmyraContext(run.conversationId, JSON.stringify(result.messages));

@@ -21,7 +21,7 @@ import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
 import { preflightWorkbenchTools } from './palmyra-workbench-tools.js';
 import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
-import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisorPromptContract, supervisorSynthesisContract } from './supervisor.js';
+import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisorPromptContract, supervisorRetryError, supervisorSynthesisContract } from './supervisor.js';
 import { brokerExternalEvidence, evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
 import { getGitHubPullRequestDiff, parseGitHubPullRequestUrl } from './github-pull-request-diff.js';
 import { repositoryIdentity } from './workspace-diff.js';
@@ -1944,10 +1944,11 @@ export async function replyInSharedRoom(
     const verbose = verboseResponseRequested(latestUserMessage);
     const decision = superviseDraft(runKind, result.output, evidence(), { verbose });
     if (!decision.accepted) {
-      repository.updateSharedMessage(messageId, { body: `● ${decision.reason} Re-running this turn under the supervisor requirement…` });
+      repository.updateSharedMessage(messageId, { body: decision.code === 'response_style' ? '● Tightening the final response…' : `● ${decision.reason} Re-running this turn under the supervisor requirement…` });
       result = await recoveryRun(decision.recoveryRequirement);
       const retryDecision = superviseDraft(runKind, result.output, evidence(), { verbose });
-      if (!retryDecision.accepted) throw new Error(`${retryDecision.reason} The response was rejected after one automatic supervisor retry.`);
+      const retryError = supervisorRetryError(retryDecision);
+      if (retryError) throw new Error(retryError);
       repository.updateSharedMessage(messageId, { author: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
     }
@@ -2184,10 +2185,11 @@ async function synthesizeSharedTurn(repository: WorkItemRepository, conversation
     let result = await runSynthesis(source.prompt);
     const decision = superviseDraft(source.kind, result.output, { investigated: true, executed: true }, { verbose: source.verbose });
     if (!decision.accepted) {
-      onProgress(`● ${decision.reason} Re-running the synthesis under the supervisor requirement…`);
+      onProgress(decision.code === 'response_style' ? '● Tightening the synthesis…' : `● ${decision.reason} Re-running the synthesis under the supervisor requirement…`);
       result = await runSynthesis(`${source.prompt}\n\n${decision.recoveryRequirement}`);
       const retryDecision = superviseDraft(source.kind, result.output, { investigated: true, executed: true }, { verbose: source.verbose });
-      if (!retryDecision.accepted) throw new Error(`${retryDecision.reason} The synthesis was rejected after one automatic supervisor retry.`);
+      const retryError = supervisorRetryError(retryDecision);
+      if (retryError) throw new Error(retryError);
     }
     repository.updateSharedMessage(message.id, {
       model: modelFor(result.agent, profile), inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens,

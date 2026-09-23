@@ -164,6 +164,11 @@ export function supervisedRetryPrompt(originalPrompt: string, decision: Exclude<
     : `${originalPrompt}\n\n${decision.recoveryRequirement}`;
 }
 
+export function supervisorRetryError(decision: SupervisorDraftDecision): string | null {
+  if (decision.accepted || decision.code === 'response_style') return null;
+  return `${decision.reason} The response was rejected after one automatic supervisor retry.`;
+}
+
 export function superviseDraft(kind: AgentRun['kind'], output: string, evidence: { investigated: boolean; executed: boolean }, options: { verbose?: boolean } = {}): SupervisorDraftDecision {
   if (kind === 'review') {
     const missing = missingReviewPasses(output);
@@ -177,7 +182,7 @@ export function superviseDraft(kind: AgentRun['kind'], output: string, evidence:
   if (styleProblem) return {
     accepted: false, code: 'response_style',
     reason: `Response broke the global brevity rule. ${styleProblem}`,
-    recoveryRequirement: `Formatting-only retry: rewrite the rejected draft below and return one complete replacement answer. Do not call tools, repeat file edits, rerun commands, or repeat external actions. ${styleProblem} Apply the global brevity rule: lead with the result, use plain English and short sentences, remove investigation narration and unexplained engineering shorthand, and use compact bullets for multiple findings. Preserve material findings and exact evidence by shortening each item, not by dropping it. ${kind === 'review' ? 'Keep all five named pass sections. Use one compact bullet per actual finding with the impact, fix, and file/line in parentheses; never exceed 350 words.' : 'Never exceed 120 words.'} This is not a verbose turn.\n\nRejected draft:\n${output}`,
+    recoveryRequirement: `Formatting-only retry: rewrite the rejected draft below and return one complete replacement answer. Do not call tools, repeat file edits, rerun commands, or repeat external actions. ${styleProblem} Apply the global brevity rule: lead with the result, use plain English and short sentences, remove investigation narration and unexplained engineering shorthand, and use compact bullets for multiple findings. Preserve material findings and exact evidence by shortening each item, not by dropping it. ${kind === 'review' ? 'Keep all five named pass sections. Use one compact bullet per actual finding with the impact, fix, and file/line in parentheses; target 300 words and never exceed 350.' : 'Target 90 words and never exceed 120.'} This is not a verbose turn.\n\nRejected draft:\n${output}`,
   };
   if (!evidence.investigated && hasPrematureEvidenceRequest(output)) return {
     accepted: false, code: 'premature_evidence_request',

@@ -1500,11 +1500,14 @@ not enter the final answer. Only an explicit request for a verbose response in
 the current turn disables the brevity limit, and that override never persists
 to a later turn.
 
-*Enforcement correction, 2026-09-22.* The normal-answer 120-word target is a
-hard provider-neutral limit, not a 180-word tolerance. It applies after tool use
-too. When a completed execution exceeds it, the supervisor sends only the
-rejected report through a formatting-only retry; it never replays the original
-task, tools, file edits, commands, or external mutations merely to shorten prose.
+*Enforcement corrections, 2026-09-22.* The normal-answer 120-word target is
+provider-neutral, not a 180-word tolerance, and applies after tool use. When a
+completed execution exceeds it, the supervisor sends only the report through a
+formatting-only retry; it never replays the task, tools, file edits, commands,
+or external mutations. Brevity enforcement must fail open: if the formatting
+retry is still long, publish the complete result instead of failing the turn or
+showing Jeffrey a supervisor-policy error. Missing review passes and other
+substantive failures remain blocking.
 
 ### The knowledge graph is a derived SQLite index, never a second source of truth
 

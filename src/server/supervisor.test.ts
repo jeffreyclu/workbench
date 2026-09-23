@@ -8,6 +8,7 @@ import {
   superviseDraft,
   superviseExternalAction,
   supervisedRetryPrompt,
+  supervisorRetryError,
   supervisorPromptContract,
   supervisorSynthesisContract,
 } from './supervisor.js';
@@ -98,10 +99,22 @@ describe('Workbench supervisor', () => {
     const retry = supervisedRetryPrompt('ORIGINAL EXECUTABLE TASK', executed);
     expect(retry).not.toContain('ORIGINAL EXECUTABLE TASK');
     expect(retry).toContain('Do not call tools');
-    expect(retry).toContain('Never exceed 120 words');
+    expect(retry).toContain('Target 90 words and never exceed 120');
     expect(retry).toContain('Rejected draft:');
+    expect(supervisorRetryError(executed)).toBeNull();
     expect(superviseDraft('execute', longDraft, { investigated: true, executed: false }))
       .toMatchObject({ accepted: false, code: 'response_style' });
+  });
+
+  it('never fails a completed turn only because its brevity retry is still long', () => {
+    const longDraft = Array.from({ length: 168 }, (_, index) => `word${index}`).join(' ');
+    const styleDecision = superviseDraft('analysis', longDraft, { investigated: true, executed: true });
+    expect(styleDecision).toMatchObject({ accepted: false, code: 'response_style' });
+    expect(supervisorRetryError(styleDecision)).toBeNull();
+
+    const substantiveDecision = superviseDraft('execute', 'Say the word and I will implement it.', { investigated: true, executed: false });
+    expect(substantiveDecision).toMatchObject({ accepted: false, code: 'deferred_execution' });
+    expect(supervisorRetryError(substantiveDecision)).toContain('rejected after one automatic supervisor retry');
   });
 
   it('keeps complete five-pass reviews but rejects dense review prose', () => {

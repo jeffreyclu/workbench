@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 
 import { executeAgentRun } from './agent-runner.js';
 import { openDatabase } from './database.js';
@@ -70,6 +70,32 @@ describe('task-run final response supervision', () => {
     expect(output).toContain('### Pass 1');
     expect(output).toContain('### Pass 5');
     expect(output).not.toContain('Five comment drafts.');
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it('completes instead of failing when a brevity-only retry remains over 120 words', async () => {
+    process.env.WORKBENCH_TEST_FINAL_RESPONSE_POLICY = '1';
+    const longDraft = Array.from({ length: 168 }, (_, index) => `word${index}`).join(' ');
+    editFinalResponse.mockResolvedValue('## Problem\nThe response was long.\n\n## Solution\nThe complete result is preserved.\n\n## Context\nBrevity did not fail the turn.');
+    const { directory, log } = fakeAgentDirectory(
+      `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: longDraft } })}'`,
+      'exit 1',
+    );
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Explain the result', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'analysis', 'codex', 'codex', 'Explain the result.');
+
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+
+    const completed = repository.getRun(run.id);
+    expect(completed).toMatchObject({
+      status: 'completed',
+      output: expect.stringContaining('Brevity did not fail the turn.'),
+    });
+    expect(completed?.error).toBeFalsy();
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(2);
     database.close();
     rmSync(directory, { recursive: true, force: true });
   });
