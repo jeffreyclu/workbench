@@ -119,7 +119,7 @@ export function TaskClassificationSelect({ itemId, kind, compact = false, disclo
  * everything else, a strategy/scoping run produced a plan to approve, and
  * every other finished run defaults to reading the agent's reply.
  */
-function nextActionSummary(item: WorkItem, openDependencyCount: number): { Icon: typeof AlertTriangle; text: string } {
+export function nextActionSummary(item: Pick<WorkItem, 'status' | 'classificationKind'>, openDependencyCount: number): { Icon: typeof AlertTriangle; text: string } {
   if (openDependencyCount > 0 || item.status === 'blocked') return { Icon: AlertTriangle, text: 'Resolve blocker' };
   if (item.classificationKind === 'strategy') return { Icon: Sparkles, text: 'Approve plan' };
   return { Icon: MessageSquareText, text: 'Review reply' };
