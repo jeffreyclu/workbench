@@ -176,7 +176,9 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
         projectName: projectName || null,
         status: 'backlog',
         dueDate: null,
-        sourceUrl: sourceUrl || null,
+        // Link input is preserved when switching modes, but it is not part of
+        // a manual task. Never submit hidden, possibly incomplete link state.
+        sourceUrl: null,
         workspacePath: null,
         classificationKind,
         attachments,

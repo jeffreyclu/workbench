@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('loads and mutates Workbench state without browser REST traffic', async ({ page }, testInfo) => {
   const applicationHttpRequests: string[] = [];
   const sockets: string[] = [];
-  const socketRequests: Array<{ operation?: string; input?: { method?: string; path?: string } }> = [];
+  const socketRequests: Array<{ operation?: string; input?: { method?: string; path?: string; body?: string } }> = [];
   page.on('request', (request) => {
     const resourceType = request.resourceType();
     if (['fetch', 'xhr', 'eventsource'].includes(resourceType) && new URL(request.url()).pathname.startsWith('/api/')) {
@@ -15,18 +15,25 @@ test('loads and mutates Workbench state without browser REST traffic', async ({ 
     socket.on('framesent', (frame) => {
       if (typeof frame.payload !== 'string') return;
       try {
-        const payload = JSON.parse(frame.payload) as { type?: string; operation?: string; input?: { method?: string; path?: string } };
+        const payload = JSON.parse(frame.payload) as { type?: string; operation?: string; input?: { method?: string; path?: string; body?: string } };
         if (payload.type === 'request') socketRequests.push(payload);
       } catch { /* Ignore WebSocket control/non-JSON frames. */ }
     });
   });
 
   const title = `Socket-only task ${testInfo.project.name}-${Date.now().toString(36)}`;
+  await page.addInitScript(() => window.localStorage.setItem('workbench:new-task-drafts', JSON.stringify({
+    attention: {
+      mode: 'manual', sourceUrl: 'asdad', aiPrompt: '', title: '', description: '', projectName: '', classificationKind: 'execute',
+    },
+  })));
   await page.goto('/');
   await page.getByRole('button', { name: /add task|new task/i }).click();
   await page.getByRole('button', { name: 'Manual task' }).click();
   await page.getByLabel('Title').fill(title);
   await page.getByRole('button', { name: 'Add to queue' }).click();
+  const createRequest = socketRequests.find((request) => request.input?.method === 'POST' && request.input.path === '/api/work-items');
+  expect(JSON.parse(createRequest?.input?.body ?? '{}')).toMatchObject({ sourceUrl: null });
   await page.getByRole('listitem').filter({ hasText: title }).evaluate((row) => (row as HTMLElement).click());
 
   await expect(page.getByRole('heading', { name: title })).toBeVisible();

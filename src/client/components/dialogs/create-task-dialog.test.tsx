@@ -96,4 +96,34 @@ describe('CreateTask draft recovery', () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(item));
     expect(readNewTaskDraft('attention')).toBeNull();
   });
+
+  it('does not submit stale link input when creating a manual task', async () => {
+    const saved: NewTaskDraft = {
+      mode: 'manual',
+      title: 'Frontend opportunities',
+      description: 'Find the highest-impact frontend work.',
+      projectName: '',
+      classificationKind: 'research',
+      sourceUrl: 'asdad',
+      aiPrompt: '',
+    };
+    writeNewTaskDraft('attention', saved);
+    const item = { id: '00000000-0000-4000-8000-000000000100', title: saved.title } as WorkItem;
+    let submittedBody: Record<string, unknown> | null = null;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/work-items' && init?.method === 'POST') {
+        submittedBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ item }), { status: 201, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ projects: [] }), { headers: { 'Content-Type': 'application/json' } });
+    }));
+    const onCreated = vi.fn();
+    render(<CreateTask onClose={vi.fn()} onCreated={onCreated} draftScope="attention" />, { wrapper });
+
+    fireEvent.click(screen.getByRole('button', { name: /Add to queue/i }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(item));
+    expect(submittedBody).toMatchObject({ sourceUrl: null });
+  });
 });
