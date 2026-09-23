@@ -21,7 +21,7 @@ import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
 import { preflightWorkbenchTools } from './palmyra-workbench-tools.js';
 import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
-import { finalizeSupervisedOutput, superviseDraft, superviseExternalAction, supervisorPromptContract, supervisorRetryError, supervisorSynthesisContract } from './supervisor.js';
+import { currentTurnAuthorityContract, finalizeSupervisedOutput, isStatusOnlyTurn, superviseDraft, superviseExternalAction, supervisorPromptContract, supervisorRetryError, supervisorSynthesisContract } from './supervisor.js';
 import { brokerExternalEvidence, evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
 import { getGitHubPullRequestDiff, parseGitHubPullRequestUrl } from './github-pull-request-diff.js';
 import { repositoryIdentity } from './workspace-diff.js';
@@ -1154,8 +1154,9 @@ export function buildSharedReplyPrompt(
   executionWorkspaces: readonly RunWorkspaceBinding[] = [],
 ): string {
   const grounding = turnGrounding ?? fallbackTurnGrounding(thread);
+  const currentRequest = latestHumanMessageForSharedReply(thread);
   const standaloneSupervisorContract = !linked
-    ? supervisorPromptContract(runKind, `${grounding.objective}\n${latestHumanMessageForSharedReply(thread)}`)
+    ? supervisorPromptContract(runKind, `${grounding.objective}\n${currentRequest}`)
     : '';
   const roleContext = linked
     ? buildPrompt(linked.item, linked.run, sharedContext, externalActionContract, '', executionWorkspaces)
@@ -1178,6 +1179,8 @@ Workbench context handles:
 - Project: ${linked?.item.projectName ?? 'none'}
 
 ${turnGroundingForPrompt(grounding)}
+
+${currentTurnAuthorityContract(currentRequest)}
 
 ${cascadeBreaker}
 
@@ -1226,6 +1229,8 @@ ${supervisorContract}
 
 ${turnGroundingForPrompt(turnGrounding)}
 
+${currentTurnAuthorityContract(currentRequest)}
+
 ${cascadeBreaker}
 
 Short-term memory from active conversations:
@@ -1260,11 +1265,12 @@ export function precedingHumanMessageForSharedReply(thread: SharedMessage[]): st
   return thread.filter((message) => message.author === 'jeffrey').at(-2)?.body ?? '';
 }
 
-/** External mutations always start a fresh provider session. Besides keeping a
- * scoped capability out of unrelated session history, this forces the agent
- * to load Workbench's current MCP tool catalog before it acts. */
-export function providerSessionForAuthorization(sessionId: string | null | undefined, authorization: ExternalActionAuthorization): string | null {
-  return authorization.granted ? null : sessionId ?? null;
+/** External mutations and status-only turns start a fresh provider session.
+ * This keeps scoped capabilities out of unrelated history, refreshes the MCP
+ * catalog for mutations, and prevents cached executable intent from crossing
+ * into a read-only status answer. */
+export function providerSessionForAuthorization(sessionId: string | null | undefined, authorization: ExternalActionAuthorization, currentRequest = ''): string | null {
+  return authorization.granted || isStatusOnlyTurn(currentRequest) ? null : sessionId ?? null;
 }
 
 export function linearContextForPrompt(repository: WorkItemRepository, message: string): string {
@@ -1721,9 +1727,14 @@ export async function replyInSharedRoom(
       workspaceBindings,
     );
     const palmyraContext = agent === 'palmyra' ? parsePalmyraContext(repository.getConversationPalmyraContext(target.conversationId)) : undefined;
-    const resumeProviderId = providerSessionForAuthorization(agent === 'codex'
+    const storedProviderId = agent === 'codex'
       ? linkedConversation?.codexThreadId
-      : agent === 'claude' ? linkedConversation?.claudeSessionId : palmyraContext?.length ? 'palmyra-context' : null, externalAuthorization);
+      : agent === 'claude' ? linkedConversation?.claudeSessionId : palmyraContext?.length ? 'palmyra-context' : null;
+    const resumeProviderId = providerSessionForAuthorization(storedProviderId, externalAuthorization, latestUserMessage);
+    if (storedProviderId && !resumeProviderId && isStatusOnlyTurn(latestUserMessage)) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{
+      kind: 'decision',
+      detail: 'Supervisor started a fresh provider session for this status-only turn so earlier execution authority cannot be replayed.',
+    }]);
     const prompt = resumeProviderId
       ? `${buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, latestUserMessage)}\n\n${linkedItem ? repositoryRoutingPrompt(linkedItem, listCandidateWorkspaces(), workspaceBindings) : ''}`.trim()
       : freshPrompt;
@@ -1739,6 +1750,9 @@ export async function replyInSharedRoom(
       authoritativeObjective: turnGrounding.objective,
       groundingSource: turnGrounding.source,
       groundingContinuation: turnGrounding.continuation,
+      providerSessionResetReason: storedProviderId && !resumeProviderId
+        ? externalAuthorization.granted ? 'external_action_authorization' : isStatusOnlyTurn(latestUserMessage) ? 'status_only_turn' : null
+        : null,
       externalAuthorizationGranted: externalAuthorization.granted,
       externalAuthorizationOperation: externalAuthorization.operation,
       providerSessionResetForExternalMutation: externalAuthorization.granted,

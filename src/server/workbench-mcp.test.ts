@@ -182,6 +182,30 @@ describe('Workbench MCP', () => {
     }
   });
 
+  it('runs and stops a temporary service through the tracked command tools', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-mcp-managed-service-'));
+    process.env.WORKBENCH_MANAGED_COMMANDS_DIR = join(root, 'jobs');
+    try {
+      const started = await callData<{ jobId: string; status: string }>('start_managed_command', {
+        key: 'temporary-dev-service',
+        cwd: root,
+        command: "printf 'ready\\n'; while true; do sleep 1; done",
+      });
+      const ready = await callData<{ status: string; outputTail: string }>('inspect_managed_command', {
+        jobId: started.jobId,
+        waitMs: 0,
+      });
+      const stopped = await callData<{ status: string; outputTail: string }>('stop_managed_command', { jobId: started.jobId });
+
+      expect(ready).toEqual(expect.objectContaining({ status: 'running' }));
+      expect(stopped.status).not.toBe('running');
+      expect(stopped.outputTail).toContain('ready');
+    } finally {
+      delete process.env.WORKBENCH_MANAGED_COMMANDS_DIR;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('reads and atomically replaces stack order, then applies a recoverable lifecycle transition', async () => {
     const first = repository.create({ title: 'First', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const second = repository.create({ title: 'Second', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });

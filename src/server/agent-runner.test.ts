@@ -410,6 +410,8 @@ describe('classifyExecution', () => {
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('Report a command as passing only if it ran in this run');
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('start_managed_command');
     expect(CLAUDE_EXECUTION_CONTRACT).toContain('saved log before starting anything again');
+    expect(CLAUDE_EXECUTION_CONTRACT).toContain('temporary dev server');
+    expect(CLAUDE_EXECUTION_CONTRACT).toContain('stop_managed_command before finishing');
   });
 
   it('gives Codex and Claude the same execution contract without a cached-input kill switch', () => {

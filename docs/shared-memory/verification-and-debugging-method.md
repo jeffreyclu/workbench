@@ -1,5 +1,12 @@
 ## Verification and debugging method
 
+### Status questions never resume older work **(always)**
+
+A message asking only for status authorizes read-only inspection and an answer. It never carries forward
+permission from an earlier turn to start a service, rerun a command, edit files, or continue a pending
+plan. Keep the user-selected task category unchanged, but start a fresh provider session for a status-only
+turn and state the no-action boundary explicitly so cached provider intent cannot replay.
+
 ### Start every agent-debugging investigation with the decision graph **(always)**
 
 When an agent behaves incorrectly, inspect that turn's decision graph before diagnosing the cause or

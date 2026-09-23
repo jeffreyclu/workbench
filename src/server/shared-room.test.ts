@@ -542,6 +542,25 @@ describe('compactConversationHistory', () => {
     expect(providerSessionForAuthorization('current-thread', { granted: false, operation: null })).toBe('current-thread');
   });
 
+  it('starts a fresh provider session for a status-only turn so stale execution intent cannot replay', () => {
+    expect(providerSessionForAuthorization('stale-thread', { granted: false, operation: null }, "so what's the status?")).toBeNull();
+    expect(providerSessionForAuthorization('current-thread', { granted: false, operation: null }, 'show status and then continue the run')).toBe('current-thread');
+  });
+
+  it('makes status-only authority explicit even when the selected category is execute', () => {
+    const request = message(0, "so what's the status?");
+    const grounding = fallbackTurnGrounding([request]);
+    const fresh = buildSharedReplyPrompt('claude', '', '', [request], undefined, 'conversation-id', EXTERNAL_ACTION_CONTRACT, grounding, 'reply-id', '', 'execute');
+    const resumed = buildResumedSharedReplyPrompt('', 'conversation-id', 'reply-id', EXTERNAL_ACTION_CONTRACT, grounding, '', '', '', 'execute', request.body);
+
+    for (const prompt of [fresh, resumed]) {
+      expect(prompt).toContain('Supervisor-selected execution category: execute');
+      expect(prompt).toContain('Jeffrey asked only for status');
+      expect(prompt).toContain('Earlier authorization does not carry into this turn');
+      expect(prompt).toContain('Do not resume an older plan');
+    }
+  });
+
   it('exposes durable recall and accepts provider-neutral prefetched evidence', () => {
     const prompt = buildSharedReplyPrompt('codex', 'Shared context.', '', [], undefined, 'conversation-id', undefined, undefined, undefined, 'Retrieved durable context: Jeffrey works at Writer.');
 

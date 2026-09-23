@@ -11,6 +11,8 @@ import {
   supervisorRetryError,
   supervisorPromptContract,
   supervisorSynthesisContract,
+  currentTurnAuthorityContract,
+  isStatusOnlyTurn,
 } from './supervisor.js';
 
 const kinds: AgentRun['kind'][] = ['analysis', 'research', 'strategy', 'review', 'bugfix', 'execute'];
@@ -20,6 +22,16 @@ const completeReview = [1, 2, 3, 4, 5].map((pass) => (
 )).join('\n\n');
 
 describe('Workbench supervisor', () => {
+  it('distinguishes status-only questions from explicit continuation', () => {
+    expect(isStatusOnlyTurn("so what's the status?")).toBe(true);
+    expect(isStatusOnlyTurn("what's the current status.")).toBe(true);
+    expect(isStatusOnlyTurn('where do things stand')).toBe(true);
+    expect(isStatusOnlyTurn('why is this still stuck?')).toBe(true);
+    expect(isStatusOnlyTurn('show status and then continue')).toBe(false);
+    expect(isStatusOnlyTurn('why is this stuck? fix it')).toBe(false);
+    expect(currentTurnAuthorityContract("what's the status")).toContain('Do not resume an older plan');
+    expect(currentTurnAuthorityContract('continue the run')).toBe('');
+  });
   it.each(kinds)('makes the selected %s category authoritative', (kind) => {
     const prompt = supervisorPromptContract(kind, 'Execute something that sounds like a different category.');
     expect(prompt).toContain(`Supervisor-selected execution category: ${kind}`);

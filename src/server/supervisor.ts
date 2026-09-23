@@ -54,6 +54,23 @@ export const LOCAL_CODE_WORKTREE_CONTRACT = `Local code policy:
 - Multi-repository work gets one ~/dev worktree per repository. Do not use the worktree rule as a reason to collapse a full-stack task to one repository.
 - Read-only analysis and review may inspect primary checkouts because they do not write code.`;
 
+const STATUS_ONLY_TURN = /^(?:what(?:'s| is) (?:(?:the|our|current) )*status|status(?: update| check)?|where (?:are we|do (?:we|things) stand)|how(?:'s| is) it going|what (?:happened|is happening|are you doing)|why\b[^?]*(?:stuck|stall(?:ed|ing)?|slow|taking|hanging|doing nothing))$/i;
+const EXPLICIT_CONTINUATION = /\b(?:continue|resume|proceed|start|run|execute|implement|build|fix|edit|change|retry|rerun|re-?execute|go ahead|do it)\b/i;
+
+export function isStatusOnlyTurn(request: string): boolean {
+  const normalized = request
+    .trim()
+    .replace(/^(?:(?:ok(?:ay)?|yes|yeah|yep|well|so|but|and|wait|hold on)[,.:;!?-]*\s+)*/i, '')
+    .replace(/[.?!]+$/, '')
+    .trim();
+  return STATUS_ONLY_TURN.test(normalized) && !EXPLICIT_CONTINUATION.test(normalized);
+}
+
+export function currentTurnAuthorityContract(currentRequest: string): string {
+  if (!isStatusOnlyTurn(currentRequest)) return '';
+  return `Current-turn authority: Jeffrey asked only for status. Read-only inspection needed to answer is allowed. Report the observed state, including what ran, what did not run, and any blocker. Do not resume an older plan, start or restart a service, launch a command, edit files, or make any mutation. Earlier authorization does not carry into this turn. The selected execution category controls the response mode; it does not turn this status question into permission to act.`;
+}
+
 export function githubSourceAuthorityForRequest(request: string, kind: AgentRun['kind']): string {
   const pullRequestUrl = request.match(GITHUB_PULL_REQUEST_URL)?.[0];
   if (!pullRequestUrl) return '';
