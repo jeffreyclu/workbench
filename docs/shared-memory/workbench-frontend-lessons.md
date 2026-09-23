@@ -1,5 +1,15 @@
 ## Workbench frontend lessons
 
+### Conversation freshness stays off the review toggle
+
+*Correction from Jeffrey, 2026-09-23.* The conversation freshness notification must not sit behind
+the top-left Conversation/Changes toggle or consume its own layout row. Keep it as a small,
+inconspicuous control anchored at the bottom-right above the composer. Use the short age label
+(`Now`, `2m`, `1h`) in the conversation surface; preserve a usable phone touch target without making
+the control visually prominent. Before claiming promotion, inspect the served client bundle for the
+conversation wrapper and compact label; repeated promotions built the primary checkout while the fix
+remained only in its dedicated worktree, so live kept rendering the old top-left control.
+
 ### Attention-stack badge numerals use optical centering
 
 *Correction from Jeffrey, 2026-09-18.* Attention-stack counts must be centered structurally in the

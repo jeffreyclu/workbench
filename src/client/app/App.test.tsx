@@ -1494,6 +1494,10 @@ describe('shared room', () => {
     expect(composer).toHaveClass('is-mobile-composer-collapsed');
     const mobileReviewToggle = document.querySelector('.mobile-review-toggle');
     expect(mobileReviewToggle).toBeInTheDocument();
+    const freshnessControl = screen.getByRole('button', { name: /Refresh data\. Now/ });
+    expect(freshnessControl).toHaveTextContent('Now');
+    expect(freshnessControl.closest('.conversation-thread-pane')).toBeInTheDocument();
+    expect(freshnessControl.closest('.mobile-review-toggle')).toBeNull();
     const changes = within(mobileReviewToggle as HTMLElement).getByRole('button', { name: 'Changes' });
     await waitFor(() => expect(changes).toBeEnabled());
     fireEvent.click(changes);
