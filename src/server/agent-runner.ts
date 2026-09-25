@@ -2455,7 +2455,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }
     const completedAt = new Date().toISOString();
     const finishPatch = { agent: result.agent, status: 'completed' as const, output, completedAt, ...telemetry };
-    const finished = MUTATING_RUN_KINDS.has(run.kind)
+    // A review saves the same handoff a coding run does, so its summary is
+    // on record for the next agent and for Jeffrey.
+    const finished = MUTATING_RUN_KINDS.has(run.kind) || run.kind === 'review'
       ? repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt))
       : repository.finishRun(run.id, ownerId, finishPatch);
     if (!finished) return;

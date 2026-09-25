@@ -117,13 +117,25 @@ describe('review harness', () => {
       ? { clear: [], findings: [{ decision: first, severity: 'blocking', finding: 'Allows every request (src/auth.ts:1).' }, { decision: second, severity: 'non-blocking', finding: 'Rename the test (src/auth.test.ts:1).' }] }
       : { clear: [first, second] }));
     const ledger = parseReviewLedger(output).ledger!;
-    const verdicts = reviewHarnessVerdicts(harness(), ledger, 'codex, run abc');
+    const verdicts = reviewHarnessVerdicts(harness(), ledger, 'codex, run abc', '2026-09-25T17:09:15.000Z');
 
     expect(verdicts.map((verdict) => [verdict.ordinal, verdict.state])).toEqual([[first, 'needs_changes'], [second, 'commented']]);
-    expect(verdicts[0].note).toBe(`${AGENT_REVIEW_NOTE_PREFIX} (codex, run abc):\nPass 1 Blocking: Allows every request (src/auth.ts:1).`);
+    expect(verdicts[0].note).toBe(`${AGENT_REVIEW_NOTE_PREFIX} (codex, run abc, 2026-09-25T17:09:15.000Z):\nPass 1 Blocking: Allows every request (src/auth.ts:1).`);
 
     const clean = parseReviewLedger(review(REVIEW_PASSES.map(() => ({ clear: [first, second] })))).ledger!;
-    expect(reviewHarnessVerdicts(harness(), clean, 'codex')).toEqual([]);
+    expect(reviewHarnessVerdicts(harness(), clean, 'codex', '2026-09-25T17:09:15.000Z')).toEqual([]);
+  });
+
+  it('keeps each agent verdict\'s own time when a later verdict merges into the same decision', () => {
+    const [first] = harness().required.map((decision) => decision.ordinal);
+    const ledger = parseReviewLedger(review(REVIEW_PASSES.map((pass) => pass.number === 1
+      ? { clear: harness().required.slice(1).map((decision) => decision.ordinal), findings: [{ decision: first, severity: 'blocking', finding: 'Allows every request (src/auth.ts:1).' }] }
+      : { clear: harness().required.map((decision) => decision.ordinal) }))).ledger!;
+    const [claude] = reviewHarnessVerdicts(harness(), ledger, 'claude, run 02261360', '2026-09-25T17:07:24.490Z');
+    const [codex] = reviewHarnessVerdicts(harness(), ledger, 'codex, run 2a85412d', '2026-09-25T17:09:15.697Z');
+    const merged = mergeAgentVerdict({ state: claude.state, note: claude.note }, codex);
+    expect(merged?.note).toContain(`${AGENT_REVIEW_NOTE_PREFIX} (claude, run 02261360, 2026-09-25T17:07:24.490Z):`);
+    expect(merged?.note).toContain(`${AGENT_REVIEW_NOTE_PREFIX} (codex, run 2a85412d, 2026-09-25T17:09:15.697Z):`);
   });
 
   it('never overwrites a human verdict and merges agent verdicts strictly', () => {

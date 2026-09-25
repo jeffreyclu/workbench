@@ -818,6 +818,7 @@ fi`,
     await executeAgentRun(repository, run, 'test-owner', 60_000);
 
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({ status: 'completed', output: complete }));
+    expect(repository.getRun(run.id)?.reviewHandoff).toEqual(expect.objectContaining({ agentRunId: run.id, summary: 'Review the diff.' }));
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex', 'codex']);
     expect(repository.listActivity(task.id).some((entry) => entry.body.includes('Retrying once under the supervisor requirement'))).toBe(true);
     database.close();

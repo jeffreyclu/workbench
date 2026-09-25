@@ -2434,6 +2434,13 @@ export class WorkItemRepository {
     });
   }
 
+  /** Save the handoff for a run finished outside executeAgentRun. A handoff is
+   * immutable, so a run that already has one keeps it. */
+  recordRunReviewHandoff(handoff: AgentRunReviewHandoff): void {
+    if (this.runs.get(handoff.agentRunId)?.reviewHandoff) return;
+    this.runs.recordReviewHandoff(handoff);
+  }
+
   finishRunCancellation(id: string, ownerId: string): boolean {
     return this.transaction(() => {
       const finished = this.runs.finishCancellation(id, ownerId);

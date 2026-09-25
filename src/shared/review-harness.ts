@@ -243,8 +243,11 @@ export interface ReviewHarnessVerdict {
 }
 
 /** What the ledger means for Jeffrey's queue. A clean decision earns no
- * verdict: approval stays his, and only the Director's own gates auto-approve. */
-export function reviewHarnessVerdicts(harness: ReviewHarness, ledger: ReviewLedger, attribution: string): ReviewHarnessVerdict[] {
+ * verdict: approval stays his, and only the Director's own gates auto-approve.
+ * Each note carries the time it was recorded: a hunk keeps one updated time,
+ * which the next agent's merged note replaces, so the note is where every
+ * verdict keeps its own. */
+export function reviewHarnessVerdicts(harness: ReviewHarness, ledger: ReviewLedger, attribution: string, recordedAt: string): ReviewHarnessVerdict[] {
   return harness.required.flatMap((decision) => {
     const findings = ledger.passes.flatMap((pass) => pass.findings
       .filter((finding) => finding.decision === decision.ordinal)
@@ -257,7 +260,7 @@ export function reviewHarnessVerdicts(harness: ReviewHarness, ledger: ReviewLedg
       decisionId: decision.decisionId,
       hunks: decision.hunks,
       state,
-      note: `${AGENT_REVIEW_NOTE_PREFIX} (${attribution}):\n${lines.join('\n')}`.slice(0, MAX_NOTE_CHARS),
+      note: `${AGENT_REVIEW_NOTE_PREFIX} (${attribution}, ${recordedAt}):\n${lines.join('\n')}`.slice(0, MAX_NOTE_CHARS),
     }];
   });
 }

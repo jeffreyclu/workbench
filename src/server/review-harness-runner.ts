@@ -92,7 +92,7 @@ export function recordReviewHarnessVerdicts(
 ): { recorded: number; kept: number } {
   const parsed = parseReviewLedger(output);
   if (!harness.revision || !parsed.ledger) return { recorded: 0, kept: 0 };
-  const verdicts = reviewHarnessVerdicts(harness, parsed.ledger, attribution);
+  const verdicts = reviewHarnessVerdicts(harness, parsed.ledger, attribution, new Date().toISOString());
   const recordedDecisions = new Set<number>();
   const keptDecisions = new Set<number>();
   for (const scope of scopesOf(scopes)) {

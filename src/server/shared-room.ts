@@ -14,6 +14,7 @@ import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from 
 import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
 import { groundTurn } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
+import { buildAgentRunReviewHandoff } from './review-handoff.js';
 import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness } from './review-harness-runner.js';
 import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
@@ -2053,7 +2054,15 @@ export async function replyInSharedRoom(
     }
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
     repository.recordAgentHandoff(target.conversationId, messageId, result.agent, result.output);
-    if (runId) repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt: new Date().toISOString(), ...telemetry });
+    if (runId) {
+      const completedAt = new Date().toISOString();
+      repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt, ...telemetry });
+      const completedRun = repository.getRun(runId);
+      if (completedRun?.kind === 'review') {
+        const events = turnEvents().map((event) => ({ category: event.kind === 'file_write' ? 'agent_file_write' as const : event.kind === 'file_read' ? 'agent_file_read' as const : 'agent_tool_use' as const, detail: event.detail, streamKind: event.kind }));
+        repository.recordRunReviewHandoff(buildAgentRunReviewHandoff(completedRun, result.output, events, completedAt));
+      }
+    }
     if (linkedRun && linkedItem && MUTATING_RUN_KINDS.has(linkedRun.kind)) {
       // Shared-room executions bypass executeAgentRun, so they need the same
       // settle hook here. Fire-and-forget: scoring never delays completion.

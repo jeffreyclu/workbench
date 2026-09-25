@@ -32,7 +32,9 @@ export function buildAgentRunReviewHandoff(run: AgentRun, output: string, events
   const verification = events
     .filter((event) => event.command && event.exitCode !== undefined && verificationCommand.test(event.command))
     .map((event) => ({ command: event.command!, exitCode: event.exitCode ?? null, result: event.exitCode === 0 ? 'passed' as const : 'failed' as const }));
-  const summary = output.trim().split('\n').find(Boolean)?.slice(0, 1_000) || `Completed ${run.kind} run.`;
+  // Final answers open with a "## Problem" heading; the summary is the first
+  // line that says something.
+  const summary = output.trim().split('\n').map((line) => line.trim()).find((line) => line && !/^#{1,6}\s/.test(line))?.slice(0, 1_000) || `Completed ${run.kind} run.`;
 
   return {
     agentRunId: run.id,

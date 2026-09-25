@@ -36,4 +36,10 @@ describe('buildAgentRunReviewHandoff', () => {
     expect(handoff.verification).toEqual([]);
     expect(handoff.uncertainties).toEqual(['No completed test, build, typecheck, or lint command was observed by the runner.']);
   });
+
+  it('summarizes with the first line that says something, not the section heading', () => {
+    const handoff = buildAgentRunReviewHandoff(run(), '## Problem\nVerdict: request changes, 1 blocking.\n\n## Solution\n- Fix it.', [], '2026-08-27T01:00:00.000Z');
+
+    expect(handoff.summary).toBe('Verdict: request changes, 1 blocking.');
+  });
 });
