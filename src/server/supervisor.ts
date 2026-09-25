@@ -8,6 +8,9 @@ import {
   normalizeFinalResponse,
   responseStyleViolation,
 } from './final-response-policy.js';
+import { REVIEW_PASSES, REVIEW_PASS_NUMBERS, reviewHarnessViolations, stripReviewLedger, type ReviewHarness } from '../shared/review-harness.js';
+
+const REVIEW_PASS_HEADINGS = REVIEW_PASSES.map((pass, index) => `${index === REVIEW_PASSES.length - 1 ? 'and ' : ''}"### ${pass.heading}"`).join(', ');
 
 export const FRONTEND_REVIEWER_PERSONA = `
 Authoritative persona: frontend-reviewer
@@ -19,12 +22,8 @@ This is a read-only review. All five passes are static:
 - Review the diff and only the surrounding files needed to understand it.
 - Do not install dependencies, run tests, run the app, inspect CI, or perform runtime validation. Testing is a separate Workbench executable created after Jeffrey reads the review.
 - Complete these five review passes separately and in this order. Do not merge or skip a pass:
-  1. Correctness and readability: task fulfillment, control flow, data flow, naming, maintainability, failure handling, and concrete bugs.
-  2. Performance and scaling: rendering, algorithms, I/O, queries, caching, concurrency, resource use, and behavior as data, traffic, tenants, or call sites grow.
-  3. Conventions and existing patterns: repository rules, nearby implementations, shared abstractions, API contracts, naming, and consistency with established architecture. Prefer local conventions; recommend a different pattern only when the diff adds avoidable complexity or breaks correctness.
-  4. UX issues and bugs: user flows, loading/empty/error/permission states, accessibility, responsive behavior, feedback, recovery, stale UI, races, and confusing or broken interactions.
-  5. Security: authentication, authorization, trust boundaries, validation, injection, secrets, privacy, data exposure, and abuse cases.
-- Finish each pass before starting the next. Use these plain-English headings in order: "### Pass 1 — Does it work?", "### Pass 2 — Will it stay fast?", "### Pass 3 — Does it fit the codebase?", "### Pass 4 — Is it good for users?", and "### Pass 5 — Is it safe?" Inside each section, write every actual finding from that pass as one compact bullet. Start with Blocking or Non-blocking, say what breaks in plain English, state the fix, then put the file/line evidence in parentheses. Use at most two short sentences per finding. If a pass found nothing, write exactly "No material issues." Never replace findings with counts or a statement that the pass ran. Deduplicate a cross-cutting finding into its primary pass.
+${REVIEW_PASSES.map((pass) => `  ${pass.number}. ${pass.focus}`).join('\n')}
+- Finish each pass before starting the next. Use these plain-English headings in order: ${REVIEW_PASS_HEADINGS}. Inside each section, write every actual finding from that pass as one compact bullet. Start with Blocking or Non-blocking, say what breaks in plain English, state the fix, then put the file/line evidence in parentheses. Use at most two short sentences per finding. If a pass found nothing, write exactly "No material issues." Never replace findings with counts or a statement that the pass ran. Deduplicate a cross-cutting finding into its primary pass.
 - Label every finding or risk as Blocking or Non-blocking. Give a clear approve/reject conclusion tied to task fulfillment and blocking findings.
 - A finding is a concrete defect or risk with a real impact, not a style preference. Keep the whole review compact: target 120 words and never exceed 350 words unless Jeffrey explicitly requested a verbose response.
 - Return the review, not investigation narration, proof of each search, or a transcript of file reads. Replace phrases such as "parity divergence", "production consumer", "cross-field invariant", and "conflict update" with the concrete thing a person can do or the behavior that will break.
@@ -116,8 +115,6 @@ export async function superviseExternalAction(input: {
   return authorization;
 }
 
-const REVIEW_PASS_NUMBERS = [1, 2, 3, 4, 5] as const;
-
 export function missingReviewPasses(output: string): number[] {
   return REVIEW_PASS_NUMBERS.filter((pass) => {
     const heading = new RegExp(`^###[ \\t]+Pass[ \\t]+${pass}(?:[ \\t]*[—:.-].*)?[ \\t]*$`, 'im');
@@ -167,7 +164,7 @@ export function hasDeferredExecutionResponse(output: string): boolean {
 
 export type SupervisorDraftDecision = { accepted: true } | {
   accepted: false;
-  code: 'missing_review_passes' | 'response_style' | 'premature_evidence_request' | 'deferred_execution' | 'unverified_completion';
+  code: 'missing_review_passes' | 'review_harness' | 'response_style' | 'premature_evidence_request' | 'deferred_execution' | 'unverified_completion';
   reason: string;
   recoveryRequirement: string;
 };
@@ -186,7 +183,11 @@ export function supervisorRetryError(decision: SupervisorDraftDecision): string 
   return `${decision.reason} The response was rejected after one automatic supervisor retry.`;
 }
 
-export function superviseDraft(kind: AgentRun['kind'], output: string, evidence: { investigated: boolean; executed: boolean }, options: { verbose?: boolean } = {}): SupervisorDraftDecision {
+export function reviewHarnessRequirement(draft: string, problems: string[]): string {
+  return `Review harness retry: the prior draft was rejected because its ledger did not prove every Review Director decision was checked in every pass:\n${problems.map((problem) => `- ${problem}`).join('\n')}\nReturn one complete replacement review, not a continuation. Run the review harness algorithm again from Pass 1, keep the exact \`### Pass 1\` through \`### Pass 5\` headings, and end with exactly one valid <review-ledger> block that lists every required decision in every pass. Preserve verified findings and do not claim evidence you did not inspect.\n\nRejected draft:\n${draft}`;
+}
+
+export function superviseDraft(kind: AgentRun['kind'], output: string, evidence: { investigated: boolean; executed: boolean }, options: { verbose?: boolean; reviewHarness?: ReviewHarness | null } = {}): SupervisorDraftDecision {
   if (kind === 'review') {
     const missing = missingReviewPasses(output);
     if (missing.length) return {
@@ -194,12 +195,20 @@ export function superviseDraft(kind: AgentRun['kind'], output: string, evidence:
       reason: `Review omitted mandatory Pass ${missing.join(', Pass ')}.`,
       recoveryRequirement: reviewPassCompletionRequirement(output, missing),
     };
+    const harnessProblems = options.reviewHarness ? reviewHarnessViolations(options.reviewHarness, output) : [];
+    if (harnessProblems.length) return {
+      accepted: false, code: 'review_harness',
+      reason: `Review failed the review harness: ${harnessProblems[0]}`,
+      recoveryRequirement: reviewHarnessRequirement(output, harnessProblems),
+    };
   }
-  const styleProblem = responseStyleViolation(output, { verbose: options.verbose, review: kind === 'review' });
+  // The ledger is machine evidence for the harness, not prose for Jeffrey.
+  const reviewHarnessProvided = kind === 'review' && Boolean(options.reviewHarness);
+  const styleProblem = responseStyleViolation(kind === 'review' ? stripReviewLedger(output) : output, { verbose: options.verbose, review: kind === 'review' });
   if (styleProblem) return {
     accepted: false, code: 'response_style',
     reason: `Response broke the global brevity rule. ${styleProblem}`,
-    recoveryRequirement: `Formatting-only retry: rewrite the rejected draft below and return one complete replacement answer. Do not call tools, repeat file edits, rerun commands, or repeat external actions. ${styleProblem} Apply the global brevity rule: lead with the result, use plain English and short sentences, remove investigation narration and unexplained engineering shorthand, and use compact bullets for multiple findings. Preserve material findings and exact evidence by shortening each item, not by dropping it. ${kind === 'review' ? 'Keep all five named pass sections. Use one compact bullet per actual finding with the impact, fix, and file/line in parentheses; target 300 words and never exceed 350.' : 'Target 90 words and never exceed 120.'} This is not a verbose turn.\n\nRejected draft:\n${output}`,
+    recoveryRequirement: `Formatting-only retry: rewrite the rejected draft below and return one complete replacement answer. Do not call tools, repeat file edits, rerun commands, or repeat external actions. ${styleProblem} Apply the global brevity rule: lead with the result, use plain English and short sentences, remove investigation narration and unexplained engineering shorthand, and use compact bullets for multiple findings. Preserve material findings and exact evidence by shortening each item, not by dropping it. ${kind === 'review' ? `Keep all five named pass sections. Use one compact bullet per actual finding with the impact, fix, and file/line in parentheses; target 300 words and never exceed 350.${reviewHarnessProvided ? ' Copy the <review-ledger> block unchanged at the end; it does not count toward the word limit.' : ''}` : 'Target 90 words and never exceed 120.'} This is not a verbose turn.\n\nRejected draft:\n${output}`,
   };
   if (!evidence.investigated && hasPrematureEvidenceRequest(output)) return {
     accepted: false, code: 'premature_evidence_request',
@@ -233,12 +242,16 @@ export async function finalizeSupervisedOutput(input: {
   objective: string;
   verbose: boolean;
 }): Promise<string> {
-  const normalized = normalizeFinalResponse(input.draftOutput ?? input.rawOutput);
+  // The ledger has already been validated and recorded; only the review
+  // itself reaches Jeffrey.
+  const rawOutput = input.kind === 'review' ? stripReviewLedger(input.rawOutput) : input.rawOutput;
+  const draftOutput = input.kind === 'review' && input.draftOutput !== undefined ? stripReviewLedger(input.draftOutput) : input.draftOutput;
+  const normalized = normalizeFinalResponse(draftOutput ?? rawOutput);
   let output = finalResponseEditingEnabled() && finalResponsePolicyViolation(normalized, input.verbose)
     ? await editFinalResponse(normalized, input.objective, { verbose: input.verbose })
     : normalized;
   if (input.kind === 'review') {
-    output = preserveReviewPassesAfterFormatting(input.rawOutput, output, input.objective);
+    output = preserveReviewPassesAfterFormatting(rawOutput, output, input.objective);
     const missing = missingReviewPasses(output);
     if (missing.length) throw new Error(`Final review response omitted mandatory Pass ${missing.join(', Pass ')}.`);
   }
@@ -247,6 +260,6 @@ export async function finalizeSupervisedOutput(input: {
 
 export function supervisorSynthesisContract(kind: AgentRun['kind'] | null | undefined): string {
   return kind === 'review'
-    ? 'Synthesize the two supplied code reviews into one short, plain-English five-pass review. Use these headings in order: `### Pass 1 — Does it work?`, `### Pass 2 — Will it stay fast?`, `### Pass 3 — Does it fit the codebase?`, `### Pass 4 — Is it good for users?`, and `### Pass 5 — Is it safe?` Deduplicate overlap. Under each heading, retain every unique actual finding as one compact bullet: severity, what breaks, the fix, then file/line evidence in parentheses. Use at most two short sentences per finding. If neither reviewer found a material issue in a pass, write exactly `No material issues.` Lead with approve or reject and the human consequence. Do not repeat investigation mechanics or unexplained engineering shorthand. Target 120 words and never exceed 350 words unless Jeffrey explicitly asked for a verbose response.'
+    ? 'Synthesize the two supplied code reviews into one short, plain-English five-pass review. Use these headings in order: ' + REVIEW_PASS_HEADINGS + '. Deduplicate overlap. Under each heading, retain every unique actual finding as one compact bullet: severity, what breaks, the fix, then file/line evidence in parentheses. Use at most two short sentences per finding. If neither reviewer found a material issue in a pass, write exactly `No material issues.` Lead with approve or reject and the human consequence. Do not repeat investigation mechanics or unexplained engineering shorthand. Target 120 words and never exceed 350 words unless Jeffrey explicitly asked for a verbose response.'
     : 'Write a concise synthesis of the two supplied agent responses below.';
 }

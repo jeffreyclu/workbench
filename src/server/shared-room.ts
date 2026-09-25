@@ -14,6 +14,8 @@ import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from 
 import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
 import { groundTurn } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
+import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness } from './review-harness-runner.js';
+import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
@@ -1615,6 +1617,18 @@ export async function replyInSharedRoom(
       runKind,
       workspacePath: sourceCwd,
     })));
+    // Runs after evidence brokering so a PR review reads the same immutable
+    // snapshot the agent was handed, never a second GitHub fetch.
+    const reviewHarnessScopes = { workItemId: linkedItem?.id ?? null, conversationId: target.conversationId };
+    const reviewHarness = runKind === 'review'
+      ? await resolveReviewHarness(repository, { scopes: reviewHarnessScopes, cwd, requestText: [latestUserMessage, ...recentSourceReferences].join('\n') })
+      : null;
+    if (reviewHarness) {
+      const detail = describeReviewHarness(reviewHarness);
+      addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{ kind: 'decision', detail }]);
+      if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', detail);
+    }
+    const withReviewHarness = (value: string) => reviewHarness ? `${value}\n\n${reviewHarnessPrompt(reviewHarness)}` : value;
     const connectedContext = externalEvidence.find((entry) => entry.snapshot.kind === 'connected_source_context')?.payload;
     const connectionContext = [typeof connectedContext === 'string' ? connectedContext : '', evidencePromptBlock(externalEvidence)].filter(Boolean).join('\n\n');
     for (const entry of externalEvidence) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{
@@ -1712,7 +1726,7 @@ export async function replyInSharedRoom(
         items: retrievedMemoryItems,
       },
     });
-    const freshPrompt = buildSharedReplyPrompt(
+    const freshPrompt = withReviewHarness(buildSharedReplyPrompt(
       agent,
       shortTermContext,
       connectionContext,
@@ -1725,7 +1739,7 @@ export async function replyInSharedRoom(
       memoryContext,
       runKind,
       workspaceBindings,
-    );
+    ));
     const palmyraContext = agent === 'palmyra' ? parsePalmyraContext(repository.getConversationPalmyraContext(target.conversationId)) : undefined;
     const storedProviderId = agent === 'codex'
       ? linkedConversation?.codexThreadId
@@ -1736,7 +1750,7 @@ export async function replyInSharedRoom(
       detail: 'Supervisor started a fresh provider session for this status-only turn so earlier execution authority cannot be replayed.',
     }]);
     const prompt = resumeProviderId
-      ? `${buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, latestUserMessage)}\n\n${linkedItem ? repositoryRoutingPrompt(linkedItem, listCandidateWorkspaces(), workspaceBindings) : ''}`.trim()
+      ? withReviewHarness(`${buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, latestUserMessage)}\n\n${linkedItem ? repositoryRoutingPrompt(linkedItem, listCandidateWorkspaces(), workspaceBindings) : ''}`.trim())
       : freshPrompt;
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,
@@ -1956,17 +1970,26 @@ export async function replyInSharedRoom(
       executed: turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_write'),
     });
     const verbose = verboseResponseRequested(latestUserMessage);
-    const decision = superviseDraft(runKind, result.output, evidence(), { verbose });
+    const decision = superviseDraft(runKind, result.output, evidence(), { verbose, reviewHarness });
     if (!decision.accepted) {
       repository.updateSharedMessage(messageId, { body: decision.code === 'response_style' ? '● Tightening the final response…' : `● ${decision.reason} Re-running this turn under the supervisor requirement…` });
+      const draftOutputBeforeRetry = result.output;
       result = await recoveryRun(decision.recoveryRequirement);
-      const retryDecision = superviseDraft(runKind, result.output, evidence(), { verbose });
+      if (reviewHarness && decision.code === 'response_style') result = { ...result, output: carryReviewLedger(draftOutputBeforeRetry, result.output) };
+      const retryDecision = superviseDraft(runKind, result.output, evidence(), { verbose, reviewHarness });
       const retryError = supervisorRetryError(retryDecision);
       if (retryError) throw new Error(retryError);
       repository.updateSharedMessage(messageId, { author: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
       if (runId) repository.updateRun(runId, { agent: result.agent, model: modelForResult(result.agent), fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason });
     }
     if (controller.signal.aborted) throw new Error('Agent run canceled.');
+    if (reviewHarness) {
+      const recorded = recordReviewHarnessVerdicts(repository, reviewHarness, result.output, reviewHarnessScopes, `${result.agent}, message ${messageId.slice(0, 8)}`);
+      addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{
+        kind: 'decision',
+        detail: `Review harness passed: every decision was checked in all five passes. ${recorded.recorded} verdict(s) recorded in the review queue${recorded.kept ? `; ${recorded.kept} left alone because Jeffrey or the Review Director already decided them` : ''}.`,
+      }]);
+    }
     const rawOutput = result.output;
     result = { ...result, output: await finalizeSupervisedOutput({
       kind: runKind,

@@ -16,6 +16,8 @@ import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isManagedRun
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
+import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness } from './review-harness-runner.js';
+import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
 import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
@@ -2161,9 +2163,21 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       },
     });
     if (resumesSession) repository.addActivity(item.id, 'system', 'progress', `Resuming ${run.agent === 'palmyra' ? 'Palmyra context' : 'Claude session'} with bounded continuation context.`);
-    const prompt = resumesSession
+    // Every review runs the same deterministic harness over the Review
+    // Director queue Jeffrey reads, so agent and human review one plan.
+    const reviewHarnessScopes = { workItemId: item.id, conversationId: run.conversationId ?? null };
+    const reviewHarness = run.kind === 'review'
+      ? await resolveReviewHarness(repository, { scopes: reviewHarnessScopes, cwd, requestText: [run.instructions, item.sourceUrl, item.description, item.title].filter(Boolean).join('\n') })
+      : null;
+    if (reviewHarness) {
+      const detail = describeReviewHarness(reviewHarness);
+      repository.addActivity(item.id, 'system', 'progress', detail);
+      if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, [{ kind: 'decision', detail }]);
+    }
+    const basePrompt = resumesSession
       ? buildResumedPrompt(item, run, externalActionContract, memoryContext, shortTermContext, workspaceBindings)
       : buildPrompt(item, run, sharedContext, externalActionContract, memoryContext, workspaceBindings);
+    const prompt = reviewHarness ? `${basePrompt}\n\n${reviewHarnessPrompt(reviewHarness)}` : basePrompt;
     repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, run.agent, 'prompt', {
       promptChars: prompt.length,
       taskChars: item.description.length,
@@ -2323,8 +2337,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       executed: observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_write'),
     });
     const verbose = verboseResponseRequested(`${item.title}\n${run.instructions}`);
-    const draftDecision = superviseDraft(run.kind, result.output, draftEvidence(), { verbose });
+    const draftDecision = superviseDraft(run.kind, result.output, draftEvidence(), { verbose, reviewHarness });
     if (!draftDecision.accepted) {
+        const draftOutputBeforeRetry = result.output;
         const retryAgent = result.agent;
         const retryPrompt = supervisedRetryPrompt(prompt, draftDecision);
         const priorUsage = result.usage;
@@ -2370,9 +2385,14 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           const combinedCost = priorCost == null && repaired.costUsd == null ? null : (priorCost ?? 0) + (repaired.costUsd ?? 0);
           result = { ...repaired, costUsd: combinedCost };
         }
-        const retryDecision = superviseDraft(run.kind, result.output, draftEvidence(), { verbose });
+        if (reviewHarness && draftDecision.code === 'response_style') result = { ...result, output: carryReviewLedger(draftOutputBeforeRetry, result.output) };
+        const retryDecision = superviseDraft(run.kind, result.output, draftEvidence(), { verbose, reviewHarness });
         const retryError = supervisorRetryError(retryDecision);
         if (retryError) throw new Error(retryError);
+    }
+    if (reviewHarness) {
+      const recorded = recordReviewHarnessVerdicts(repository, reviewHarness, result.output, reviewHarnessScopes, `${result.agent}, run ${run.id.slice(0, 8)}`);
+      repository.addActivity(item.id, 'system', 'progress', `Review harness passed: every decision was checked in all five passes. ${recorded.recorded} verdict(s) recorded in the review queue${recorded.kept ? `; ${recorded.kept} left alone because Jeffrey or the Review Director already decided them` : ''}.`);
     }
     if (result.agent === 'palmyra' && run.conversationId && 'messages' in result && result.messages) {
       repository.setConversationPalmyraContext(run.conversationId, JSON.stringify(result.messages));

@@ -62,6 +62,13 @@ const item = (title: string, description = ''): WorkItem => ({
   dueDate: null, providerUpdatedAt: null, createdAt: '', updatedAt: '', lastTouchedAt: '',
 });
 
+/** A review-harness ledger for a review whose only finding is a Pass 1 blocker
+ * against the whole change (D0), used where no diff is readable. */
+function withWholeChangeLedger(review: string, finding: string): string {
+  const ledger = { version: 1, passes: [1, 2, 3, 4, 5].map((pass) => ({ pass, clear: [], findings: pass === 1 ? [{ decision: 0, severity: 'blocking', finding }] : [] })) };
+  return `${review}\n\n<review-ledger>${JSON.stringify(ledger)}</review-ledger>`;
+}
+
 describe('classifyExecution', () => {
   it('allows finite Vite builds while blocking persistent Vite servers', () => {
     expect(blockedPersistentForegroundCommand("/bin/zsh -lc 'npx vite build --configLoader runner'")).toBe(false);
@@ -791,7 +798,9 @@ fi`;
     const incomplete = '## Problem\nReview the diff.\n\n## Solution\nPass 1: one finding.\n\n## Context\nFour passes are missing.';
     const complete = '## Problem\nReview the diff.\n\n## Solution\n### Pass 1\nBlocking: button.js:2 calls an undefined function. Replace it with the defined helper.\n\n### Pass 2\nNo material issues.\n\n### Pass 3\nNo material issues.\n\n### Pass 4\nNo material issues.\n\n### Pass 5\nNo material issues.\n\n## Context\nStatic review only.';
     const firstEvent = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: incomplete } });
-    const secondEvent = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: complete } });
+    // No diff is readable here, so the harness holds the review to five
+    // passes over the whole change (D0); its ledger never reaches Jeffrey.
+    const secondEvent = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: withWholeChangeLedger(complete, 'button.js:2 calls an undefined function.') } });
     const { directory, log } = fakeAgentDirectory(
       `count=$(/usr/bin/wc -l < "\${0%/*}/spawns.log")
 if [ "$count" -eq 1 ]; then
@@ -844,8 +853,8 @@ fi`,
   it('routes dual task completion through the conversation supervisor and creates one synthesis', async () => {
     const review = '## Problem\nReview found one defect.\n\n## Solution\n### Pass 1\nBlocking: src/button.ts:2 drops the click. Preserve the handler.\n\n### Pass 2\nNo material issues.\n\n### Pass 3\nNo material issues.\n\n### Pass 4\nNo material issues.\n\n### Pass 5\nNo material issues.\n\n## Context\nStatic review only.';
     const { directory, log } = fakeAgentDirectory(
-      `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: review } })}'`,
-      `printf '%s\\n' '${JSON.stringify({ type: 'result', result: review })}'`,
+      `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: withWholeChangeLedger(review, 'src/button.ts:2 drops the click.') } })}'`,
+      `printf '%s\\n' '${JSON.stringify({ type: 'result', result: withWholeChangeLedger(review, 'src/button.ts:2 drops the click.') })}'`,
     );
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

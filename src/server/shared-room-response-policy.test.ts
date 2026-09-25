@@ -160,9 +160,12 @@ describe('shared-room final response supervision', () => {
   });
 
   it('rejects an incomplete standalone review, retries it once, and preserves all five passes', async () => {
-    const completeReview = [1, 2, 3, 4, 5].map((pass) => (
+    // No diff is brokered in tests, so the harness holds the review to five
+    // passes over the whole change (D0).
+    const ledger = { version: 1, passes: [1, 2, 3, 4, 5].map((pass) => ({ pass, clear: [], findings: pass === 1 ? [{ decision: 0, severity: 'blocking', finding: 'src/button.ts:42 drops the click handler.' }] : [] })) };
+    const completeReview = `${[1, 2, 3, 4, 5].map((pass) => (
       `### Pass ${pass}\n\n${pass === 1 ? 'Blocking: src/button.ts:42 drops the click handler. Preserve the handler.' : 'No material issues.'}`
-    )).join('\n\n');
+    )).join('\n\n')}\n\n<review-ledger>${JSON.stringify(ledger)}</review-ledger>`;
     runAgentCommandWithFallback
       .mockResolvedValueOnce({
         output: 'The review found one blocking issue, and the other passes were clean.',
@@ -191,6 +194,8 @@ describe('shared-room final response supervision', () => {
     expect(body).toContain('### Pass 5');
     expect(body).toContain('Blocking: src/button.ts:42');
     expect(body).not.toContain('Five comment drafts.');
+    expect(runAgentCommandWithFallback.mock.calls[0]?.[2]).toContain('Review harness v1');
+    expect(body).not.toContain('review-ledger');
     database.close();
   });
 });
