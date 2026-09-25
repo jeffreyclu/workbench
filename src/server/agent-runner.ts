@@ -16,7 +16,8 @@ import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isManagedRun
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
-import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness } from './review-harness-runner.js';
+import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
+import { evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
 import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
 import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
@@ -2166,8 +2167,28 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // Every review runs the same deterministic harness over the Review
     // Director queue Jeffrey reads, so agent and human review one plan.
     const reviewHarnessScopes = { workItemId: item.id, conversationId: run.conversationId ?? null };
+    const reviewRequestText = [run.instructions, item.sourceUrl, item.description, item.title].filter(Boolean).join('\n');
+    // A task-launched PR review gets the same supervisor-owned diff snapshot a
+    // chat review does; without it the harness has no Director decisions.
+    const reviewPullRequest = run.kind === 'review' ? reviewPullRequestUrl(reviewRequestText) : null;
+    let pullRequestEvidence: ExternalEvidence<unknown>[] = [];
+    if (reviewPullRequest && run.conversationId && run.messageId && !process.env.VITEST) {
+      try {
+        const { brokerPullRequestDiffEvidence } = await import('./shared-room.js');
+        pullRequestEvidence = await brokerPullRequestDiffEvidence(repository, {
+          conversationId: run.conversationId,
+          dispatchGroupId: repository.getSharedMessageById(run.messageId)?.dispatchGroupId ?? run.messageId,
+          urls: [reviewPullRequest],
+          workspacePath: sourceWorkspace ?? cwd,
+        });
+      } catch (error) {
+        const detail = `Supervisor could not snapshot ${reviewPullRequest}: ${error instanceof Error ? error.message : String(error)}`;
+        repository.addActivity(item.id, 'system', 'progress', detail);
+        addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId, [{ kind: 'decision', detail }]);
+      }
+    }
     const reviewHarness = run.kind === 'review'
-      ? await resolveReviewHarness(repository, { scopes: reviewHarnessScopes, cwd, requestText: [run.instructions, item.sourceUrl, item.description, item.title].filter(Boolean).join('\n') })
+      ? await resolveReviewHarness(repository, { scopes: reviewHarnessScopes, cwd, requestText: reviewRequestText })
       : null;
     if (reviewHarness) {
       const detail = describeReviewHarness(reviewHarness);
@@ -2177,7 +2198,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const basePrompt = resumesSession
       ? buildResumedPrompt(item, run, externalActionContract, memoryContext, shortTermContext, workspaceBindings)
       : buildPrompt(item, run, sharedContext, externalActionContract, memoryContext, workspaceBindings);
-    const prompt = reviewHarness ? `${basePrompt}\n\n${reviewHarnessPrompt(reviewHarness)}` : basePrompt;
+    const prompt = [basePrompt, evidencePromptBlock(pullRequestEvidence), reviewHarness ? reviewHarnessPrompt(reviewHarness) : ''].filter(Boolean).join('\n\n');
     repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, run.agent, 'prompt', {
       promptChars: prompt.length,
       taskChars: item.description.length,

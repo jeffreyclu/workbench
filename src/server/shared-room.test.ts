@@ -7,7 +7,8 @@ import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
 import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -62,6 +63,40 @@ describe('supervisor-owned external evidence', () => {
       commitHash: pullRequest.headSha,
       diff: { workspacePath: process.cwd(), branch: 'main → feature/widgets', files: pullRequest.files },
     });
+    database.close();
+  });
+
+  it('gives a task-launched PR review Review Director decisions instead of the whole-change fallback', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-task-review-evidence-'));
+    temporaryDirectories.push(directory);
+    process.env.DATABASE_PATH = join(directory, 'workbench.db');
+    const database = openDatabase(process.env.DATABASE_PATH);
+    const repository = new WorkItemRepository(database);
+    const url = 'https://github.com/acme/widgets/pull/7';
+    const task = repository.create({ title: 'fix: CON-1 widgets', description: 'PR summary without a diff.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null, sourceUrl: url });
+    const conversation = repository.createConversation('Review task', task.id);
+    const execute = repository.createSharedMessage('system', `Execute: ${task.title}`, 'completed', conversation.id, [], 'both');
+    const scopes = { workItemId: task.id, conversationId: conversation.id };
+    const requestText = [task.sourceUrl, task.description, task.title].join('\n');
+
+    expect((await resolveReviewHarness(repository, { scopes, cwd: process.cwd(), requestText })).source.kind).toBe('unavailable');
+
+    await brokerPullRequestDiffEvidence(repository, {
+      conversationId: conversation.id, dispatchGroupId: execute.id, urls: [reviewPullRequestUrl(requestText)!], workspacePath: process.cwd(),
+      fetchPullRequest: async () => ({
+        url, repository: 'acme/widgets', number: 7, title: 'Fix widgets', baseRef: 'main', headRef: 'fix/widgets',
+        headSha: 'b'.repeat(40), revision: 'b'.repeat(40),
+        files: [{ path: 'src/widget.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null, patch: '@@ -1 +1 @@\n-old\n+new', isBinary: false }],
+        changedFiles: 1, additions: 1, deletions: 1, nextPage: null, state: 'open', draft: false,
+        mergeableState: 'clean', reviewDecision: null, reviewDecisionError: null,
+        comments: { available: true, partial: false, total: 0, byPath: {}, comments: [], error: null },
+      }),
+    });
+    const harness = await resolveReviewHarness(repository, { scopes, cwd: process.cwd(), requestText });
+
+    expect(harness.source).toEqual({ kind: 'pull-request', url });
+    expect(harness.revision).toBe('b'.repeat(40));
+    expect(harness.required.length).toBeGreaterThan(0);
     database.close();
   });
 });

@@ -10,6 +10,12 @@ export interface ReviewHarnessScopes { workItemId: string | null; conversationId
 
 const PULL_REQUEST_URL = /https?:\/\/github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/pull\/\d+/i;
 
+/** The pull request a review request names, if any. The supervisor brokers
+ * exactly this URL so the harness finds the snapshot it resolves against. */
+export function reviewPullRequestUrl(requestText: string): string | null {
+  return PULL_REQUEST_URL.exec(requestText)?.[0] ?? null;
+}
+
 function scopesOf(scopes: ReviewHarnessScopes): DiffReviewScope[] {
   return [
     ...(scopes.workItemId ? [{ workItemId: scopes.workItemId }] : []),
@@ -54,7 +60,7 @@ export async function resolveReviewHarness(
   repository: WorkItemRepository,
   input: { scopes: ReviewHarnessScopes; cwd: string; requestText: string },
 ): Promise<ReviewHarness> {
-  const url = PULL_REQUEST_URL.exec(input.requestText)?.[0];
+  const url = reviewPullRequestUrl(input.requestText);
   if (url) {
     const diff = brokeredPullRequestDiff(repository, input.scopes, url);
     if (!diff) return buildReviewHarness({ source: { kind: 'unavailable', reason: `Workbench has no brokered diff for ${url}.` }, revision: null, files: [], reviews: [] });

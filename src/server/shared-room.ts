@@ -91,16 +91,15 @@ async function completePullRequestDiff(url: string, token?: string): Promise<Git
   return { ...first, files, nextPage: null };
 }
 
-export async function prepareSharedExternalEvidence(
+/** Broker each pull request's complete diff once and save it as the
+ * supervisor-owned snapshot the Review Director queue and review harness read.
+ * Chat replies and task executions share this so both review the same bytes. */
+export async function brokerPullRequestDiffEvidence(
   repository: WorkItemRepository,
-  input: { conversationId: string; dispatchGroupId: string; message: string; recentReferences: string[]; runKind: AgentRun['kind']; workspacePath: string; fetchPullRequest?: (url: string) => Promise<GitHubPullRequestDiff> },
+  input: { conversationId: string; dispatchGroupId: string; urls: string[]; workspacePath: string; fetchPullRequest?: (url: string) => Promise<GitHubPullRequestDiff> },
 ): Promise<ExternalEvidence<unknown>[]> {
   const evidence: ExternalEvidence<unknown>[] = [];
-  // A URL in the current instruction is authoritative. Only fall back to the
-  // task/conversation references when this turn does not name its own PR.
-  const currentUrls = pullRequestUrls(input.message);
-  const urls = currentUrls.length ? currentUrls : pullRequestUrls(input.recentReferences.join('\n'));
-  for (const url of urls) {
+  for (const url of input.urls) {
     const item = await brokerExternalEvidence(repository, {
       conversationId: input.conversationId, dispatchGroupId: input.dispatchGroupId,
       kind: 'github_pull_request_diff', source: url, request: { url },
@@ -113,6 +112,21 @@ export async function prepareSharedExternalEvidence(
     });
     evidence.push(item);
   }
+  return evidence;
+}
+
+export async function prepareSharedExternalEvidence(
+  repository: WorkItemRepository,
+  input: { conversationId: string; dispatchGroupId: string; message: string; recentReferences: string[]; runKind: AgentRun['kind']; workspacePath: string; fetchPullRequest?: (url: string) => Promise<GitHubPullRequestDiff> },
+): Promise<ExternalEvidence<unknown>[]> {
+  // A URL in the current instruction is authoritative. Only fall back to the
+  // task/conversation references when this turn does not name its own PR.
+  const currentUrls = pullRequestUrls(input.message);
+  const urls = currentUrls.length ? currentUrls : pullRequestUrls(input.recentReferences.join('\n'));
+  const evidence = await brokerPullRequestDiffEvidence(repository, {
+    conversationId: input.conversationId, dispatchGroupId: input.dispatchGroupId,
+    urls, workspacePath: input.workspacePath, fetchPullRequest: input.fetchPullRequest,
+  });
 
   const requestText = [input.message, ...input.recentReferences].join('\n');
   const asksForConnectedSource = /\b(?:slack|linear|atlassian|confluence|jira|figma|grafana|github)\b|https?:\/\/(?:[^\s/]+\.)?(?:atlassian\.net|github\.com|slack\.com|linear\.app)\//i.test(requestText);
