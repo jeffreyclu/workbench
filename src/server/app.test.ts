@@ -232,13 +232,20 @@ describe('POST /api/work-items/:id/execute and /runs dedup guard', () => {
 
   it('reports only work owned by this backend in its runtime drain health', async () => {
     const idle = await fetch(`${baseUrl}/api/health`);
-    expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false, ownedAgentWorkActive: false, liveAgentProcessCount: 0, buildId: expect.any(String) });
+    expect(await idle.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: false, promotionBlockingWorkActive: false, ownedAgentWorkActive: false, liveAgentProcessCount: 0, buildId: expect.any(String) });
 
     const conversation = repository.ensureDefaultConversation();
     const promotion = repository.createSharedMessage('system', 'Promoting…', 'running', conversation.id, [], 'promotion');
     expect(repository.claimSharedMessage(promotion.id, OWNER_ID, 60_000)).toBe(true);
     const active = await fetch(`${baseUrl}/api/health`);
-    expect(await active.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: true, ownedAgentWorkActive: false, liveAgentProcessCount: 0, buildId: expect.any(String) });
+    // The promotion's own progress keeps the old backend alive but must not
+    // block the promotion build that is waiting on this health check.
+    expect(await active.json()).toEqual({ ok: true, mode: 'live', runtimeWorkActive: true, promotionBlockingWorkActive: false, ownedAgentWorkActive: false, liveAgentProcessCount: 0, buildId: expect.any(String) });
+
+    const reply = repository.createSharedMessage('claude', 'Working…', 'running', conversation.id, [], 'none');
+    expect(repository.claimSharedMessage(reply.id, OWNER_ID, 60_000)).toBe(true);
+    const agentActive = await fetch(`${baseUrl}/api/health`);
+    expect(await agentActive.json()).toEqual(expect.objectContaining({ runtimeWorkActive: true, promotionBlockingWorkActive: true }));
   });
 
   it('persists a manually selected bug-fix type when creating a task', async () => {

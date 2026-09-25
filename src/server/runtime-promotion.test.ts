@@ -31,6 +31,11 @@ describe('runtime drain state', () => {
     expect(promotionMustWaitForAgents({ runtimeWorkActive: false, ownedAgentWorkActive: true, liveAgentProcessCount: 1 } as never)).toBe(false);
   });
 
+  it('does not wait on its own promotion progress when no other agent work is live', () => {
+    expect(promotionMustWaitForAgents({ runtimeWorkActive: true, promotionBlockingWorkActive: false })).toBe(false);
+    expect(promotionMustWaitForAgents({ runtimeWorkActive: true, promotionBlockingWorkActive: true })).toBe(true);
+  });
+
   it('keeps the old runtime alive for both agent work and system promotion progress', () => {
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);

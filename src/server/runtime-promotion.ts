@@ -3,7 +3,11 @@ import { join, resolve } from 'node:path';
 
 const MAX_OUTPUT = 20_000;
 
-export function promotionMustWaitForAgents(status: { runtimeWorkActive?: unknown }): boolean {
+/** The promotion build runs while its own progress message is live, so it must
+ * wait on work excluding itself. A live runtime released before that field
+ * existed only reports runtimeWorkActive; honor it rather than skip the wait. */
+export function promotionMustWaitForAgents(status: { runtimeWorkActive?: unknown; promotionBlockingWorkActive?: unknown }): boolean {
+  if (typeof status.promotionBlockingWorkActive === 'boolean') return status.promotionBlockingWorkActive;
   return status.runtimeWorkActive === true;
 }
 

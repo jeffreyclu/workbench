@@ -18,7 +18,10 @@ import { getMcpQualityAutomationStatus } from '../mcp-quality-monitor.js';
 export function createHealthRouter({ repository, capabilities, buildId }: RouteContext) {
   const router = Router();
   router.get('/api/health', (_request, response) => {
-    response.json({ ok: true, mode: capabilities.mode, runtimeWorkActive: repository.hasRuntimeWork(OWNER_ID), ownedAgentWorkActive: repository.hasOwnedAgentWork(OWNER_ID), liveAgentProcessCount: activeAgentProcessCount(), buildId });
+    // runtimeWorkActive drains a retiring backend and must include promotion
+    // progress. promotionBlockingWorkActive is what a promotion build waits on:
+    // counting its own running message would make every promotion wait on itself.
+    response.json({ ok: true, mode: capabilities.mode, runtimeWorkActive: repository.hasRuntimeWork(OWNER_ID), promotionBlockingWorkActive: repository.hasPromotionBlockingWork(OWNER_ID), ownedAgentWorkActive: repository.hasOwnedAgentWork(OWNER_ID), liveAgentProcessCount: activeAgentProcessCount(), buildId });
   });
   return router;
 }

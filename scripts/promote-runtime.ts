@@ -30,7 +30,7 @@ function activeAgentWork(): Promise<boolean | null> {
       response.on('data', (chunk: string) => { body = `${body}${chunk}`.slice(-4_000); });
       response.on('end', () => {
         try {
-          const status = JSON.parse(body) as { runtimeWorkActive?: unknown };
+          const status = JSON.parse(body) as { runtimeWorkActive?: unknown; promotionBlockingWorkActive?: unknown };
           resolveStatus(promotionMustWaitForAgents(status));
         } catch { resolveStatus(null); }
       });
