@@ -53,6 +53,7 @@ import { ConversationOriginBadge, ModelProfileSelect, ReferenceTypeIcon } from '
 import { CreateTask, type CreateTaskReopenState } from '../../components/dialogs/create-task-dialog';
 import { DiscoveryInboxView } from '../discovery';
 import { useNavigation } from '../../features/navigation/hooks';
+import { useTabCounts } from '../../features/navigation/data';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../components/dialogs/follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, formatFileSize, formatRunBadge, formatRunTelemetry, memorySourceLabel, selectBalancedVisibleAgent, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../lib/formatters';
@@ -62,7 +63,7 @@ import { StackHeader } from '../../components/stack-header';
 import { StackList } from '../../components/stack-list';
 import { ProjectColorDot } from '../../components/project/project-color';
 import { InlineProjectEditor } from '../../components/project/project-field';
-import { CountBadge } from '../../components/count-badge';
+import { TabCount } from '../../components/tab-count';
 import { Tabs } from '../../components/tabs/tabs';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
 import { SourcesDialog } from '../source';
@@ -203,7 +204,8 @@ export function App() {
   }, [route, agentConversationId]);
   const { state: realtimeConnectionState, browserOffline: realtimeBrowserOffline, retryNow: retryRealtimeConnection } = useRealtimeNotifications(handleRealtimeNotification);
   const view = route.name === 'stack' ? route.stack : route.name === 'task' ? taskStack : route.name === 'conversations' ? 'context' : route.name;
-  const { mobileNavOpen, setMobileNavOpen, isCompactNav, workItems: workItemCounts, conversations: totalConversationCount } = useNavigation();
+  const { mobileNavOpen, setMobileNavOpen, isCompactNav } = useNavigation();
+  const tabCounts = useTabCounts();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
   const queueScrollRef = useRef<HTMLDivElement>(null);
   const [isTaskDragging, setIsTaskDragging] = useState(false);
@@ -354,7 +356,7 @@ export function App() {
       setSelectedIds((current) => new Set([...current].filter((id) => !applied.has(id))));
       if (conflicts.length) toast.error(`${conflicts.length} task${conflicts.length === 1 ? '' : 's'} could not be updated: ${conflicts.map((entry) => entry.reason.replace('_', ' ')).join(', ')}`);
       else toast.success(`${applied.size} task${applied.size === 1 ? '' : 's'} updated.`);
-      void Promise.all([queryClient.invalidateQueries({ queryKey: ['work-items'] }), queryClient.invalidateQueries({ queryKey: ['work-item-counts'] })]);
+      void queryClient.invalidateQueries({ queryKey: ['work-items'] });
     },
     onError: (error) => toastError('Could not update the selected tasks.', error),
   });
@@ -366,7 +368,9 @@ export function App() {
     [pendingTaskReorder, serverFiltered],
   );
   const taskStackScope = isArchiveView ? 'archive' : view === 'workbench' ? 'workbench' : 'attention';
-  const { items: renderedItems, rows: renderedRows } = useMemo(() => createTaskStackViewModel(filtered, taskStackScope), [filtered, taskStackScope]);
+  // Section totals label the whole stack, so a search result shows no totals.
+  const stackGroupCounts = taskSearch.trim() || taskStackScope === 'archive' ? undefined : tabCounts.data?.[taskStackScope]?.groups;
+  const { items: renderedItems, rows: renderedRows } = useMemo(() => createTaskStackViewModel(filtered, taskStackScope, stackGroupCounts), [filtered, taskStackScope, stackGroupCounts]);
   // Rendered sections are separate rank domains. The Attention section contains
   // several raw statuses, so drag-and-drop must use this visible grouping rather
   // than treating each status as a separate list.
@@ -578,8 +582,7 @@ export function App() {
         view={view === 'workbench-archive' ? 'workbench' : view}
         mobileNavOpen={mobileNavOpen}
         isCompactNav={isCompactNav}
-        counts={workItemCounts.data}
-        conversationCount={totalConversationCount.data?.count}
+        counts={tabCounts.data}
         onOpenActive={() => { openPrimaryStack('active'); setMobileNavOpen(false); }}
         onOpenWorkbench={() => { openPrimaryStack('workbench'); setMobileNavOpen(false); }}
         onOpenDiscovery={() => { navigate({ name: 'discovery' }); setMobileNavOpen(false); }}
@@ -619,8 +622,8 @@ export function App() {
           {taskSearch && <button type="button" className="icon-button" aria-label="Clear task search" onClick={() => setTaskSearch('')}><X size={13} /></button>}
         </div>
         <Tabs ariaLabel="Task view" className="stack-view-filter task-view-filter" panelClassName="queue-tab-panel" selected={isArchiveView ? 'archive' : 'active'} onSelect={(value) => navigate({ name: 'stack', stack: value === 'archive' ? (isWorkbenchScope ? 'workbench-archive' : 'archive') : (isWorkbenchScope ? 'workbench' : 'active') })} items={[
-          { value: 'active', label: <>Active <CountBadge as="span" value={!isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbench ?? 0 : workItemCounts.data?.active ?? 0} /></> },
-          { value: 'archive', label: <>Archive <CountBadge as="span" value={isArchiveView ? items.data?.pages[0]?.totalCount ?? 0 : isWorkbenchScope ? workItemCounts.data?.workbenchArchive ?? 0 : workItemCounts.data?.attentionArchive ?? 0} /></> },
+          { value: 'active', label: <>Active <TabCount value={tabCounts.data?.[isWorkbenchScope ? 'workbench' : 'attention']?.active} /></> },
+          { value: 'archive', label: <>Archive <TabCount value={tabCounts.data?.[isWorkbenchScope ? 'workbench' : 'attention']?.archive} /></> },
         ]}>
         {selectedIds.size > 0 && <div className="queue-bulkbar" role="toolbar" aria-label="Bulk task actions"><span>{selectedIds.size} selected</span><button onClick={() => bulkUpdate.mutate({ action: isArchiveView ? 'restore' : 'archive', ids: [...selectedIds] })} disabled={bulkUpdate.isPending}>{isArchiveView ? 'Restore' : 'Archive'}</button><button onClick={() => setSelectedIds(new Set())}>Clear</button>{isWorkbenchScope && <small>Workbench is filtered to the Workbench project.</small>}</div>}
         {items.data?.pages[0]?.proposal && (
@@ -655,7 +658,7 @@ export function App() {
             </Fragment>)}
           </div>
           {items.isFetchingNextPage && <TaskQueueSkeleton count={2} />}
-          {!items.hasNextPage && filtered.length > 0 && <div className="page-state">All {items.data?.pages[0]?.totalCount ?? filtered.length} items loaded</div>}
+          {!items.hasNextPage && filtered.length > 0 && <div className="page-state">All {filtered.length} items loaded</div>}
         </StackList>
         </DndContext>
         </Tabs>

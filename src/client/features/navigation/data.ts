@@ -1,15 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../data/api';
 
-export const navigationQueryKeys = {
-  workItemCounts: ['work-item-counts'] as const,
-  conversationCount: ['conversation-count'] as const,
-  archivedConversationCount: ['archived-conversation-count'] as const,
-};
+export const tabCountsQueryKey = ['tab-counts'] as const;
 
-export function useNavigationCounts() {
-  const workItems = useQuery({ queryKey: navigationQueryKeys.workItemCounts, queryFn: api.getWorkItemCounts });
-  const conversations = useQuery({ queryKey: navigationQueryKeys.conversationCount, queryFn: api.getConversationCount });
-  const archivedConversations = useQuery({ queryKey: navigationQueryKeys.archivedConversationCount, queryFn: api.getArchivedConversationCount });
-  return { workItems, conversations, archivedConversations };
+/**
+ * The only source for Active/Archive numbers anywhere in the app. Badges must
+ * never derive a number from a loaded list page: the list reflects search and
+ * filters, while the tab labels the whole view.
+ */
+export function useTabCounts() {
+  return useQuery({ queryKey: tabCountsQueryKey, queryFn: api.getTabCounts });
 }

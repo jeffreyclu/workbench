@@ -1,4 +1,5 @@
-import { QueryClient, type DefaultOptions } from '@tanstack/react-query';
+import { MutationCache, QueryClient, type DefaultOptions } from '@tanstack/react-query';
+import { tabCountsQueryKey } from '../features/navigation/data';
 
 /**
  * The application WebSocket is the durable record transport, not a navigation
@@ -19,6 +20,15 @@ export const workbenchQueryDefaults = {
   },
 } satisfies DefaultOptions;
 
+/**
+ * Tab counts are refetched after every settled mutation, not only when the
+ * WebSocket reports a change, so a create, archive, restore, complete, or
+ * delete updates the Active/Archive numbers as soon as the server answers.
+ */
 export function createWorkbenchQueryClient(defaultOptions: DefaultOptions = workbenchQueryDefaults): QueryClient {
-  return new QueryClient({ defaultOptions });
+  const queryClient: QueryClient = new QueryClient({
+    defaultOptions,
+    mutationCache: new MutationCache({ onSettled: () => queryClient.invalidateQueries({ queryKey: tabCountsQueryKey }) }),
+  });
+  return queryClient;
 }

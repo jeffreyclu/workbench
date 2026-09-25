@@ -11,10 +11,7 @@ const ACTION_MESSAGES: Record<'convert' | 'dismiss' | 'snooze', string> = { conv
 
 function invalidateDiscovery(queryClient: ReturnType<typeof useQueryClient>, includeWorkItems = false) {
   void queryClient.invalidateQueries({ queryKey: discoveryQueryKeys.root });
-  if (includeWorkItems) {
-    void queryClient.invalidateQueries({ queryKey: ['work-items'] });
-    void queryClient.invalidateQueries({ queryKey: ['work-item-counts'] });
-  }
+  if (includeWorkItems) void queryClient.invalidateQueries({ queryKey: ['work-items'] });
 }
 
 export function useDiscoveryNav() {

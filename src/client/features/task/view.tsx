@@ -314,7 +314,6 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         queryClient.invalidateQueries({ queryKey: ['archived-work-items'] }),
         queryClient.invalidateQueries({ queryKey: ['shared-messages'] }),
         queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
-        queryClient.invalidateQueries({ queryKey: ['work-item-counts'] }),
       ]);
     },
     onError: (error, action) => toastError(lifecycleErrorSummary[action], error),
@@ -325,7 +324,6 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       toast.success('Task restored.');
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
-        queryClient.invalidateQueries({ queryKey: ['work-item-counts'] }),
         queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
       ]);
     },

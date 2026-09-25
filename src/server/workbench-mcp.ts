@@ -219,12 +219,12 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     inputSchema: {},
     annotations: readOnlyAnnotations,
   }, async () => runTool('list_stacks', () => {
-    const counts = repository.getWorkItemCounts();
+    const counts = repository.getTabCounts();
     return {
       stacks: [
-        { name: 'attention', count: counts.active, orderedWorkItemIds: repository.list().map((item) => item.id) },
-        { name: 'workbench', count: counts.workbench, orderedWorkItemIds: repository.listWorkbench().map((item) => item.id) },
-        { name: 'archive', count: counts.archive },
+        { name: 'attention', count: counts.attention.active, orderedWorkItemIds: repository.list().map((item) => item.id) },
+        { name: 'workbench', count: counts.workbench.active, orderedWorkItemIds: repository.listWorkbench().map((item) => item.id) },
+        { name: 'archive', count: counts.attention.archive + counts.workbench.archive },
       ],
     };
   }));

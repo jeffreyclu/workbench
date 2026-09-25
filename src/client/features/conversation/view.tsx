@@ -44,7 +44,7 @@ import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, SELF_ASSIGNED_EXECUTION_MESSAG
 import type { AiProviderChoice } from '../../../shared/ai-providers';
 import { ComposerProviderSelect, type ComposerProvider } from '../../components/composer-provider-select';
 import { ComposerModelSelect } from '../../components/composer-model-select';
-import { CountBadge } from '../../components/count-badge';
+import { TabCount } from '../../components/tab-count';
 import { StackHeader } from '../../components/stack-header';
 import { StackList } from '../../components/stack-list';
 import type { AgentRun, Assignee, ExecutionPlan, ProviderSyncConflict, SharedConversation, SharedMessage, SharedMessagePage, UpdateWorkItemInput, WorkItem, WorkItemDetail, WorkItemPage, WorkItemReference, WorkItemReferenceType } from '../../../shared/contracts';
@@ -62,7 +62,7 @@ import { AgentMessageBody, LiveRunOutput, splitBodyAtInterjections, type AgentMe
 import { ConversationOriginBadge, ReferenceTypeIcon } from '../../components/badges';
 import { CreateTask } from '../../components/dialogs/create-task-dialog';
 import { DiscoveryInboxView } from '../discovery';
-import { useNavigation } from '../../features/navigation/hooks';
+import { useTabCounts } from '../../features/navigation/data';
 import { NavigationView } from '../../features/navigation/view';
 import { FollowUpArchiveDialog } from '../../components/dialogs/follow-up-archive-dialog';
 import { activityKindLabel, agentDecisionKinds, compactTokenCount, formatFileSize, formatRunBadge, formatRunTelemetry, sourceLinkLabel, sourceReferenceTitle, sourceReferenceType, taskDetailSaveFeedback } from '../../lib/formatters';
@@ -324,7 +324,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   // conversation caller, including task comments and execution commands.
   const [isPhoneChrome, setIsPhoneChrome] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 820px) and (pointer: coarse)').matches);
   const queryClient = useQueryClient();
-  const { conversations: activeConversationCount, archivedConversations: archivedConversationCount } = useNavigation();
+  const tabCounts = useTabCounts();
   const [body, setBody] = useState(() => initialConversationId ? readConversationDrafts()[initialConversationId] ?? '' : '');
   const [composerSelection, setComposerSelection] = useState<ComposerSelection>(defaultComposerSelection);
   const [selectionHydratedFor, setSelectionHydratedFor] = useState<string | null>(null);
@@ -560,7 +560,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       { id: 'conversation-pinned-header', label: 'Pinned for you', group: 'pinned' as const, rows: pinned },
     ];
     return groups.flatMap((group) => group.rows.length === 0 && group.group !== 'pinned' ? [] : [
-      { type: 'header' as const, id: group.id, label: group.label, count: group.rows.length, group: group.group },
+      // Section membership depends on live agent state, so no server total exists; show the label only.
+      { type: 'header' as const, id: group.id, label: group.label, count: undefined, group: group.group },
       ...group.rows,
     ]);
   }, [activeConversationIds, conversationList, conversationView, fallbackConversationStates]);
@@ -962,7 +963,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       showConversationStackOnly();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
-        queryClient.invalidateQueries({ queryKey: ['work-item-counts'] }),
         linkedWorkItemId ? queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] }) : Promise.resolve(),
       ]);
       void queryClient.invalidateQueries({ queryKey: ['shared-conversations'] });
@@ -990,7 +990,6 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
         queryClient.invalidateQueries({ queryKey: ['archived-work-items'] }),
-        queryClient.invalidateQueries({ queryKey: ['work-item-counts'] }),
         queryClient.invalidateQueries({ queryKey: ['work-item', item.id] }),
       ]);
       if (completedConversationId) {
@@ -1379,8 +1378,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         ) : (
           <>
             <Tabs ariaLabel="Conversation view" className="conversation-view-tabs" panelClassName="conversation-tab-panel" selected={conversationView} onSelect={selectConversationView} items={[
-              { value: 'active', label: <>Active <CountBadge as="span" value={conversationView === 'active' ? conversations.data?.pages[0]?.totalCount ?? 0 : activeConversationCount.data?.count ?? 0} /></> },
-              { value: 'archive', label: <>Archive <CountBadge as="span" value={conversationView === 'archive' ? conversations.data?.pages[0]?.totalCount ?? 0 : archivedConversationCount.data?.count ?? 0} /></> },
+              { value: 'active', label: <>Active <TabCount value={tabCounts.data?.conversations?.active} /></> },
+              { value: 'archive', label: <>Archive <TabCount value={tabCounts.data?.conversations?.archive} /></> },
             ]}>
             <StackList scrollRef={conversationScrollRef} className="conversation-tabs">
               <div className="virtual-list" style={{ height: conversationVirtualizer.getTotalSize() }}>

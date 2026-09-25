@@ -238,14 +238,25 @@ export interface BulkWorkItemResult { appliedIds: string[]; conflicts: BulkWorkI
 export interface WorkItemPage {
   items: WorkItem[];
   nextCursor: string | null;
-  totalCount: number;
   proposal: QueueProposal | null;
 }
 
 export interface ConversationPage {
   conversations: SharedConversation[];
   nextCursor: string | null;
-  totalCount: number;
+}
+
+/** Active tasks split by the sections of the stack; the three always sum to `active`. */
+export interface TaskStackGroupCounts { progress: number; attention: number; pinned: number; }
+
+/**
+ * Every Active/Archive number in the app, read from one database snapshot.
+ * Each number is the size of the matching unfiltered list view.
+ */
+export interface TabCounts {
+  attention: { active: number; archive: number; groups: TaskStackGroupCounts };
+  workbench: { active: number; archive: number; groups: TaskStackGroupCounts };
+  conversations: { active: number; archive: number };
 }
 
 export interface SharedMessagePage {

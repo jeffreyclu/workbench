@@ -17,6 +17,25 @@ export const workbenchProjectPredicate = `(COALESCE(project_key, '') = '${WORKBE
   OR (project_key IS NULL AND COALESCE(project_name, '') = '${WORKBENCH_PROJECT_NAME}' COLLATE NOCASE))`;
 export const nonWorkbenchProjectPredicate = `NOT ${workbenchProjectPredicate}`;
 
+export type WorkItemView = 'active' | 'workbench' | 'archive' | 'workbench-archive';
+
+const openWorkItem = `is_queued = 1 AND archived_at IS NULL AND deleted_at IS NULL AND status NOT IN ('done', 'canceled')`;
+const archivedWorkItem = 'archived_at IS NOT NULL AND deleted_at IS NULL';
+
+/**
+ * The only definition of which work items belong to each task view. The
+ * paginated list and the tab counts both read these clauses, so a tab's
+ * number is always the size of the list it labels. Archive is a filter within
+ * its parent stack: attention excludes Workbench-project work, and Workbench
+ * includes only that work.
+ */
+export const workItemViewScopes: Record<WorkItemView, string> = {
+  active: `${openWorkItem} AND ${nonWorkbenchProjectPredicate}`,
+  workbench: `${openWorkItem} AND ${workbenchProjectPredicate}`,
+  archive: `${archivedWorkItem} AND ${nonWorkbenchProjectPredicate}`,
+  'workbench-archive': `${archivedWorkItem} AND ${workbenchProjectPredicate}`,
+};
+
 export interface WorkItemRow {
   id: string;
   title: string;
@@ -109,7 +128,6 @@ export function mapWorkItemRow(row: WorkItemRow): WorkItem {
 export interface WorkItemPageRows {
   items: WorkItem[];
   nextCursor: string | null;
-  totalCount: number;
 }
 
 export interface WorkItemInsertBase {
@@ -200,23 +218,6 @@ export class WorkItemRepository {
     return rows.map(mapWorkItemRow);
   }
 
-  counts(): { active: number; workbench: number; archive: number; attentionArchive: number; workbenchArchive: number } {
-    const row = this.database.prepare(`SELECT
-      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status != 'done' AND ${nonWorkbenchProjectPredicate} THEN 1 ELSE 0 END) AS active,
-      SUM(CASE WHEN is_queued = 1 AND archived_at IS NULL AND status != 'done' AND ${workbenchProjectPredicate} THEN 1 ELSE 0 END) AS workbench,
-      SUM(CASE WHEN archived_at IS NOT NULL THEN 1 ELSE 0 END) AS archive,
-      SUM(CASE WHEN archived_at IS NOT NULL AND ${nonWorkbenchProjectPredicate} THEN 1 ELSE 0 END) AS attention_archive,
-      SUM(CASE WHEN archived_at IS NOT NULL AND ${workbenchProjectPredicate} THEN 1 ELSE 0 END) AS workbench_archive
-      FROM work_items WHERE deleted_at IS NULL`).get() as { active: number | null; workbench: number | null; archive: number | null; attention_archive: number | null; workbench_archive: number | null };
-    return {
-      active: Number(row.active ?? 0),
-      workbench: Number(row.workbench ?? 0),
-      archive: Number(row.archive ?? 0),
-      attentionArchive: Number(row.attention_archive ?? 0),
-      workbenchArchive: Number(row.workbench_archive ?? 0),
-    };
-  }
-
   searchLinear(query: string, limit = 20): WorkItem[] {
     const needle = `%${query.trim()}%`;
     const rows = this.database
@@ -253,7 +254,7 @@ export class WorkItemRepository {
    * filter set. Purely a `work_items` read: dependency, lineage, agent-outcome
    * decoration, and the queue proposal all stay in the facade's `listPage`.
    */
-  listPage(view: 'active' | 'workbench' | 'archive' | 'workbench-archive', limit: number, cursor: string | null, filter: WorkItemFilter, timeZone: string): WorkItemPageRows {
+  listPage(view: WorkItemView, limit: number, cursor: string | null, filter: WorkItemFilter, timeZone: string): WorkItemPageRows {
     const safeLimit = Math.max(1, Math.min(100, limit));
     const normalizedFilter = { ...filter, projectNames: [...new Set(filter.projectNames)].sort(), statuses: [...new Set(filter.statuses)].sort(), assignees: [...new Set(filter.assignees)].sort(), sources: [...new Set(filter.sources)].sort(), labels: [...new Set(filter.labels)].sort(), dueStates: [...new Set(filter.dueStates)].sort() };
     const fingerprint = JSON.stringify(normalizedFilter);
@@ -266,21 +267,12 @@ export class WorkItemRepository {
     }
     const search = `(? IS NULL OR title LIKE ? COLLATE NOCASE OR source_identifier LIKE ? COLLATE NOCASE OR project_name LIKE ? COLLATE NOCASE)`;
     const searchArgs = [needle, needle, needle, needle];
-    const active = `is_queued = 1 AND archived_at IS NULL AND deleted_at IS NULL AND status NOT IN ('done', 'canceled')`;
-    const workbench = `${active} AND ${workbenchProjectPredicate}`;
-    const attention = `${active} AND ${nonWorkbenchProjectPredicate}`;
-    const archived = 'archived_at IS NOT NULL AND deleted_at IS NULL';
     const projectScope = view === 'workbench' || view === 'workbench-archive' ? workbenchProjectPredicate : nonWorkbenchProjectPredicate;
     // A free-text search spans both the active and archived halves of the
     // current project scope (Workbench vs. attention) — the tab still names
     // which scope, but no longer confines the results to just that half.
     const isSearchQuery = needle !== null;
-    // Archive is a filter within its parent stack: attention excludes
-    // Workbench-project work, while Workbench archive includes only that work.
-    const where = isSearchQuery ? `${projectScope} AND deleted_at IS NULL`
-      : view === 'active' ? attention : view === 'workbench' ? workbench
-        : view === 'workbench-archive' ? `${archived} AND ${workbenchProjectPredicate}`
-          : `${archived} AND ${nonWorkbenchProjectPredicate}`;
+    const where = isSearchQuery ? `${projectScope} AND deleted_at IS NULL` : workItemViewScopes[view];
     const clauses: string[] = []; const args: string[] = [];
     const addIn = (column: string, values: string[]) => { if (values.length) { clauses.push(`${column} IN (${values.map(() => '?').join(', ')})`); args.push(...values); } };
     addIn('project_name', normalizedFilter.projectNames); addIn('status', normalizedFilter.statuses); addIn('source', normalizedFilter.sources);
@@ -310,8 +302,7 @@ export class WorkItemRepository {
       ? Buffer.from(JSON.stringify(isSearchQuery ? { archivedGroup: last.archived_at ? 1 : 0, updatedAt: last.updated_at, id: last.id, view, fingerprint }
         : !isArchive ? { position: last.queue_position, id: last.id, view, fingerprint } : { archivedAt: last.archived_at, id: last.id, view, fingerprint })).toString('base64url')
       : null;
-    const totalCount = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM work_items WHERE ${where} AND ${search}${filters}`).get(...searchArgs, ...args) as { count: number }).count);
-    return { items: pageRows.map(mapWorkItemRow), nextCursor, totalCount };
+    return { items: pageRows.map(mapWorkItemRow), nextCursor };
   }
 
   nextQueuePosition(): number {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkspaceDiff } from '../shared/contracts.js';
+import type { WorkItem, WorkspaceDiff } from '../shared/contracts.js';
 import { buildReviewDecisions, contentHashOfLines } from '../shared/review-decisions.js';
 import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
@@ -1946,7 +1946,6 @@ describe('WorkItemRepository', () => {
     repository.createConversation('Third');
     const firstPage = repository.listConversationPage(2, null);
     expect(firstPage.conversations).toHaveLength(2);
-    expect(firstPage.totalCount).toBe(3);
     expect(firstPage.nextCursor).toBeTruthy();
     const secondPage = repository.listConversationPage(2, firstPage.nextCursor);
     expect(secondPage.conversations).toHaveLength(1);
@@ -1975,11 +1974,36 @@ describe('WorkItemRepository', () => {
     expect(conversations[1]?.linkedWorkItemPinned).toBe(false);
   });
 
-  it('reports active and archive counts independently of pagination', () => {
-    repository.create({ title: 'Active', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    const archived = repository.create({ title: 'Archived', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
-    repository.archive(archived.id, false);
-    expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 0, archive: 1, attentionArchive: 1, workbenchArchive: 0 });
+  it('reports every tab count as the exact size of the list it labels', () => {
+    const make = (title: string, status: WorkItem['status'], projectName: string | null) => repository.create({ title, description: '', priority: 2, status, projectName, workspacePath: null, dueDate: null });
+    make('Ready', 'ready', null);
+    make('In progress', 'in_progress', 'Connectors');
+    make('Pinned', 'pinned', null);
+    const canceled = make('Canceled', 'ready', null); repository.update(canceled.id, { status: 'canceled' });
+    const done = make('Done', 'ready', null); repository.update(done.id, { status: 'done' });
+    make('Workbench ready', 'ready', 'Workbench');
+    make('Workbench pinned', 'pinned', 'Workbench');
+    const archived = make('Archived', 'ready', null); repository.archive(archived.id, false);
+    const workbenchArchived = make('Workbench archived', 'ready', 'Workbench'); repository.archive(workbenchArchived.id, false);
+    const deleted = make('Deleted', 'ready', null); repository.delete(deleted.id);
+    repository.createConversation('Open');
+    const closed = repository.createConversation('Closed'); repository.setConversationArchived(closed.id, true);
+
+    const emptyFilter = { query: '', projectNames: [], statuses: [], assignees: [], sources: [], labels: [], dueStates: [] };
+    const size = (view: 'active' | 'workbench' | 'archive' | 'workbench-archive') => repository.listPage(view, 100, null, emptyFilter).items.length;
+    const counts = repository.getTabCounts();
+
+    expect(counts.attention.active).toBe(size('active'));
+    expect(counts.attention.archive).toBe(size('archive'));
+    expect(counts.workbench.active).toBe(size('workbench'));
+    expect(counts.workbench.archive).toBe(size('workbench-archive'));
+    expect(counts.conversations.active).toBe(repository.listConversationPage(100, null, 'active').conversations.length);
+    expect(counts.conversations.archive).toBe(repository.listConversationPage(100, null, 'archive').conversations.length);
+    expect(counts).toEqual({
+      attention: { active: 3, archive: 1, groups: { progress: 1, attention: 1, pinned: 1 } },
+      workbench: { active: 2, archive: 1, groups: { progress: 0, attention: 1, pinned: 1 } },
+      conversations: { active: 1, archive: 1 },
+    });
   });
 
   it('renders Workbench-project tasks as an ordered focus of the attention stack', () => {
@@ -1989,7 +2013,7 @@ describe('WorkItemRepository', () => {
     repository.move(first.id, { beforeId: second.id });
     expect(repository.list().map((item) => item.id)).toEqual([first.id, second.id, attention.id]);
     expect(repository.listWorkbench().map((item) => item.id)).toEqual([first.id, second.id]);
-    expect(repository.getWorkItemCounts()).toEqual({ active: 1, workbench: 2, archive: 0, attentionArchive: 0, workbenchArchive: 0 });
+    expect(repository.getTabCounts()).toMatchObject({ attention: { active: 1, archive: 0 }, workbench: { active: 2, archive: 0 } });
   });
 
   it('never surfaces Workbench-project tasks in the paginated active view', () => {
@@ -2973,7 +2997,8 @@ describe('WorkItemRepository', () => {
 
       expect(repository.list().map((item) => item.id)).toEqual(expect.arrayContaining([attention.id, workbench.id]));
       expect(repository.listWorkbench().map((item) => item.id)).toEqual([workbench.id]);
-      expect(repository.getWorkItemCounts()).toEqual(expect.objectContaining({ active: 1, workbench: 1 }));
+      // Canceled work is hidden from the paged stacks, so the tab counts exclude it too.
+      expect(repository.getTabCounts()).toMatchObject({ attention: { active: 0 }, workbench: { active: 0 } });
     });
 
     it('ignores legacy stack input when creating work', () => {
@@ -2992,7 +3017,7 @@ describe('WorkItemRepository', () => {
       expect(renamed.stack).toBe('attention');
       expect(repository.listWorkbench()).toHaveLength(0);
       expect(repository.list().map((entry) => entry.id)).toEqual([item.id]);
-      expect(repository.getWorkItemCounts()).toEqual(expect.objectContaining({ active: 1, workbench: 0 }));
+      expect(repository.getTabCounts()).toMatchObject({ attention: { active: 1 }, workbench: { active: 0 } });
     });
 
     it('pulls a task into the Workbench focus by naming its project Workbench', () => {
@@ -3300,7 +3325,7 @@ describe('task dependencies', () => {
         .toEqual(['A different project', 'No project at all']);
       expect(repository.listPage('workbench', 50, null, emptyFilter).items.map((item) => item.title).sort())
         .toEqual(['Abbreviated', 'Typed badly', 'Typed correctly']);
-      expect(repository.getWorkItemCounts()).toMatchObject({ active: 2, workbench: 3 });
+      expect(repository.getTabCounts()).toMatchObject({ attention: { active: 2 }, workbench: { active: 3 } });
     });
 
     it('leaves an unrelated name as its own project rather than guessing', () => {

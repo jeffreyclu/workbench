@@ -2286,7 +2286,7 @@ describe('task execution', () => {
       if (url === `/api/agent-runs/${runId}/cancel`) return new Response(JSON.stringify({ run: { ...runningRun, status: 'canceled', completedAt: '2026-01-01T00:01:00Z' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.includes(`/api/work-items/${taskId}`)) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [runningRun], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [item], nextCursor: null, totalCount: 1, proposal: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url === '/api/work-item-counts') return new Response(JSON.stringify({ active: 1, workbench: 0, archive: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/tab-counts') return new Response(JSON.stringify({ attention: { active: 1, archive: 0, groups: { progress: 0, attention: 1, pinned: 0 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -2325,7 +2325,7 @@ describe('task execution', () => {
       if (url === `/api/agent-accounts`) return new Response(JSON.stringify({ accounts: [{ name: 'default', providers: {} }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.includes(`/api/work-items/${taskId}`)) return new Response(JSON.stringify({ item: { ...item, status }, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [], providerConflicts: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [{ ...item, status }], nextCursor: null, totalCount: 1, proposal: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url === '/api/work-item-counts') return new Response(JSON.stringify({ active: 1, workbench: 0, archive: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/tab-counts') return new Response(JSON.stringify({ attention: { active: 1, archive: 0, groups: { progress: 0, attention: 1, pinned: 0 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -2692,7 +2692,7 @@ describe('stack navigation', () => {
       if (url.startsWith('/api/shared/messages')) return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url === `/api/work-items/${taskId}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [item], nextCursor: null, totalCount: 1, proposal: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url === '/api/work-item-counts') return new Response(JSON.stringify({ active: 1, workbench: 0, archive: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/tab-counts') return new Response(JSON.stringify({ attention: { active: 1, archive: 0, groups: { progress: 0, attention: 1, pinned: 0 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -2725,7 +2725,7 @@ describe('stack navigation', () => {
       }
       if (url === `/api/work-items/${item.id}`) return new Response(JSON.stringify({ item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: created ? [item] : [], nextCursor: null, totalCount: created ? 1 : 0, proposal: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url === '/api/work-item-counts') return new Response(JSON.stringify({ active: 0, workbench: 0, archive: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/tab-counts') return new Response(JSON.stringify({ attention: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -2746,7 +2746,7 @@ describe('stack navigation', () => {
   it('opens the add-task dialog on the manual task view by default', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const body = url === '/api/work-item-counts' ? { active: 0, workbench: 0, archive: 0 }
+      const body = url === '/api/tab-counts' ? { attention: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }
         : url.startsWith('/api/work-items?') ? { items: [], nextCursor: null, totalCount: 0, proposal: null }
         : {};
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -2774,7 +2774,7 @@ describe('stack navigation', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [itemA, itemB], nextCursor: null, totalCount: 2, proposal: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url === '/api/work-item-counts') return new Response(JSON.stringify({ active: 2, workbench: 0, archive: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/tab-counts') return new Response(JSON.stringify({ attention: { active: 2, archive: 0, groups: { progress: 0, attention: 2, pinned: 0 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -2803,7 +2803,7 @@ describe('primary nav hover rail', () => {
   function stubEmptyQueue() {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const body = url === '/api/work-item-counts' ? { active: 0, workbench: 0, archive: 0 }
+      const body = url === '/api/tab-counts' ? { attention: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }
         : url.startsWith('/api/work-items?') ? { items: [], nextCursor: null, totalCount: 0, proposal: null }
         : {};
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -2838,10 +2838,10 @@ describe('primary nav hover rail', () => {
   it('shows each archive filter count before its archived list loads', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const body = url === '/api/work-item-counts'
-        ? { active: 0, workbench: 0, archive: 6, attentionArchive: 2, workbenchArchive: 4 }
+      const body = url === '/api/tab-counts'
+        ? { attention: { active: 0, archive: 2, groups: { progress: 0, attention: 0, pinned: 0 } }, workbench: { active: 0, archive: 4, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }
         : url.startsWith('/api/work-items?')
-          ? { items: [], nextCursor: null, totalCount: url.includes('view=workbench-archive') ? 4 : 2, proposal: null }
+          ? { items: [], nextCursor: null, proposal: null }
           : { items: [], conversations: [], messages: [], count: 0 };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
@@ -3011,7 +3011,7 @@ describe('addressable navigation', () => {
   function stubWorkbench(conversations: Array<Record<string, unknown>> = []) {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const body = url === '/api/work-item-counts' ? { active: 1, workbench: 0, archive: 0 }
+      const body = url === '/api/tab-counts' ? { attention: { active: 1, archive: 0, groups: { progress: 0, attention: 1, pinned: 0 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }
         : url === `/api/work-items/${taskId}` ? { item, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [] }
         : url.startsWith('/api/work-items?') ? { items: [item], nextCursor: null, totalCount: 1, proposal: null }
         : url === '/api/shared/conversations-unread-count' ? { count: 0 }
@@ -3077,7 +3077,7 @@ describe('addressable navigation', () => {
     window.history.replaceState(null, '', `/tasks/${taskId}`);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const body = url === '/api/work-item-counts' ? { active: 0, workbench: 1, archive: 0 }
+      const body = url === '/api/tab-counts' ? { attention: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, workbench: { active: 1, archive: 0, groups: { progress: 0, attention: 1, pinned: 0 } }, conversations: { active: 0, archive: 0 } }
         : url === `/api/work-items/${taskId}` ? { item: workbenchItem, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [] }
         : url.startsWith('/api/work-items?') ? { items: [workbenchItem], nextCursor: null, totalCount: 1, proposal: null }
         : url === '/api/shared/conversations-unread-count' ? { count: 0 }
@@ -3099,7 +3099,7 @@ describe('addressable navigation', () => {
     window.localStorage.setItem('workbench:last-opened-workbench-item', taskId);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const body = url === '/api/work-item-counts' ? { active: 0, workbench: 0, archive: 1 }
+      const body = url === '/api/tab-counts' ? { attention: { active: 0, archive: 1, groups: { progress: 0, attention: 0, pinned: 0 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }
         : url === `/api/work-items/${taskId}` ? { item: archivedWorkbenchItem, parentItem: null, children: [], activity: [], runs: [], executionPlan: null, classification: null, conversations: [], artifacts: [], references: [] }
         : url.startsWith('/api/work-items?') ? { items: [], nextCursor: null, totalCount: 0, proposal: null }
         : url === '/api/shared/conversations-unread-count' ? { count: 0 }

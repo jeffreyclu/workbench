@@ -403,8 +403,9 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
     response.status(204).end();
   });
 
-  router.get('/api/work-item-counts', (_request, response) => {
-    response.json(repository.getWorkItemCounts());
+  // Every Active/Archive tab number (tasks and conversations) from one snapshot.
+  router.get('/api/tab-counts', (_request, response) => {
+    response.json(repository.getTabCounts());
   });
 
   // The canonical project vocabulary. Backs the picker, so choosing an existing

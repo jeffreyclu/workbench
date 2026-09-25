@@ -57,7 +57,7 @@ describe('realtime application hook', () => {
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
     invalidateRealtimeTopics(client, ['work-items', 'shared', 'shared-messages', 'discovery', 'runtime', 'insights', 'artifacts'], new Set(), new Set(), true);
     for (const queryKey of [
-      ['work-items'], ['work-item'], ['work-item-counts'], ['shared-conversations'], ['shared-messages'],
+      ['work-items'], ['work-item'], ['tab-counts'], ['shared-conversations'], ['shared-messages'],
       ['shared-agent-events'], ['workspace-diff'], ['discovery'], ['runtime-preview-status'], ['health'],
       ['insights'], ['memory-diagnostics'], ['mcp-quality'], ['artifacts'],
     ]) expect(invalidateQueries).toHaveBeenCalledWith({ queryKey });

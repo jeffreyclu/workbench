@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ExternalEvidenceSnapshot } from '../shared/contracts.js';
 
-import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput, type DiffBlockReview, type UpsertDiffBlockReviewInput, type CreateStandaloneReviewInput, type StandaloneReview } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TabCounts, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput, type DiffBlockReview, type UpsertDiffBlockReviewInput, type CreateStandaloneReviewInput, type StandaloneReview } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -16,6 +16,7 @@ import { TelemetryRepository } from './repositories/telemetry-repository.js';
 import { SourceConnectionRepository } from './repositories/source-connection-repository.js';
 import { DiscoveryRepository } from './repositories/discovery-repository.js';
 import { ConversationRepository } from './repositories/conversation-repository.js';
+import { TabCountRepository } from './repositories/tab-count-repository.js';
 import { resolveCost } from './model-pricing.js';
 import { RunRepository, type RunPatch } from './repositories/run-repository.js';
 import { QueueRepository } from './repositories/queue-repository.js';
@@ -207,6 +208,7 @@ export class WorkItemRepository {
   private readonly sourceConnections: SourceConnectionRepository;
   private readonly discovery: DiscoveryRepository;
   private readonly conversations: ConversationRepository;
+  private readonly tabCounts: TabCountRepository;
   private readonly runs: RunRepository;
   private readonly queue: QueueRepository;
   private readonly workItems: WorkItemTableRepository;
@@ -223,6 +225,7 @@ export class WorkItemRepository {
     this.sourceConnections = new SourceConnectionRepository(this.unitOfWork);
     this.discovery = new DiscoveryRepository(this.unitOfWork);
     this.conversations = new ConversationRepository(this.unitOfWork);
+    this.tabCounts = new TabCountRepository(this.unitOfWork);
     this.shortTermMemory = new ShortTermMemoryStore(database, shortTermMemoryRoot);
     this.queue = new QueueRepository(this.unitOfWork);
     this.runs = new RunRepository(this.unitOfWork);
@@ -392,11 +395,10 @@ export class WorkItemRepository {
   }
 
   listConversationPage(limit: number, cursor: string | null, view: 'active' | 'archive' = 'active'): ConversationPage {
-    const { conversations: rawConversations, hasMore, totalCount } = this.conversations.listPage(limit, cursor, view);
+    const { conversations: rawConversations, hasMore } = this.conversations.listPage(limit, cursor, view);
     const conversations = rawConversations.map((conversation) => this.withConversationState(conversation));
     const last = conversations.at(-1);
-    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isPinned: Boolean(last.pinned || last.linkedWorkItemPinned), isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null,
-      totalCount };
+    return { conversations, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ isPinned: Boolean(last.pinned || last.linkedWorkItemPinned), isWorking: last.state === 'working', updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null };
   }
 
   createConversation(title = 'New conversation', workItemId: string | null = null): SharedConversation {
@@ -474,14 +476,6 @@ export class WorkItemRepository {
       if (linkedItem?.status === 'pinned') this.update(linkedItem.id, { status: 'ready' }, false, { actor: 'jeffrey', source: 'http' });
     }
     if (conversation.pinned) this.setConversationPinned(conversationId, false);
-  }
-
-  countActiveConversations(): number {
-    return this.conversations.countActive();
-  }
-
-  countArchivedConversations(): number {
-    return this.conversations.countArchived();
   }
 
   countUnreadConversations(): number {
@@ -1409,8 +1403,8 @@ export class WorkItemRepository {
   }
 
   listPage(view: 'active' | 'workbench' | 'archive' | 'workbench-archive', limit: number, cursor: string | null, filter: WorkItemFilter): WorkItemPage {
-    const { items, nextCursor, totalCount } = this.workItems.listPage(view, limit, cursor, filter, this.timeZone);
-    return { items: this.withDependencies(this.withLineage(items.map((item) => this.withAgentOutcome(item)))), nextCursor, totalCount, proposal: view === 'active' ? this.getPendingProposal('attention') : view === 'workbench' ? this.getPendingProposal('workbench') : null };
+    const { items, nextCursor } = this.workItems.listPage(view, limit, cursor, filter, this.timeZone);
+    return { items: this.withDependencies(this.withLineage(items.map((item) => this.withAgentOutcome(item)))), nextCursor, proposal: view === 'active' ? this.getPendingProposal('attention') : view === 'workbench' ? this.getPendingProposal('workbench') : null };
   }
 
   listSavedFilters(view?: SavedWorkItemFilterView): SavedWorkItemFilter[] {
@@ -1440,8 +1434,8 @@ export class WorkItemRepository {
     return listProjects(this.database);
   }
 
-  getWorkItemCounts(): { active: number; workbench: number; archive: number; attentionArchive: number; workbenchArchive: number } {
-    return this.workItems.counts();
+  getTabCounts(): TabCounts {
+    return this.tabCounts.read();
   }
 
   get(id: string): WorkItem | null {

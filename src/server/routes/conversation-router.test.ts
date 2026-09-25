@@ -424,21 +424,24 @@ describe('conversation router', () => {
   });
 
   describe('conversation counters', () => {
-    it('reports unread, attention, and active conversation counts', async () => {
+    it('reports unread and attention conversation counts', async () => {
       expect((await request('/api/shared/conversations-unread-count')).status).toBe(200);
       expect((await request('/api/shared/conversations-attention-count')).status).toBe(200);
-      expect((await request('/api/shared/conversations-count')).status).toBe(200);
     });
 
-    it('reports the archived conversation count', async () => {
-      const before = await (await request('/api/shared/conversations-archived-count')).json() as { count: number };
+    it('moves a conversation from the active to the archive tab count', async () => {
+      type Counts = { conversations: { active: number; archive: number } };
+      const before = await (await request('/api/tab-counts')).json() as Counts;
 
       const toArchive = await createConversation('Archive me');
+      const created = await (await request('/api/tab-counts')).json() as Counts;
+      expect(created.conversations).toEqual({ active: before.conversations.active + 1, archive: before.conversations.archive });
+
       const archiveResponse = await request(`/api/shared/conversations/${toArchive.id}/archive`, 'POST');
       expect(archiveResponse.status).toBe(200);
 
-      const after = await (await request('/api/shared/conversations-archived-count')).json() as { count: number };
-      expect(after.count).toBe(before.count + 1);
+      const after = await (await request('/api/tab-counts')).json() as Counts;
+      expect(after.conversations).toEqual({ active: before.conversations.active, archive: before.conversations.archive + 1 });
     });
   });
 

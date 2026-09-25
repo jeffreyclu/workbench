@@ -34,13 +34,13 @@ const REALTIME_INVALIDATION_BATCH_MS = 250;
 
 const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
   'work-items': [
-    ['work-items'], ['work-item-counts'], ['archived-work-items'],
+    ['work-items'], ['tab-counts'], ['archived-work-items'],
     ['pinned-reminder'], ['conversation-linkable-tasks'], ['dependency-candidates'], ['task-link-candidates'],
     ['projects'],
   ],
   shared: [
     ['shared-conversations'], ['shared-conversation'], ['shared-messages'], ['shared-message-activity'],
-    ['conversation-count'], ['notification-conversations'], ['conversation-unread-count'], ['conversation-attention-count'], ['shared-conversation-search'],
+    ['tab-counts'], ['notification-conversations'], ['conversation-unread-count'], ['conversation-attention-count'], ['shared-conversation-search'],
     ['shared-agent-events'], ['conversation-workspaces'], ['workspace-diff-status'],
     ['workspace-diff'], ['workspace-diff-snapshots'], ['workspace-diff-refs'], ['workspace-diff-ref'],
     ['workspace-diff-ref-commits'], ['workspace-diff-file-source'],
@@ -48,7 +48,7 @@ const topicQueryKeys: Record<RealtimeTopic, readonly (readonly unknown[])[]> = {
     ['promotion-queue-status'], ['agent-accounts'],
   ],
   'shared-metadata': [
-    ['shared-conversations'], ['shared-conversation'], ['conversation-count'],
+    ['shared-conversations'], ['shared-conversation'], ['tab-counts'],
     ['notification-conversations'], ['conversation-unread-count'], ['conversation-attention-count'],
   ],
   // ['shared-messages'] and ['shared-agent-events'] are deliberately absent

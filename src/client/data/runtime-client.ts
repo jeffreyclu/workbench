@@ -1,4 +1,4 @@
-import type { MemorySearchResponse, ProjectSummary } from '../../shared/contracts';
+import type { MemorySearchResponse, ProjectSummary, TabCounts } from '../../shared/contracts';
 import type { AiProviderAvailability, AiProviderChoice } from '../../shared/ai-providers';
 import { request } from './request';
 
@@ -9,7 +9,7 @@ export interface AgentAccountProfile {
 
 export const runtimeClient = {
   getHealth: () => request<{ ok: boolean; mode: string; runtimeWorkActive: boolean; buildId: string }>('/api/health'),
-  getWorkItemCounts: () => request<{ active: number; workbench: number; archive: number; attentionArchive: number; workbenchArchive: number }>('/api/work-item-counts'),
+  getTabCounts: () => request<TabCounts>('/api/tab-counts'),
   getProjects: () => request<{ projects: ProjectSummary[] }>('/api/projects'),
   getRuntimePreviewStatus: () => request<{ pending: boolean; currentFingerprint: string; promotedFingerprint: string | null; promotedAt: string | null }>('/api/runtime/preview-status'),
   getPromotionQueueStatus: () => request<{

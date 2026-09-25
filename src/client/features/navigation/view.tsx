@@ -2,14 +2,14 @@ import { Cloud, Command, MessageCircle, MoreHorizontal, Search, Settings, Wrench
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
-import type { MemorySearchResult } from '../../../shared/contracts';
+import type { MemorySearchResult, TabCounts } from '../../../shared/contracts';
 import { ArtifactNav } from '../artifacts/view';
 import { DiscoveryNav } from '../discovery';
 import { InsightsNav } from '../insights/view';
 import { memorySourceLabel } from '../../lib/formatters';
 import { api } from '../../data/api';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton';
-import { CountBadge } from '../../components/count-badge';
+import { TabCount } from '../../components/tab-count';
 import { useDebouncedValue } from '../conversation/hooks';
 
 export type NavigationViewName = 'active' | 'workbench' | 'archive' | 'artifacts' | 'context' | 'discovery' | 'insights';
@@ -268,12 +268,11 @@ function GlobalSearchResultSkeleton() {
 }
 
 
-export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conversationCount, onOpenActive, onOpenWorkbench, onOpenDiscovery, onOpenConversations, onOpenArtifacts, onOpenInsights, onOpenSources, onOpenSettings, onToggleMore, onSelectGlobalSearchResult }: {
+export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, onOpenActive, onOpenWorkbench, onOpenDiscovery, onOpenConversations, onOpenArtifacts, onOpenInsights, onOpenSources, onOpenSettings, onToggleMore, onSelectGlobalSearchResult }: {
   view: NavigationViewName;
   mobileNavOpen: boolean;
   isCompactNav: boolean;
-  counts: { active?: number; workbench?: number; archive?: number } | undefined;
-  conversationCount: number | undefined;
+  counts: TabCounts | undefined;
   onOpenActive: () => void;
   onOpenWorkbench: () => void;
   onOpenDiscovery: () => void;
@@ -293,10 +292,10 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, conv
   return <aside id="primary-nav" className="sidebar">
     <div className="brand"><PromotionQueueStatus /><span>Workbench</span></div>
     <nav onClick={releasePointerFocus}>
-      <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={onOpenActive}><Command size={16} /> Attention stack <CountBadge as="span" value={counts?.active} /></button>
-      <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <CountBadge as="span" value={counts?.workbench} /></button>
+      <button className={`nav-item ${view === 'active' ? 'active' : ''}`} onClick={onOpenActive}><Command size={16} /> Attention stack <TabCount value={counts?.attention?.active} /></button>
+      <button className={`nav-item ${view === 'workbench' ? 'active' : ''}`} onClick={onOpenWorkbench}><Wrench size={16} /> Workbench <TabCount value={counts?.workbench?.active} /></button>
       <DiscoveryNav active={view === 'discovery'} onClick={onOpenDiscovery} />
-      <button className={`nav-item mobile-conversation-nav ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <CountBadge as="span" value={conversationCount} /></button>
+      <button className={`nav-item mobile-conversation-nav ${view === 'context' ? 'active' : ''}`} onClick={onOpenConversations}><MessageCircle size={16} /> Conversations <TabCount value={counts?.conversations?.active} /></button>
       <div id="mobile-nav-more" className="mobile-nav-secondary" aria-label="More destinations">
         <div className="mobile-global-search global-search"><GlobalSearchTrigger search={globalSearch} /></div>
         <ArtifactNav active={view === 'artifacts'} onClick={onOpenArtifacts} />

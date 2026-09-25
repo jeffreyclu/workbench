@@ -7,7 +7,7 @@ function item(id: string): WorkItem {
 }
 
 function page(ids: string[]): WorkItemPage {
-  return { items: ids.map(item), nextCursor: null, totalCount: ids.length, proposal: null };
+  return { items: ids.map(item), nextCursor: null, proposal: null };
 }
 
 describe('reorderTaskPages', () => {

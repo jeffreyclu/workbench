@@ -22,6 +22,15 @@ function mapConversationRow(row: Record<string, string | number | null>): Shared
  * `WorkItemRepository`, calling back into the primitives here inside its own
  * `UnitOfWork` transaction.
  */
+/**
+ * The only definition of which conversations belong to each conversation
+ * view. The paginated list and the tab counts both read these clauses.
+ */
+export const conversationViewScopes: Record<'active' | 'archive', string> = {
+  active: 'deleted_at IS NULL AND archived_at IS NULL',
+  archive: 'deleted_at IS NULL AND archived_at IS NOT NULL',
+};
+
 export class ConversationRepository {
   constructor(private readonly unitOfWork: UnitOfWork) {}
 
@@ -58,11 +67,10 @@ export class ConversationRepository {
 
   /**
    * Cursor-paginated version of `list`, restricted to the active/archive
-   * split. Returns the base (un-decorated) conversations plus `hasMore` and
-   * `totalCount`; the caller builds the opaque `nextCursor` because it needs
+   * split. Returns the base (un-decorated) conversations plus `hasMore`; the caller builds the opaque `nextCursor` because it needs
    * each conversation's decorated `state` to do so.
    */
-  listPage(limit: number, cursor: string | null, view: 'active' | 'archive' = 'active'): { conversations: SharedConversation[]; hasMore: boolean; totalCount: number } {
+  listPage(limit: number, cursor: string | null, view: 'active' | 'archive' = 'active'): { conversations: SharedConversation[]; hasMore: boolean } {
     const safeLimit = Math.max(1, Math.min(100, limit));
     let cursorValues: { isPinned: boolean; isWorking: boolean; updatedAt: string; id: string } | null = null;
     if (cursor) {
@@ -81,14 +89,13 @@ export class ConversationRepository {
         FROM shared_conversations
       )
       SELECT * FROM conversations
-      WHERE deleted_at IS NULL AND ((? = 'active' AND archived_at IS NULL) OR (? = 'archive' AND archived_at IS NOT NULL))
+      WHERE ${conversationViewScopes[view]}
         AND (? IS NULL OR (pinned OR linked_work_item_pinned) < ? OR ((pinned OR linked_work_item_pinned) = ? AND (is_working < ? OR (is_working = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))))
       ORDER BY (pinned OR linked_work_item_pinned) DESC, is_working DESC, updated_at DESC, id DESC LIMIT ?
-    `).all(view, view, cursorValues?.id ?? null, Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isWorking ?? false), Number(cursorValues?.isWorking ?? false), cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
+    `).all(cursorValues?.id ?? null, Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isPinned ?? false), Number(cursorValues?.isWorking ?? false), Number(cursorValues?.isWorking ?? false), cursorValues?.updatedAt ?? null, cursorValues?.updatedAt ?? null, cursorValues?.id ?? null, safeLimit + 1) as Array<Record<string, string | number | null>>;
     const hasMore = rows.length > safeLimit;
     const conversations = rows.slice(0, safeLimit).map(mapConversationRow);
-    const totalCount = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM shared_conversations WHERE deleted_at IS NULL AND (${view === 'active' ? 'archived_at IS NULL' : 'archived_at IS NOT NULL'})`).get() as { count: number }).count);
-    return { conversations, hasMore, totalCount };
+    return { conversations, hasMore };
   }
 
   create(title = 'New conversation', workItemId: string | null = null): SharedConversation {
@@ -111,18 +118,6 @@ export class ConversationRepository {
 
   setPinned(id: string, pinned: boolean): boolean {
     return Number(this.database.prepare('UPDATE shared_conversations SET pinned = ?, updated_at = ? WHERE id = ?').run(Number(pinned), new Date().toISOString(), id).changes) > 0;
-  }
-
-  countActive(): number {
-    return Number((this.database.prepare(`
-      SELECT COUNT(*) AS count FROM shared_conversations WHERE archived_at IS NULL AND deleted_at IS NULL
-    `).get() as { count: number }).count);
-  }
-
-  countArchived(): number {
-    return Number((this.database.prepare(`
-      SELECT COUNT(*) AS count FROM shared_conversations WHERE archived_at IS NOT NULL AND deleted_at IS NULL
-    `).get() as { count: number }).count);
   }
 
   countUnread(): number {
