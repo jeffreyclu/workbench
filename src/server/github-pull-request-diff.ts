@@ -13,7 +13,7 @@ type GitHubPullRequestResponse = {
   html_url: string;
   title: string;
   number: number;
-  base: { ref: string };
+  base: { ref: string; sha: string };
   head: { ref: string; sha: string };
   changed_files: number;
   additions: number;
@@ -179,6 +179,7 @@ export async function getGitHubPullRequestDiff(
     number: pullRequest.number,
     title: pullRequest.title,
     baseRef: pullRequest.base.ref,
+    baseSha: pullRequest.base.sha,
     headRef: pullRequest.head.ref,
     headSha: pullRequest.head.sha,
     revision: pullRequest.head.sha,

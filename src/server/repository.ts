@@ -1101,6 +1101,13 @@ export class WorkItemRepository {
     return mapWorkspaceDiffSnapshot(this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash, repository_identity FROM workspace_diff_snapshots WHERE conversation_id = ? AND revision = ? AND ifnull(repository_identity, '') = ifnull(?, '')`).get(scope.conversationId, diff.revision, provenance.repositoryIdentity ?? null) as unknown as WorkspaceDiffSnapshotRow);
   }
 
+  /** Fill the base commit a pull-request snapshot was saved without. The
+   * reviewed bytes are keyed by head commit and never change; only the
+   * missing starting point is added, and an existing one is never replaced. */
+  recordWorkspaceDiffSnapshotBase(snapshotId: string, baseSha: string): void {
+    this.database.prepare(`UPDATE workspace_diff_snapshots SET diff_json = json_set(diff_json, '$.baseSha', ?) WHERE id = ? AND json_extract(diff_json, '$.baseSha') IS NULL`).run(baseSha, snapshotId);
+  }
+
   listWorkspaceDiffSnapshots(scope: { workItemId: string } | { conversationId: string }): WorkspaceDiffSnapshot[] {
     const [column, id] = 'workItemId' in scope ? ['work_item_id', scope.workItemId] : ['conversation_id', scope.conversationId];
     return (this.database.prepare(`SELECT id, revision, diff_json, captured_at, originating_agent_run_id, commit_hash, repository_identity FROM workspace_diff_snapshots WHERE ${column} = ? ORDER BY captured_at DESC`).all(id) as unknown as WorkspaceDiffSnapshotRow[]).map(mapWorkspaceDiffSnapshot);

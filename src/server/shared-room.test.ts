@@ -8,6 +8,7 @@ import { WorkItemRepository } from './repository.js';
 import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool.js';
 import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
 import { resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
+import { reviewHarnessPrompt } from '../shared/review-harness.js';
 import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
@@ -37,7 +38,7 @@ describe('supervisor-owned external evidence', () => {
     let fetches = 0;
     const pullRequest: GitHubPullRequestDiff = {
       url: 'https://github.com/acme/widgets/pull/42', repository: 'acme/widgets', number: 42, title: 'Fix widgets',
-      baseRef: 'main', headRef: 'feature/widgets', headSha: 'a'.repeat(40), revision: 'a'.repeat(40),
+      baseRef: 'main', baseSha: 'f'.repeat(40), headRef: 'feature/widgets', headSha: 'a'.repeat(40), revision: 'a'.repeat(40),
       files: [{ path: 'src/widget.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null, patch: '@@ -1 +1 @@\n-old\n+new', isBinary: false }],
       changedFiles: 1, additions: 1, deletions: 1, nextPage: null, state: 'open', draft: false,
       mergeableState: 'clean', reviewDecision: null, reviewDecisionError: null,
@@ -61,7 +62,7 @@ describe('supervisor-owned external evidence', () => {
     expect(repository.listWorkspaceDiffSnapshots({ conversationId: conversation.id })[0]).toMatchObject({
       revision: pullRequest.revision,
       commitHash: pullRequest.headSha,
-      diff: { workspacePath: process.cwd(), branch: 'main → feature/widgets', files: pullRequest.files },
+      diff: { workspacePath: process.cwd(), branch: 'main → feature/widgets', baseSha: 'f'.repeat(40), files: pullRequest.files },
     });
     database.close();
   });
@@ -81,22 +82,41 @@ describe('supervisor-owned external evidence', () => {
 
     expect((await resolveReviewHarness(repository, { scopes, cwd: process.cwd(), requestText })).source.kind).toBe('unavailable');
 
+    let fetched = 0;
+    const pullRequest: GitHubPullRequestDiff = {
+      url, repository: 'acme/widgets', number: 7, title: 'Fix widgets', baseRef: 'main', headRef: 'fix/widgets',
+      headSha: 'b'.repeat(40), revision: 'b'.repeat(40),
+      files: [{ path: 'src/widget.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null, patch: '@@ -1 +1 @@\n-old\n+new', isBinary: false }],
+      changedFiles: 1, additions: 1, deletions: 1, nextPage: null, state: 'open', draft: false,
+      mergeableState: 'clean', reviewDecision: null, reviewDecisionError: null,
+      comments: { available: true, partial: false, total: 0, byPath: {}, comments: [], error: null },
+    };
+    // Saved before base commits were recorded, exactly like CON-557's copy;
+    // GitHub has since moved the PR to a new head, so no base is guessed.
     await brokerPullRequestDiffEvidence(repository, {
       conversationId: conversation.id, dispatchGroupId: execute.id, urls: [reviewPullRequestUrl(requestText)!], workspacePath: process.cwd(),
-      fetchPullRequest: async () => ({
-        url, repository: 'acme/widgets', number: 7, title: 'Fix widgets', baseRef: 'main', headRef: 'fix/widgets',
-        headSha: 'b'.repeat(40), revision: 'b'.repeat(40),
-        files: [{ path: 'src/widget.ts', status: 'modified', additions: 1, deletions: 1, previousPath: null, patch: '@@ -1 +1 @@\n-old\n+new', isBinary: false }],
-        changedFiles: 1, additions: 1, deletions: 1, nextPage: null, state: 'open', draft: false,
-        mergeableState: 'clean', reviewDecision: null, reviewDecisionError: null,
-        comments: { available: true, partial: false, total: 0, byPath: {}, comments: [], error: null },
-      }),
+      fetchPullRequest: async () => fetched++ ? { ...pullRequest, headSha: 'd'.repeat(40), baseSha: 'e'.repeat(40) } : pullRequest,
+    });
+    const legacy = await resolveReviewHarness(repository, { scopes, cwd: process.cwd(), requestText });
+
+    expect(legacy.source).toEqual({ kind: 'pull-request', url, baseSha: null });
+    expect(legacy.revision).toBe('b'.repeat(40));
+    expect(legacy.required.length).toBeGreaterThan(0);
+    expect(reviewHarnessPrompt(legacy)).toContain('Workbench did not record its base commit');
+
+    // The next review in this conversation reuses the saved evidence and asks
+    // GitHub only for the base of that same head.
+    const rerun = repository.createSharedMessage('system', `Execute: ${task.title}`, 'completed', conversation.id, [], 'both');
+    await brokerPullRequestDiffEvidence(repository, {
+      conversationId: conversation.id, dispatchGroupId: rerun.id, urls: [url], workspacePath: process.cwd(),
+      fetchPullRequest: async () => ({ ...pullRequest, baseSha: 'c'.repeat(40) }),
     });
     const harness = await resolveReviewHarness(repository, { scopes, cwd: process.cwd(), requestText });
 
-    expect(harness.source).toEqual({ kind: 'pull-request', url });
-    expect(harness.revision).toBe('b'.repeat(40));
-    expect(harness.required.length).toBeGreaterThan(0);
+    expect(repository.listWorkspaceDiffSnapshots({ conversationId: conversation.id })).toHaveLength(1);
+    expect(harness.source).toEqual({ kind: 'pull-request', url, baseSha: 'c'.repeat(40) });
+    expect(reviewHarnessPrompt(harness)).toContain(`from base ${'c'.repeat(40)} to head ${'b'.repeat(40)}`);
+    expect(reviewHarnessPrompt(harness)).toContain(`git diff ${'c'.repeat(40)}...${'b'.repeat(40)}`);
     database.close();
   });
 });

@@ -71,6 +71,7 @@ function pullRequestWorkspaceDiff(pullRequest: GitHubPullRequestDiff, workspaceP
     workspacePath,
     branch: `${pullRequest.baseRef} → ${pullRequest.headRef}`,
     revision: pullRequest.revision,
+    ...(pullRequest.baseSha ? { baseSha: pullRequest.baseSha } : {}),
     files: pullRequest.files,
     changedFiles: pullRequest.changedFiles,
     additions: pullRequest.additions,
@@ -91,6 +92,18 @@ async function completePullRequestDiff(url: string, token?: string): Promise<Git
   return { ...first, files, nextPage: null };
 }
 
+/** The base commit for a head saved before bases were recorded. Evidence
+ * stays conversation truth, so GitHub is asked only for this one field, and
+ * its answer counts only while the PR still points at the saved head. */
+async function baseForSavedHead(url: string, headSha: string, readPullRequest: (url: string) => Promise<GitHubPullRequestDiff>): Promise<string | null> {
+  try {
+    const current = await readPullRequest(url);
+    return current.headSha === headSha ? current.baseSha ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Broker each pull request's complete diff once and save it as the
  * supervisor-owned snapshot the Review Director queue and review harness read.
  * Chat replies and task executions share this so both review the same bytes. */
@@ -99,17 +112,23 @@ export async function brokerPullRequestDiffEvidence(
   input: { conversationId: string; dispatchGroupId: string; urls: string[]; workspacePath: string; fetchPullRequest?: (url: string) => Promise<GitHubPullRequestDiff> },
 ): Promise<ExternalEvidence<unknown>[]> {
   const evidence: ExternalEvidence<unknown>[] = [];
+  const token = () => repository.getSourceSettings('github')?.token ?? process.env.GITHUB_TOKEN;
   for (const url of input.urls) {
     const item = await brokerExternalEvidence(repository, {
       conversationId: input.conversationId, dispatchGroupId: input.dispatchGroupId,
       kind: 'github_pull_request_diff', source: url, request: { url },
-    }, () => input.fetchPullRequest ? input.fetchPullRequest(url) : completePullRequestDiff(url, repository.getSourceSettings('github')?.token ?? process.env.GITHUB_TOKEN));
+    }, () => input.fetchPullRequest ? input.fetchPullRequest(url) : completePullRequestDiff(url, token()));
     const pullRequest = item.payload as GitHubPullRequestDiff;
     const identity = await repositoryIdentity(input.workspacePath);
-    repository.captureWorkspaceDiffSnapshot({ conversationId: input.conversationId }, pullRequestWorkspaceDiff(pullRequest, input.workspacePath), {
+    const snapshot = repository.captureWorkspaceDiffSnapshot({ conversationId: input.conversationId }, pullRequestWorkspaceDiff(pullRequest, input.workspacePath), {
       commitHash: pullRequest.headSha,
       repositoryIdentity: identity,
     });
+    if (!snapshot.diff.baseSha) {
+      const baseSha = pullRequest.baseSha
+        ?? await baseForSavedHead(url, pullRequest.headSha, input.fetchPullRequest ?? ((target) => getGitHubPullRequestDiff(target, { token: token() })));
+      if (baseSha) repository.recordWorkspaceDiffSnapshotBase(snapshot.id, baseSha);
+    }
     evidence.push(item);
   }
   return evidence;

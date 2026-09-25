@@ -64,7 +64,7 @@ export async function resolveReviewHarness(
   if (url) {
     const diff = brokeredPullRequestDiff(repository, input.scopes, url);
     if (!diff) return buildReviewHarness({ source: { kind: 'unavailable', reason: `Workbench has no brokered diff for ${url}.` }, revision: null, files: [], reviews: [] });
-    return buildReviewHarness({ source: { kind: 'pull-request', url }, revision: diff.revision, files: diff.files, reviews: storedReviews(repository, input.scopes, diff.revision) });
+    return buildReviewHarness({ source: { kind: 'pull-request', url, baseSha: diff.baseSha ?? null }, revision: diff.revision, files: diff.files, reviews: storedReviews(repository, input.scopes, diff.revision) });
   }
   let diff: WorkspaceDiff;
   try { diff = await getWorkspaceDiff(input.cwd); }

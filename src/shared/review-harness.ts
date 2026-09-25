@@ -41,7 +41,7 @@ const MAX_NOTE_CHARS = 4_000;
 
 export type ReviewHarnessSource =
   | { kind: 'workspace'; workspacePath: string }
-  | { kind: 'pull-request'; url: string }
+  | { kind: 'pull-request'; url: string; baseSha: string | null }
   | { kind: 'unavailable'; reason: string };
 
 export interface ReviewHarnessHunk { filePath: string; hunkRange: string; contentHash: string }
@@ -105,7 +105,11 @@ export function buildReviewHarness(input: {
 function sourceLine(harness: ReviewHarness): string {
   const { source } = harness;
   if (source.kind === 'workspace') return `Local checkout ${source.workspacePath} at revision ${harness.revision}.`;
-  if (source.kind === 'pull-request') return `Pull request ${source.url} at head ${harness.revision}.`;
+  if (source.kind === 'pull-request') {
+    return source.baseSha
+      ? `Pull request ${source.url} from base ${source.baseSha} to head ${harness.revision}. Compare with \`git diff ${source.baseSha}...${harness.revision}\`, never a local branch.`
+      : `Pull request ${source.url} at head ${harness.revision}. Workbench did not record its base commit; name the base you compare against.`;
+  }
   return `Unavailable: ${source.reason}`;
 }
 

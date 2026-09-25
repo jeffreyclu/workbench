@@ -513,6 +513,8 @@ export interface WorkspaceDiff {
   branch: string;
   /** Content revision used to detect updates without replacing an open diff. */
   revision: string;
+  /** Commit a pull-request snapshot's diff starts from; absent for working-tree diffs. */
+  baseSha?: string;
   files: WorkspaceDiffFile[];
   changedFiles: number;
   additions: number;
@@ -762,6 +764,8 @@ export interface GitHubPullRequestDiff {
   number: number;
   title: string;
   baseRef: string;
+  /** Base-branch commit the PR diff starts from. Absent on evidence brokered before it was recorded. */
+  baseSha?: string;
   headRef: string;
   /** Immutable Git commit used to anchor review decisions for this PR revision. */
   headSha: string;

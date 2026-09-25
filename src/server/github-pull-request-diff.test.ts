@@ -10,14 +10,14 @@ describe('GitHub pull-request diffs', () => {
   it('loads PR metadata and patches with the configured GitHub credential', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const endpoint = String(input);
-      if (endpoint.endsWith('/pulls/24')) return new Response(JSON.stringify({ html_url: 'https://github.com/writer/workbench/pull/24', title: 'Render diffs', number: 24, base: { ref: 'main' }, head: { ref: 'feature/diff', sha: 'a'.repeat(40) }, changed_files: 2, additions: 8, deletions: 3, state: 'open', merged: false, draft: false, mergeable_state: 'clean' }), { status: 200 });
+      if (endpoint.endsWith('/pulls/24')) return new Response(JSON.stringify({ html_url: 'https://github.com/writer/workbench/pull/24', title: 'Render diffs', number: 24, base: { ref: 'main', sha: 'f'.repeat(40) }, head: { ref: 'feature/diff', sha: 'a'.repeat(40) }, changed_files: 2, additions: 8, deletions: 3, state: 'open', merged: false, draft: false, mergeable_state: 'clean' }), { status: 200 });
     if (endpoint.includes('/files') && endpoint.includes('page=1')) return new Response(JSON.stringify([{ filename: 'src/a.ts', status: 'modified', additions: 8, deletions: 3, patch: '@@ -1 +1 @@\n-old\n+new' }, { filename: 'image.png', status: 'modified', additions: 0, deletions: 0 }]), { status: 200 });
       if (endpoint.includes('/reviews')) return new Response(JSON.stringify([{ state: 'APPROVED', user: { login: 'reviewer' }, submitted_at: '2026-01-01T00:00:00Z' }]), { status: 200 });
       if (endpoint.includes('/comments')) return new Response(JSON.stringify([{ id: 1, path: 'src/a.ts', line: 3, body: 'Nice', user: { login: 'reviewer' }, created_at: '2026-01-01T00:00:00Z', html_url: 'https://github.com/writer/workbench/pull/24#comment-1' }]), { status: 200 });
       return new Response(JSON.stringify([]), { status: 200 });
     });
     const diff = await getGitHubPullRequestDiff('https://github.com/writer/workbench/pull/24', { token: 'secret', fetchForPolicy: () => fetchImpl as typeof fetch });
-    expect(diff).toMatchObject({ repository: 'writer/workbench', number: 24, baseRef: 'main', headRef: 'feature/diff', headSha: 'a'.repeat(40), revision: 'a'.repeat(40), changedFiles: 2, state: 'open', draft: false, mergeableState: 'clean', reviewDecision: 'approved' });
+    expect(diff).toMatchObject({ repository: 'writer/workbench', number: 24, baseRef: 'main', baseSha: 'f'.repeat(40), headRef: 'feature/diff', headSha: 'a'.repeat(40), revision: 'a'.repeat(40), changedFiles: 2, state: 'open', draft: false, mergeableState: 'clean', reviewDecision: 'approved' });
     expect(diff.files).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'src/a.ts', isBinary: false }),
       expect.objectContaining({ path: 'image.png', isBinary: true }),
