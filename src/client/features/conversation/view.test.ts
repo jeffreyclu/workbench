@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type SharedMessage } from '../../../shared/contracts';
 import { conversationCacheSpendWarning } from './cache-spend';
-import { composerSelectionForConversation, composerSelectionFromConversation, executionKindForConversationSend, latestConversationExecutionKind, memoryBadgePresentation, replyBadge } from './view';
+import { composerSelectionForConversation, composerSelectionFromConversation, executionKindForConversationSend, latestConversationExecutionKind, formatElapsed, memoryBadgePresentation, replyBadge, runElapsedMs } from './view';
 
 describe('replyBadge', () => {
-  it('shows the actual model alongside the compact agent, profile, usage, and duration telemetry', () => {
+  it('shows the actual model alongside the compact agent, profile, and usage telemetry', () => {
     expect(replyBadge({
       author: 'codex',
       model: 'gpt-5.6',
@@ -17,7 +17,7 @@ describe('replyBadge', () => {
       fallbackFrom: null,
       fallbackReason: null,
       cacheReadInputTokens: null,
-    })).toBe('Codex · gpt-5.6 (standard) · default · 120 in · 340 out · 1.5s');
+    })).toBe('Codex · gpt-5.6 (standard) · default · 120 in · 340 out');
   });
 
   it('makes missing model and usage data explicit while defaulting a legacy profile', () => {
@@ -49,7 +49,7 @@ describe('replyBadge', () => {
       fallbackFrom: 'claude',
       fallbackReason: 'rate limited',
       cacheReadInputTokens: 5_400,
-    })).toBe('Codex · gpt-5.6 (economy) · default · 120 in · 340 out · 5.4K cached · 1.5s · fallback from claude (rate limited)');
+    })).toBe('Codex · gpt-5.6 (economy) · default · 120 in · 340 out · 5.4K cached · fallback from claude (rate limited)');
   });
 
   it('surfaces the classified execution type when the reply carries one', () => {
@@ -66,7 +66,40 @@ describe('replyBadge', () => {
       fallbackReason: null,
       cacheReadInputTokens: null,
       kind: 'execute',
-    })).toBe('Claude · execute · claude-sonnet-5 (standard) · default · 120 in · 340 out · 1.5s');
+    })).toBe('Claude · execute · claude-sonnet-5 (standard) · default · 120 in · 340 out');
+  });
+});
+
+describe('runElapsedMs', () => {
+  const createdAt = '2026-08-25T12:00:00.000Z';
+  const now = new Date('2026-08-25T12:01:05.000Z').getTime();
+
+  it('counts a running reply up to now', () => {
+    expect(runElapsedMs({ status: 'running', createdAt, completedAt: null }, now)).toBe(65_000);
+  });
+
+  it('freezes every finished reply at its recorded completion, whatever its outcome', () => {
+    for (const status of ['completed', 'failed', 'canceled'] as const) {
+      expect(runElapsedMs({ status, createdAt, completedAt: '2026-08-25T12:00:01.500Z' }, now)).toBe(1_500);
+    }
+  });
+
+  it('shows nothing for a queued reply or a finished reply without a recorded end', () => {
+    expect(runElapsedMs({ status: 'queued', createdAt, completedAt: null }, now)).toBeNull();
+    expect(runElapsedMs({ status: 'completed', createdAt, completedAt: null }, now)).toBeNull();
+  });
+
+  it('never goes negative when the browser clock trails the server', () => {
+    expect(runElapsedMs({ status: 'running', createdAt, completedAt: null }, new Date(createdAt).getTime() - 2_000)).toBe(0);
+  });
+});
+
+describe('formatElapsed', () => {
+  it('reads as seconds, minutes, then hours', () => {
+    expect(formatElapsed(0)).toBe('0s');
+    expect(formatElapsed(1_500)).toBe('1s');
+    expect(formatElapsed(65_000)).toBe('1m 05s');
+    expect(formatElapsed(3_725_000)).toBe('1h 02m');
   });
 });
 

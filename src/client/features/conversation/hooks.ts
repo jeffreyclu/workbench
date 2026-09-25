@@ -16,6 +16,18 @@ export function useDebouncedValue(value: string, delayMs: number) {
   return debouncedValue;
 }
 
+/** Current time, re-read every second only while `active`; a finished run never ticks. */
+export function useTickingNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [active]);
+  return now;
+}
+
 export function useConversationChangesAvailability(scope: WorkspaceDiffScope | null, candidateUrls: string[], isRunning: boolean) {
   const queryClient = useQueryClient();
   const workspaceDiff = useWorkspaceDiff(scope);

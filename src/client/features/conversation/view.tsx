@@ -31,10 +31,11 @@ import {
   SquarePen,
   Trash2,
   Sparkles,
+  Timer,
   User,
   X,
 } from 'lucide-react';
-import { type CSSProperties, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type FormEvent, type KeyboardEvent, memo, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownComposer } from '../../components/markdown/markdown-composer.js';
@@ -77,7 +78,7 @@ import { useRealtimeNotifications, type RealtimeNotification } from '../../hooks
 import { conversationData, conversationQueryKeys } from './data';
 import { DecisionTreeVisualizer } from './decision-tree-visualizer';
 import { celebrate } from '../../components/celebrate';
-import { useConversationChangesAvailability, useDebouncedValue } from './hooks';
+import { useConversationChangesAvailability, useDebouncedValue, useTickingNow } from './hooks';
 import { pullRequestUrls, pullRequestUrlsInText } from '../github-diff/logic.js';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { WorkspaceDiffScope } from '../../data/source-client';
@@ -167,11 +168,40 @@ export function replyBadge(message: Pick<SharedMessage, 'author' | 'model' | 'ac
   const profile = message.accountProfile ?? DEFAULT_ACCOUNT_PROFILE;
   const usage = formatRunBadge(message);
   const cacheRead = message.cacheReadInputTokens && message.cacheReadInputTokens > 0 ? `${compactTokenCount(message.cacheReadInputTokens)} cached` : null;
-  const durationMs = message.completedAt ? new Date(message.completedAt).getTime() - new Date(message.createdAt).getTime() : null;
-  const duration = durationMs === null ? null : `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
   const fallback = message.fallbackFrom ? `fallback from ${message.fallbackFrom}${message.fallbackReason ? ` (${message.fallbackReason})` : ''}` : null;
-  return [`${agent}${message.kind ? ` · ${message.kind}` : ''} · ${model} · ${profile} · ${usage}`, cacheRead, duration, fallback].filter(Boolean).join(' · ');
+  return [`${agent}${message.kind ? ` · ${message.kind}` : ''} · ${model} · ${profile} · ${usage}`, cacheRead, fallback].filter(Boolean).join(' · ');
 }
+
+/**
+ * Elapsed time of an agent reply's run, from the reply's creation to its
+ * completion (or to `now` while it is still running). Queued replies have not
+ * started, and a finished reply without a recorded end has no honest duration.
+ */
+export function runElapsedMs(message: Pick<SharedMessage, 'status' | 'createdAt' | 'completedAt'>, now: number): number | null {
+  if (message.status === 'queued') return null;
+  const end = message.status === 'running' ? now : message.completedAt ? new Date(message.completedAt).getTime() : null;
+  if (end === null) return null;
+  return Math.max(0, end - new Date(message.createdAt).getTime());
+}
+
+export function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1_000);
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+  if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+  return `${seconds}s`;
+}
+
+export const RunElapsedTimer = memo(function RunElapsedTimer({ status, createdAt, completedAt }: Pick<SharedMessage, 'status' | 'createdAt' | 'completedAt'>) {
+  const running = status === 'running';
+  const now = useTickingNow(running);
+  const elapsedMs = runElapsedMs({ status, createdAt, completedAt }, now);
+  if (elapsedMs === null) return null;
+  const label = formatElapsed(elapsedMs);
+  return <span className={`run-elapsed-timer${running ? ' running' : ''}`} title={running ? `Running for ${label}` : `Run took ${label}`} aria-label={running ? `Elapsed ${label}` : `Run took ${label}`}><Timer size={11} /> {label}</span>;
+});
 
 export function memoryBadgePresentation(retrievedMemoryCount: number | null): { label: string; title: string; disabled: boolean } {
   if (typeof retrievedMemoryCount === 'number') {
@@ -1466,6 +1496,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                   >
                     <Search size={11} /> {memoryBadge.label}
                   </button>}
+                  {showSummaryBadges && isAgentMessage && <RunElapsedTimer status={message.status} createdAt={message.createdAt} completedAt={message.completedAt} />}
                   {showSummaryBadges && <span className="header-badge-row">
                     {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}
                   </span>}

@@ -1500,6 +1500,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .shared-message header .header-badge-row { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; min-width: 0; margin-top: 4px; }
 .shared-message header .model-badge { flex: 0 1 auto; width: fit-content; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shared-message header .memory-badge { flex: 0 0 auto; }
+.shared-message header .run-elapsed-timer { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; color: #9a9990; background: #17171a; border: 1px solid #2c2c33; border-radius: 999px; font: 9px/1.2 'DM Mono'; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+.shared-message header .run-elapsed-timer.running { color: #e6c86e; border-color: #4a4126; }
 .shared-message header strong { color: #c8c7bf; font: 9px 'DM Mono'; text-transform: capitalize; }
 .shared-message header time { color: #575650; font: 8px 'DM Mono'; }
 .shared-message header > .cancel-response { display: grid; place-items: center; width: 24px; height: 24px; margin-left: auto; padding: 3px; color: #55554f; background: transparent; border: 0; }
