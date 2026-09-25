@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapWithConcurrency } from '../../scripts/mcpjam-check.js';
+import { isTransportFailure, mapWithConcurrency } from '../../scripts/mcpjam-check.js';
 
 describe('MCPJam bounded probe worker pool', () => {
   it('preserves matrix order while limiting active probes', async () => {
@@ -28,5 +28,22 @@ describe('MCPJam bounded probe worker pool', () => {
     });
 
     expect(peak).toBe(2);
+  });
+});
+
+describe('MCPJam probe transport classification', () => {
+  it('treats an MCPJam connection timeout as a transport failure', () => {
+    expect(isTransportFailure({
+      error: { code: 'TIMEOUT', message: 'Failed to connect to MCP server "__cli__" using HTTP transports. Streamable HTTP error: Request timed out.' },
+    })).toBe(true);
+  });
+
+  it('keeps tool results, including tool errors and successes, as contract results', () => {
+    expect(isTransportFailure({
+      content: [{ type: 'text', text: '{"error":{"code":"NOT_FOUND","message":"Work item not found."}}' }],
+      structuredContent: { error: { code: 'NOT_FOUND', message: 'Work item not found.' } },
+      isError: true,
+    })).toBe(false);
+    expect(isTransportFailure({ content: [{ type: 'text', text: '{}' }] })).toBe(false);
   });
 });

@@ -28,8 +28,10 @@ interface JsonObject { [key: string]: unknown }
 interface ToolMatrixEntry { name: string; expected: 'success' | 'error'; arguments: Record<string, unknown> }
 interface AsyncProcessResult { stdout: string; stderr: string; status: number | null; error: Error | null }
 interface ToolProbeSummary { name: string; expected: ToolMatrixEntry['expected']; passed: boolean; durationMs: number }
+interface ToolProbeOutcome { summary: ToolProbeSummary | null; failure: string | null; transportFailure: boolean }
 
 const defaultToolProbeConcurrency = 6;
+const transportRetryAttempts = 2;
 
 export function mapWithConcurrency<Input, Output>(
   items: readonly Input[],
@@ -145,6 +147,40 @@ function baselineToolNames(): string[] {
   return parsed.tools.map((tool) => String(tool.name)).sort();
 }
 
+/** True when MCPJam returned its own connection error instead of an MCP tool result. */
+export function isTransportFailure(payload: JsonObject): boolean {
+  return !('content' in payload) && !('isError' in payload) && payload.error != null;
+}
+
+async function probeTool(entry: ToolMatrixEntry, url: string, accessToken: string, resultDirectory: string): Promise<ToolProbeOutcome> {
+  const startedAt = Date.now();
+  const result = await runMcpJamAsync([
+    'tools', 'call',
+    '--tool-name', entry.name, '--tool-args', JSON.stringify(entry.arguments), '--validate-response',
+    ...targetArgs(url, accessToken),
+  ]);
+  const combined = [result.stdout, result.stderr].filter(Boolean).join('\n');
+  let payload: JsonObject;
+  try { payload = parseLastJson(result.stdout || combined, `MCPJam ${entry.name} tool probe`); }
+  catch (error) {
+    writeFileSync(join(resultDirectory, `${entry.name}.log`), combined);
+    return { summary: null, failure: error instanceof Error ? error.message : String(error), transportFailure: false };
+  }
+  writeFileSync(join(resultDirectory, `${entry.name}.json`), `${JSON.stringify(payload, null, 2)}\n`);
+  if (!result.error && isTransportFailure(payload)) {
+    return { summary: null, failure: `MCPJam tool probe ${entry.name} could not reach the candidate server: ${resultFailure(payload)}`, transportFailure: true };
+  }
+  const returnedError = payload.isError === true;
+  const passed = entry.expected === 'success'
+    ? result.status === 0 && !returnedError
+    : result.status !== 0 && returnedError;
+  const summary: ToolProbeSummary = { name: entry.name, expected: entry.expected, passed, durationMs: Date.now() - startedAt };
+  const failure = result.error
+    ? `MCPJam tool probe ${entry.name} could not complete: ${result.error.message}`
+    : !passed ? `MCPJam tool probe ${entry.name} expected ${entry.expected} but exited ${result.status ?? 'without status'} with isError=${String(payload.isError)}.` : null;
+  return { summary, failure, transportFailure: false };
+}
+
 async function runToolMatrix(url: string, accessToken: string, artifactDirectory: string): Promise<number> {
   const matrix = readToolMatrix();
   const matrixNames = matrix.map((entry) => entry.name).sort();
@@ -158,31 +194,15 @@ async function runToolMatrix(url: string, accessToken: string, artifactDirectory
   mkdirSync(resultDirectory, { recursive: true });
   const requestedConcurrency = Number(process.env.MCPJAM_TOOL_CONCURRENCY ?? defaultToolProbeConcurrency);
   const concurrency = Math.max(1, Math.min(Number.isFinite(requestedConcurrency) ? Math.floor(requestedConcurrency) : defaultToolProbeConcurrency, 12));
-  const outcomes = await mapWithConcurrency(matrix, concurrency, async (entry) => {
-    const startedAt = Date.now();
-    const result = await runMcpJamAsync([
-      'tools', 'call',
-      '--tool-name', entry.name, '--tool-args', JSON.stringify(entry.arguments), '--validate-response',
-      ...targetArgs(url, accessToken),
-    ]);
-    const combined = [result.stdout, result.stderr].filter(Boolean).join('\n');
-    let payload: JsonObject;
-    try { payload = parseLastJson(result.stdout || combined, `MCPJam ${entry.name} tool probe`); }
-    catch (error) {
-      writeFileSync(join(resultDirectory, `${entry.name}.log`), combined);
-      return { summary: null, failure: error instanceof Error ? error.message : String(error) };
+  const outcomes = await mapWithConcurrency(matrix, concurrency, (entry) => probeTool(entry, url, accessToken, resultDirectory));
+  // A probe that never reached the candidate is load noise, not a contract
+  // result. Retry those one at a time so a brief server stall cannot block a
+  // release, while a server that stays unreachable still fails the gate.
+  for (const [index, entry] of matrix.entries()) {
+    for (let attempt = 0; attempt < transportRetryAttempts && outcomes[index].transportFailure; attempt++) {
+      outcomes[index] = await probeTool(entry, url, accessToken, resultDirectory);
     }
-    writeFileSync(join(resultDirectory, `${entry.name}.json`), `${JSON.stringify(payload, null, 2)}\n`);
-    const returnedError = payload.isError === true;
-    const passed = entry.expected === 'success'
-      ? result.status === 0 && !returnedError
-      : result.status !== 0 && returnedError;
-    const summary: ToolProbeSummary = { name: entry.name, expected: entry.expected, passed, durationMs: Date.now() - startedAt };
-    const failure = result.error
-      ? `MCPJam tool probe ${entry.name} could not complete: ${result.error.message}`
-      : !passed ? `MCPJam tool probe ${entry.name} expected ${entry.expected} but exited ${result.status ?? 'without status'} with isError=${String(payload.isError)}.` : null;
-    return { summary, failure };
-  });
+  }
   const failure = outcomes.find((outcome) => outcome.failure)?.failure;
   if (failure) throw new Error(failure);
   const summary = outcomes.flatMap((outcome) => outcome.summary ? [outcome.summary] : []);
