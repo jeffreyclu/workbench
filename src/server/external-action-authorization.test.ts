@@ -44,6 +44,17 @@ describe('external action authorization command catalog', () => {
     await expect(classifyExternalActionAuthorization({ currentMessage })).resolves.toEqual(expect.objectContaining({ granted: true }));
   });
 
+  it.each([
+    '`push the stack`',
+    '```\npush the stack\n```',
+    '```sh\ngit push origin feature\n```',
+  ])('authorizes a command formatted as a standalone Markdown code span or block: %s', async (currentMessage) => {
+    await expect(classifyExternalActionAuthorization({ currentMessage })).resolves.toEqual(expect.objectContaining({
+      granted: true,
+      capability: expect.objectContaining({ actionIds: ['push'] }),
+    }));
+  });
+
   it('contains a named rule for every supported mutation family', () => {
     expect(EXTERNAL_ACTION_COMMANDS.map((rule) => rule.id)).toEqual([
       'commit', 'push', 'remote_branch', 'pr_create', 'pr_update', 'pr_review', 'pr_lifecycle',
@@ -64,6 +75,9 @@ describe('external action authorization command catalog', () => {
     'we need a rule so agents can push',
     'write linear ticket is another one',
     'the command list should include "open PR"',
+    'the command list should include `push`',
+    '`do not push`',
+    '`push is broken again`',
     'review https://github.com/WriterColab/writer-monorepo/pull/16623',
     'review the PR and give me findings',
   ])('does not mistake discussion, status, negation, or examples for a grant: %s', async (currentMessage) => {

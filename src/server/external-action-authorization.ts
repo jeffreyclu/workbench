@@ -82,7 +82,7 @@ export const EXTERNAL_ACTION_COMMANDS: readonly AuthorizationRule[] = [
   { id: 'external_api', description: 'Perform the named mutating external API request', pattern: /\b(?:post|put|patch|delete)\s+(?:the\s+|this\s+|that\s+|an?\s+)?(?:request\s+)?(?:to\s+)?(?:the\s+)?(?:external\s+)?api\b|\bcall\s+(?:the\s+)?api\s+to\s+(?:create|update|edit|delete|publish|send)\b/i },
 ] as const;
 
-const COMMAND_START = /^(?:commit|amend|push|force[- ]?push|promote|ship|deploy|release|rollback|roll back|publish|open|create|raise|file|submit|write|re[- ]?write|reword|shorten|simplify|make|add|put|spin\s+up|update|edit|change|rename|relink|approve|review|comment|post|request|merge|close|reopen|mark|convert|delete|remove|dispatch|trigger|run|rerun|re-run|cancel|move|archive|assign|label|link|unlink|send|reply|react|upload|save|copy|forward|deprecate|unpublish|restart|stop|start|destroy|call|npm|gcloud|aws|az|wrangler|vercel)\b/i;
+const COMMAND_START = /^(?:(?:git\s+)?(?:commit|push)|amend|force[- ]?push|promote|ship|deploy|release|rollback|roll back|publish|open|create|raise|file|submit|write|re[- ]?write|reword|shorten|simplify|make|add|put|spin\s+up|update|edit|change|rename|relink|approve|review|comment|post|request|merge|close|reopen|mark|convert|delete|remove|dispatch|trigger|run|rerun|re-run|cancel|move|archive|assign|label|link|unlink|send|reply|react|upload|save|copy|forward|deprecate|unpublish|restart|stop|start|destroy|call|npm|gcloud|aws|az|wrangler|vercel)\b/i;
 const LEADING_REQUEST = /^(?:(?:ok(?:ay)?|please|now|just|then|also|finally|fucking|fuck|motherfucker|motherfucking)\b[\s,:-]*|(?:can|could|would|will)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+|you\s+(?:can|may|should|must|need\s+to|have\s+to)\s+|go\s+ahead(?:\s+and)?\s+)+/i;
 const PASSIVE_REQUEST = /\b(?:needs?\s+to(?:\s+be)?|must\s+be|should\s+be|has\s+to(?:\s+be)?|have\s+to(?:\s+be)?)\s+(?:created|opened|updated|edited|rewritten|changed|renamed|relinked|approved|reviewed|commented|merged|closed|reopened|deleted|removed|published|promoted|deployed|sent|pushed|committed)\b/i;
 const TERSE_APPROVAL = /^(?:ok(?:ay)?\s+)?(?:yes|yeah|yep|approved?(?:\s+(?:it|this|that))?|do it|go|go ahead(?:\s+and\s+do\s+it)?|proceed|continue|ship it|send it|post it|publish it|push it|(?:now\s+)?you have (?:my\s+)?permission|permission granted|authorized)(?:\s+(?:now|please))?[.!]*$/i;
@@ -123,6 +123,29 @@ function robustMatchingRules(message: string): AuthorizationRule[] {
     return [canonicalRule('promotion')!];
   }
   return [GENERIC_EXTERNAL_RULE];
+}
+
+/** Rich-text composers persist a standalone code-formatted command with its
+ * Markdown delimiters. Formatting the whole message must not change whether
+ * an otherwise explicit command is authorized. Only unwrap a delimiter pair
+ * that encloses the entire message so quoted examples in prose stay inert. */
+function unwrapMarkdownCommand(message: string): string {
+  const trimmed = message.trim();
+  const opening = trimmed.match(/^(`{1,})([\s\S]*)$/);
+  if (!opening) return trimmed;
+  const delimiter = opening[1];
+  if (!trimmed.endsWith(delimiter) || trimmed.length <= delimiter.length * 2) return trimmed;
+
+  let command = trimmed.slice(delimiter.length, -delimiter.length);
+  if (delimiter.length >= 3 && command.startsWith('\n')) command = command.slice(1);
+  if (delimiter.length >= 3 && command.endsWith('\n')) command = command.slice(0, -1);
+  if (delimiter.length >= 3) {
+    const firstNewline = command.indexOf('\n');
+    if (firstNewline >= 0 && /^[a-z0-9_+-]+$/i.test(command.slice(0, firstNewline).trim())) {
+      command = command.slice(firstNewline + 1);
+    }
+  }
+  return command.trim();
 }
 
 function directCommand(message: string): boolean {
@@ -230,20 +253,22 @@ export async function classifyExternalActionAuthorization(context: ExternalActio
   const current = context.currentMessage?.trim() ?? '';
   if (!current || META_EXAMPLE.test(current)) return { granted: false, operation: null };
 
-  const directRules = robustMatchingRules(current);
-  if (directRules.length && directCommand(current)) return authorizationFor(directRules, current, 'direct_command');
+  const command = unwrapMarkdownCommand(current);
+
+  const directRules = robustMatchingRules(command);
+  if (directRules.length && directCommand(command)) return authorizationFor(directRules, current, 'direct_command');
 
   // A terse correction immediately after Workbench created or edited a Linear
   // ticket is still an order about that ticket. Requiring Jeffrey to repeat
   // the noun and mutation verb is what caused "that's too wordy" to become a
   // chat-only suggestion instead of an actual ticket edit.
   const precedingAgent = context.precedingAgentMessage?.trim() ?? '';
-  if (CORRECTIVE_FOLLOWUP.test(current) && LINEAR_REFERENCE.test(precedingAgent)) {
+  if (CORRECTIVE_FOLLOWUP.test(command) && LINEAR_REFERENCE.test(precedingAgent)) {
     const linearUpdate = EXTERNAL_ACTION_COMMANDS.find((rule) => rule.id === 'linear_update')!;
     return authorizationFor([linearUpdate], current, 'terse_followup', precedingAgent);
   }
 
-  if (terseApproval(current)) {
+  if (terseApproval(command)) {
     const pending = context.precedingAgentMessage?.trim() || context.precedingHumanMessage?.trim() || '';
     const pendingRules = robustMatchingRules(pending);
     if (pendingRules.length) return authorizationFor(pendingRules, current, 'terse_followup', pending);
