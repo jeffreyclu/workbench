@@ -15,6 +15,9 @@ const authorizedCommands = [
   'create a GitHub issue',
   'rerun the GitHub workflow',
   'publish the GitHub release',
+  'unstack it',
+  'UNSTACK IT ON GITHUB',
+  'gh stack unstack',
   'write a Linear ticket',
   'create two Linear tickets',
   'create the two authorized Linear tickets',
@@ -58,7 +61,7 @@ describe('external action authorization command catalog', () => {
   it('contains a named rule for every supported mutation family', () => {
     expect(EXTERNAL_ACTION_COMMANDS.map((rule) => rule.id)).toEqual([
       'commit', 'push', 'remote_branch', 'pr_create', 'pr_update', 'pr_review', 'pr_lifecycle',
-      'github_issue', 'github_workflow', 'github_release', 'linear_create', 'linear_update',
+      'github_issue', 'github_workflow', 'github_release', 'github_stack', 'linear_create', 'linear_update',
       'project_tracker', 'slack_message', 'confluence', 'notion', 'google_workspace', 'artifact',
       'promotion', 'deployment', 'email', 'package_publish', 'figma', 'cloud', 'external_api',
     ]);
@@ -71,6 +74,8 @@ describe('external action authorization command catalog', () => {
     'did you push?',
     'do not push',
     'push is broken again',
+    'unstack is broken again',
+    "why can't it unstack?",
     'can you explain why the push failed?',
     'we need a rule so agents can push',
     'write linear ticket is another one',
@@ -174,10 +179,16 @@ describe('external action authorization command catalog', () => {
 
   it.each([
     'I cannot create it because no supervisor-issued mutation capability exists.',
+    'I have no permission to unstack it on GitHub.',
     'The required write tool is not exposed in the registry.',
     'I am blocked from creating the ticket.',
   ])('rejects an unsupported blocker claim: %s', (output) => {
     expect(hasUnsupportedCapabilityDenial(output)).toBe(true);
+  });
+
+  it('recognizes the authorized GitHub unstack command as an attempted external action', async () => {
+    const authorization = await classifyExternalActionAuthorization({ currentMessage: 'unstack it' });
+    expect(externalActionAttempted(authorization, ['command: gh stack unstack 5407'])).toBe(true);
   });
 
   it('keeps an explicit creation grant when a later clause forbids duplicates', async () => {
@@ -186,7 +197,7 @@ describe('external action authorization command catalog', () => {
     })).resolves.toEqual(expect.objectContaining({ granted: true }));
   });
 
-  it.each(['please do not create a Linear ticket', 'I want you to not push', 'never send the email'])(
+  it.each(['please do not create a Linear ticket', 'I want you to not push', 'do not unstack it', 'never send the email'])(
     'does not grant a leading negated command: %s',
     async (currentMessage) => {
       await expect(classifyExternalActionAuthorization({ currentMessage })).resolves.toEqual({ granted: false, operation: null });
