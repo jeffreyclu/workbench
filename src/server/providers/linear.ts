@@ -15,6 +15,7 @@ interface LinearIssue {
   project: { id: string; name: string } | null;
   labels: { nodes: Array<{ name: string }> };
   team: { id: string; name: string };
+  parent?: { id: string; identifier: string } | null;
   assignee?: { id: string; name: string; email: string } | null;
   cycle?: { id: string; name: string; number: number } | null;
   estimate?: number | null;
@@ -31,6 +32,7 @@ export interface CreateLinearIssueInput {
   teamKey: string;
   title: string;
   description?: string;
+  parentIdentifier?: string;
   estimate?: number;
   assignToViewer?: boolean;
   addToCurrentCycle?: boolean;
@@ -54,6 +56,7 @@ const issueSelection = `
   project { id name }
   labels { nodes { name } }
   team { id name }
+  parent { id identifier }
   assignee { id name email }
   cycle { id name number }
 `;
@@ -298,19 +301,30 @@ export class LinearProvider {
     const addToCurrentCycle = input.addToCurrentCycle ?? true;
     if (addToCurrentCycle && !team.activeCycle) throw new Error(`Linear team ${team.key} has no current cycle.`);
 
-    // Retries must not create a second ticket. An exact title in the same team
-    // is the durable identity for this agent-facing operation.
+    const parent = input.parentIdentifier
+      ? (await this.request<{ issue: LinearIssue }>(issueQuery, { id: input.parentIdentifier })).issue
+      : null;
+    if (parent && parent.team.id !== team.id) {
+      throw new Error(`Linear parent ${input.parentIdentifier} belongs to a different team.`);
+    }
+
+    // Retries must not create a second ticket. The parent is part of the
+    // durable identity so the same title can safely exist under two parents.
     const existing = await this.request<{ issues: { nodes: LinearIssue[] } }>(exactTitleIssuesQuery, {
       teamId: team.id,
       title: input.title,
     });
-    const duplicate = existing.issues.nodes.find((issue) => issue.title === input.title);
+    const duplicate = existing.issues.nodes.find((issue) => (
+      issue.title === input.title
+      && (issue.parent?.id ?? null) === (parent?.id ?? null)
+    ));
     if (duplicate) return mapIssue(duplicate);
 
     const createInput = {
       teamId: team.id,
       title: input.title,
       ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(parent ? { parentId: parent.id } : {}),
       ...(input.estimate !== undefined ? { estimate: input.estimate } : {}),
       ...(assignToViewer ? { assigneeId: context.viewer.id } : {}),
       ...(addToCurrentCycle ? { cycleId: team.activeCycle!.id } : {}),

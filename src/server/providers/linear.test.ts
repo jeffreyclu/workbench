@@ -107,4 +107,94 @@ describe('LinearProvider outbound transport', () => {
       .resolves.toEqual(expect.objectContaining({ sourceIdentifier: 'CON-227' }));
     expect(policyFetch).toHaveBeenCalledTimes(2);
   });
+
+  it('creates a subtask beneath the requested parent issue', async () => {
+    const parent = {
+      id: 'parent-id', identifier: 'CON-466', title: 'Manage Connectors rewrite', description: '', priority: 0,
+      url: 'https://linear.app/writer/issue/CON-466', dueDate: null, updatedAt: '2026-10-02T00:00:00.000Z',
+      state: { type: 'started', name: 'In Progress' }, project: null, labels: { nodes: [] }, team: { id: 'team-id', name: 'Connectors' },
+    };
+    const child = {
+      ...parent,
+      id: 'child-id', identifier: 'CON-700', title: 'Rebuild Govern table',
+      url: 'https://linear.app/writer/issue/CON-700',
+      parent: { id: parent.id, identifier: parent.identifier },
+    };
+    const responses = [
+      { data: { viewer: { id: 'viewer-id', name: 'Jeffrey Lu', email: 'jeffrey.lu@writer.com' }, teams: { nodes: [{ id: 'team-id', key: 'CON', name: 'Connectors', activeCycle: { id: 'cycle-id', name: 'Cycle 4', number: 4 } }] } } },
+      { data: { issue: parent } },
+      { data: { issues: { nodes: [] } } },
+      { data: { issueCreate: { success: true, issue: child } } },
+    ];
+    const policyFetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify(responses.shift()), { headers: { 'content-type': 'application/json' } }));
+
+    await new LinearProvider('linear-token', [], [], policyFetch).createIssue({
+      teamKey: 'CON', title: child.title, parentIdentifier: 'CON-466',
+    });
+
+    const createRequest = JSON.parse(String(policyFetch.mock.calls[3]?.[1]?.body));
+    expect(createRequest.variables.input).toEqual({
+      teamId: 'team-id', title: child.title, parentId: 'parent-id',
+      assigneeId: 'viewer-id', cycleId: 'cycle-id',
+    });
+  });
+
+  it('returns the existing subtask only when its title and parent both match', async () => {
+    const parent = {
+      id: 'parent-id', identifier: 'CON-466', title: 'Manage Connectors rewrite', description: '', priority: 0,
+      url: 'https://linear.app/writer/issue/CON-466', dueDate: null, updatedAt: '2026-10-02T00:00:00.000Z',
+      state: { type: 'started', name: 'In Progress' }, project: null, labels: { nodes: [] }, team: { id: 'team-id', name: 'Connectors' },
+    };
+    const child = {
+      ...parent,
+      id: 'child-id', identifier: 'CON-700', title: 'Rebuild Govern table',
+      url: 'https://linear.app/writer/issue/CON-700',
+      parent: { id: parent.id, identifier: parent.identifier },
+    };
+    const responses = [
+      { data: { viewer: { id: 'viewer-id', name: 'Jeffrey Lu', email: 'jeffrey.lu@writer.com' }, teams: { nodes: [{ id: 'team-id', key: 'CON', name: 'Connectors', activeCycle: { id: 'cycle-id', name: 'Cycle 4', number: 4 } }] } } },
+      { data: { issue: parent } },
+      { data: { issues: { nodes: [child] } } },
+    ];
+    const policyFetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify(responses.shift()), { headers: { 'content-type': 'application/json' } }));
+
+    await expect(new LinearProvider('linear-token', [], [], policyFetch).createIssue({
+      teamKey: 'CON', title: child.title, parentIdentifier: parent.identifier,
+    })).resolves.toEqual(expect.objectContaining({ sourceIdentifier: child.identifier }));
+    expect(policyFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('creates a new subtask when the same title exists beneath another parent', async () => {
+    const parent = {
+      id: 'parent-id', identifier: 'CON-466', title: 'Manage Connectors rewrite', description: '', priority: 0,
+      url: 'https://linear.app/writer/issue/CON-466', dueDate: null, updatedAt: '2026-10-02T00:00:00.000Z',
+      state: { type: 'started', name: 'In Progress' }, project: null, labels: { nodes: [] }, team: { id: 'team-id', name: 'Connectors' },
+    };
+    const otherChild = {
+      ...parent,
+      id: 'other-child-id', identifier: 'CON-699', title: 'Rebuild Govern table',
+      url: 'https://linear.app/writer/issue/CON-699',
+      parent: { id: 'other-parent-id', identifier: 'CON-400' },
+    };
+    const newChild = {
+      ...otherChild,
+      id: 'new-child-id', identifier: 'CON-700',
+      url: 'https://linear.app/writer/issue/CON-700',
+      parent: { id: parent.id, identifier: parent.identifier },
+    };
+    const responses = [
+      { data: { viewer: { id: 'viewer-id', name: 'Jeffrey Lu', email: 'jeffrey.lu@writer.com' }, teams: { nodes: [{ id: 'team-id', key: 'CON', name: 'Connectors', activeCycle: { id: 'cycle-id', name: 'Cycle 4', number: 4 } }] } } },
+      { data: { issue: parent } },
+      { data: { issues: { nodes: [otherChild] } } },
+      { data: { issueCreate: { success: true, issue: newChild } } },
+    ];
+    const policyFetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify(responses.shift()), { headers: { 'content-type': 'application/json' } }));
+
+    await expect(new LinearProvider('linear-token', [], [], policyFetch).createIssue({
+      teamKey: 'CON', title: newChild.title, parentIdentifier: parent.identifier,
+    })).resolves.toEqual(expect.objectContaining({ sourceIdentifier: newChild.identifier }));
+
+    const createRequest = JSON.parse(String(policyFetch.mock.calls[3]?.[1]?.body));
+    expect(createRequest.variables.input).toEqual(expect.objectContaining({ parentId: parent.id }));
+  });
 });

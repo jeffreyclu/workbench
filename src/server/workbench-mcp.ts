@@ -919,11 +919,12 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
 
   server.registerTool('create_linear_issue', {
     title: 'Create a Linear issue',
-    description: 'Creates one real Linear issue through Workbench-owned credentials. It can assign the issue to the authenticated user, add it to the selected team\'s current cycle, and set its estimate. Exact-title retries in the same team return the existing issue instead of creating a duplicate. Use only when the supervisor-issued capability at the top of this turn explicitly authorizes creating that Linear issue.',
+    description: 'Creates one real Linear issue through Workbench-owned credentials. It can create a child beneath a parent issue, assign it to the authenticated user, add it to the selected team\'s current cycle, and set its estimate. Exact-title retries beneath the same parent return the existing issue instead of creating a duplicate. Use only when the supervisor-issued capability at the top of this turn explicitly authorizes creating that Linear issue.',
     inputSchema: {
       teamKey: z.string().trim().min(1).max(100).describe('Linear team key or UUID, for example CON.'),
       title: z.string().trim().min(1).max(500),
       description: z.string().max(100_000).optional(),
+      parentIdentifier: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]*-\d+$/).max(100).optional().describe('Optional parent issue identifier. When supplied, the new issue is created as a Linear subtask.'),
       estimate: z.number().int().min(0).max(100).optional(),
       assignToViewer: z.boolean().default(true).describe('Assign to the authenticated Linear user.'),
       addToCurrentCycle: z.boolean().default(true).describe('Add to the team\'s active cycle.'),
