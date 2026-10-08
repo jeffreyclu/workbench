@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -140,7 +140,18 @@ async function preflightCandidate(): Promise<void> {
     if (auditBackup.status !== 0) throw new Error(`Could not copy the live audit database for promotion preflight: ${auditBackup.stderr || auditBackup.stdout}`);
   }
   const port = 46_000 + (process.pid % 1_000);
-  const child = spawn(join(root, 'node_modules/.bin/tsx'), [join(root, 'scripts/runtime-preflight-api.ts')], {
+  // Boot the same shape the gateway will run: a copy of src/server and src/shared
+  // under .workbench-runtime/releases, with the repository as the working
+  // directory. Running the repository sources directly once passed a release
+  // that crashed on boot because a module resolved docs/ relative to its own
+  // file, which exists in the repository and not in the release copy.
+  const preflightRelease = join(root, '.workbench-runtime', 'releases', `.preflight-${process.pid}`);
+  rmSync(preflightRelease, { recursive: true, force: true });
+  mkdirSync(join(preflightRelease, 'scripts'), { recursive: true });
+  cpSync(join(root, 'src/server'), join(preflightRelease, 'src/server'), { recursive: true });
+  cpSync(join(root, 'src/shared'), join(preflightRelease, 'src/shared'), { recursive: true });
+  cpSync(join(root, 'scripts/runtime-preflight-api.ts'), join(preflightRelease, 'scripts/runtime-preflight-api.ts'));
+  const child = spawn(join(root, 'node_modules/.bin/tsx'), [join(preflightRelease, 'scripts/runtime-preflight-api.ts')], {
     cwd: root,
     env: { ...process.env, PORT: String(port), DATABASE_PATH: copiedDatabase, AUDIT_DATABASE_PATH: copiedAuditDatabase, WORKBENCH_CLIENT_PATH: join(root, 'dist/client') },
     stdio: 'ignore',
@@ -156,6 +167,7 @@ async function preflightCandidate(): Promise<void> {
   } finally {
     child.kill('SIGTERM');
     rmSync(preflightDirectory, { recursive: true, force: true });
+    rmSync(preflightRelease, { recursive: true, force: true });
   }
 }
 

@@ -1,8 +1,13 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
 
-/** docs/personas/*.md is the only place a persona is defined. */
-export const PERSONAS_DIR = fileURLToPath(new URL('../../docs/personas/', import.meta.url));
+/**
+ * docs/personas/*.md is the only place a persona is defined. The path is
+ * resolved from the working directory, never from this file's location: a
+ * promoted runtime runs a copy of src/ from .workbench-runtime/releases/<id>
+ * with the repository as its working directory, and docs/ is not copied.
+ */
+export const PERSONAS_DIR = process.env.WORKBENCH_PERSONAS_DIR ?? resolve(process.cwd(), 'docs/personas');
 
 const CLAUDE_FIELDS = ['name', 'description', 'tools', 'model'] as const;
 
@@ -40,7 +45,7 @@ export function loadPersonaFiles(directory = PERSONAS_DIR): PersonaDefinition[] 
     .filter((file) => file.endsWith('.md'))
     .sort()
     .map((file) => {
-      const persona = parsePersona(readFileSync(`${directory}${file}`, 'utf8'), file);
+      const persona = parsePersona(readFileSync(join(directory, file), 'utf8'), file);
       if (`${persona.name}.md` !== file) throw new Error(`${file}: frontmatter name "${persona.name}" must match the file name`);
       return persona;
     });
