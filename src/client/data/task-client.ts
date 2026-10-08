@@ -32,7 +32,7 @@ export const taskClient = {
   unblockWorkItem: (id: string, reason: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/unblock`, { method: 'POST', body: JSON.stringify({ reason }) }),
   archiveWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/archive`, { method: 'POST' }),
   restoreWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/restore`, { method: 'POST' }),
-  completeWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/complete`, { method: 'POST' }),
+  completeWorkItem: (id: string, confirmedBlockerIds: string[] = []) => request<{ item: WorkItem }>(`/api/work-items/${id}/complete`, { method: 'POST', body: JSON.stringify({ confirmedBlockerIds }) }),
   deleteWorkItem: (id: string) => request<void>(`/api/work-items/${id}`, { method: 'DELETE' }),
   undeleteWorkItem: (id: string) => request<{ item: WorkItem }>(`/api/work-items/${id}/undelete`, { method: 'POST' }),
   addActivity: (id: string, input: Pick<Activity, 'actor' | 'kind' | 'body'>) => request<{ activity: Activity }>(`/api/work-items/${id}/activity`, { method: 'POST', body: JSON.stringify(input) }),

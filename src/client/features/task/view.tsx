@@ -101,6 +101,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const detail = useTaskDetail(id);
   const [showFollowUp, setShowFollowUp] = useState(false);
   const [deleteTaskPromptOpen, setDeleteTaskPromptOpen] = useState(false);
+  const [completeTaskPromptOpen, setCompleteTaskPromptOpen] = useState(false);
   const [editingField, setEditingField] = useState<'title' | 'project' | 'description' | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
@@ -304,22 +305,23 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
   const lifecycleErrorSummary: Record<'archive' | 'restore' | 'complete' | 'delete', string> = {
     archive: 'Could not archive the task.', restore: 'Could not restore the task.', complete: 'Could not complete the task.', delete: 'Could not delete the task.',
   };
+  type LifecycleAction = 'archive' | 'restore' | 'complete' | 'delete';
   const lifecycle = useMutation({
-    mutationFn: async (action: 'archive' | 'restore' | 'complete' | 'delete'): Promise<void> => {
+    mutationFn: async ({ action, confirmedBlockerIds = [] }: { action: LifecycleAction; confirmedBlockerIds?: string[] }): Promise<void> => {
       if (action === 'delete') { setDeleteTaskPromptOpen(false); await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())); }
       if (action !== 'restore') await onRemoving?.(id);
       if (action === 'archive') await api.archiveWorkItem(id);
       else if (action === 'restore') await api.restoreWorkItem(id);
-      else if (action === 'complete') await api.completeWorkItem(id);
+      else if (action === 'complete') await api.completeWorkItem(id, confirmedBlockerIds);
       else await api.deleteWorkItem(id);
     },
-    onSuccess: async (_data, action) => {
+    onSuccess: async (_data, { action }) => {
       if (action === 'delete') setDeleteTaskPromptOpen(false);
       if (action === 'complete') {
         celebrate();
       }
       onClose();
-      const undoAction = action === 'delete' ? () => undeleteTask.mutate() : action === 'archive' || action === 'complete' ? () => lifecycle.mutate('restore') : undefined;
+      const undoAction = action === 'delete' ? () => undeleteTask.mutate() : action === 'archive' || action === 'complete' ? () => lifecycle.mutate({ action: 'restore' }) : undefined;
       toast.success(lifecycleSuccessMessage[action], undoAction ? { action: undoAction, actionLabel: 'Undo', duration: 10_000 } : undefined);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['work-items'] }),
@@ -328,7 +330,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
         queryClient.invalidateQueries({ queryKey: ['shared-conversations'] }),
       ]);
     },
-    onError: (error, action) => toastError(lifecycleErrorSummary[action], error),
+    onError: (error, { action }) => toastError(lifecycleErrorSummary[action], error),
   });
   const undeleteTask = useMutation({
     mutationFn: () => api.undeleteWorkItem(id),
@@ -511,9 +513,9 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       <div className="task-lifecycle-actions">
         <button type="button" className="icon-button" onClick={() => setShowFollowUp((value) => !value)} aria-label="Create follow-up task" title="Create follow-up task"><Plus size={14} /></button>
         <button type="button" className={`icon-button${item.status === 'pinned' ? ' icon-button-active' : ''}`} onClick={() => togglePin.mutate()} disabled={togglePin.isPending} aria-pressed={item.status === 'pinned'} aria-label={item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'} title={item.status === 'pinned' ? 'Bring back' : 'Put a pin in it'}><Pin size={14} fill={item.status === 'pinned' ? 'currentColor' : 'none'} /></button>
-        {item.archivedAt ? <><span className={`archive-state ${item.completionStatus}`}>{item.completionStatus === 'completed' ? 'Completed & archived' : 'Archived incomplete'}</span><button type="button" className="icon-button" onClick={() => lifecycle.mutate('restore')} disabled={lifecycle.isPending} aria-label="Restore task" title="Restore task"><Archive size={14} /></button></> : <>
-          <button type="button" className="icon-button" onClick={() => lifecycle.mutate('archive')} disabled={lifecycle.isPending} aria-label="Archive task" title="Archive task"><Archive size={14} /></button>
-          <button type="button" className="icon-button primary" onClick={() => lifecycle.mutate('complete')} disabled={lifecycle.isPending} aria-label="Complete task" title="Complete task"><Check size={14} /></button>
+        {item.archivedAt ? <><span className={`archive-state ${item.completionStatus}`}>{item.completionStatus === 'completed' ? 'Completed & archived' : 'Archived incomplete'}</span><button type="button" className="icon-button" onClick={() => lifecycle.mutate({ action: 'restore' })} disabled={lifecycle.isPending} aria-label="Restore task" title="Restore task"><Archive size={14} /></button></> : <>
+          <button type="button" className="icon-button" onClick={() => lifecycle.mutate({ action: 'archive' })} disabled={lifecycle.isPending} aria-label="Archive task" title="Archive task"><Archive size={14} /></button>
+          <button type="button" className="icon-button primary" onClick={() => openDependencies.length ? setCompleteTaskPromptOpen(true) : lifecycle.mutate({ action: 'complete' })} disabled={lifecycle.isPending} aria-label="Complete task" title="Complete task"><Check size={14} /></button>
         </>}
         <button type="button" className="icon-button danger" onClick={() => setDeleteTaskPromptOpen(true)} aria-label="Delete task" title="Delete task"><Trash2 size={14} /></button>
       </div>
@@ -747,7 +749,8 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
       )}
 
       {executionPlanArchivePromptOpen && <FollowUpArchiveDialog count={selectedExecutionTaskIndexes.size} pending={resolveExecutionPlan.isPending} onClose={() => setExecutionPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolveExecutionPlan.mutate({ resolution: 'accepted', archiveParent })} />}
-      {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This deletes the task. You can undo it for a few seconds after." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate('delete')} />}
+      {completeTaskPromptOpen && <ConfirmationDialog title={`Complete “${item.title}” anyway?`} description="This task still has open prerequisites." confirmLabel="Complete task" confirmVariant="primary" pending={lifecycle.isPending} onClose={() => setCompleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate({ action: 'complete', confirmedBlockerIds: openDependencies.map((dependency) => dependency.id) })}><ul>{openDependencies.map((dependency) => <li key={dependency.id}>{dependency.title}</li>)}</ul></ConfirmationDialog>}
+      {deleteTaskPromptOpen && <ConfirmationDialog title={`Delete “${item.title}”?`} description="This deletes the task. You can undo it for a few seconds after." confirmLabel="Delete task" pending={lifecycle.isPending} onClose={() => setDeleteTaskPromptOpen(false)} onConfirm={() => lifecycle.mutate({ action: 'delete' })} />}
 
       <details className="detail-section task-collapsible workspace-review-section">
         <summary><span>Workspace review</span><small>Latest changes and recorded snapshots</small></summary>

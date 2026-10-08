@@ -3240,6 +3240,19 @@ describe('task dependencies', () => {
       ]);
     });
 
+    it('refuses agent completion with the named prerequisites, but accepts Jeffrey\'s matching confirmation', () => {
+      const blocker = make('Schema first');
+      const dependent = make('API second');
+      repository.replaceDependencies(dependent.id, [blocker.id]);
+
+      for (const actor of ['codex', 'claude', 'palmyra'] as const) {
+        expect(() => repository.archive(dependent.id, true, false, { actor }))
+          .toThrow('Cannot complete this task while open prerequisites remain: Schema first.');
+      }
+      expect(repository.archive(dependent.id, true, false, { actor: 'jeffrey', confirmedBlockerIds: [blocker.id] }))
+        .toEqual(expect.objectContaining({ completionStatus: 'completed' }));
+    });
+
     it('treats terminal and tombstoned prerequisites as absent from active blockers', () => {
       const canceled = make('Dropped approach');
       const archived = make('Parked work');

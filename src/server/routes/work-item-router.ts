@@ -615,9 +615,15 @@ export function createWorkItemRouter({ repository, database }: RouteContext) {
   });
 
   router.post('/api/work-items/:id/complete', (request, response) => {
-    const item = repository.archive(request.params.id, true, false, { actor: 'jeffrey' });
-    if (!item) return response.status(404).json({ error: 'Work item not found.' });
-    response.json({ item });
+    const confirmedBlockerIds = z.object({ confirmedBlockerIds: z.array(z.string().uuid()).max(200).default([]) }).parse(request.body ?? {}).confirmedBlockerIds;
+    try {
+      const item = repository.archive(request.params.id, true, false, { actor: 'jeffrey', confirmedBlockerIds });
+      if (!item) return response.status(404).json({ error: 'Work item not found.' });
+      return response.json({ item });
+    } catch (error) {
+      if (error instanceof WorkItemDependencyError) return response.status(409).json({ error: error.message, code: error.code });
+      throw error;
+    }
   });
 
   router.delete('/api/work-items/:id', (request, response) => {

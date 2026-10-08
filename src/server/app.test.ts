@@ -728,6 +728,19 @@ describe('work-item metadata ownership and dates', () => {
       ]));
   });
 
+  it('requires Jeffrey to confirm each open prerequisite before completing a blocked task', async () => {
+    const blocker = repository.create({ title: 'Schema first', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const dependent = repository.create({ title: 'API second', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    repository.replaceDependencies(dependent.id, [blocker.id]);
+
+    const blocked = await fetch(`${baseUrl}/api/work-items/${dependent.id}/complete`, { method: 'POST' });
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toEqual(expect.objectContaining({ code: 'INVALID_DEPENDENCIES', error: expect.stringContaining('Schema first') }));
+
+    const completed = await fetch(`${baseUrl}/api/work-items/${dependent.id}/complete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmedBlockerIds: [blocker.id] }) });
+    expect(completed.status).toBe(200);
+  });
+
   it('tracks local Linear status and due-date edits for conflict-aware sync', async () => {
     repository.upsertLinearItem({ sourceIdentifier: 'ENG-99', sourceUrl: 'https://linear.app/example/issue/ENG-99', title: 'Provider item', description: '', status: 'ready', priority: 2, projectName: null, labels: [], dueDate: '2026-08-22', providerUpdatedAt: '2026-08-20T00:00:00.000Z', providerPayload: {} });
     const item = repository.searchLinear('ENG-99')[0];

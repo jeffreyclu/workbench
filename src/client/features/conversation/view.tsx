@@ -424,6 +424,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
   const conversationView = view ?? ownConversationView;
   const setConversationView = (next: 'active' | 'archive') => { setOwnConversationView(next); onViewChange?.(next); };
   const [deleteConversationPromptOpen, setDeleteConversationPromptOpen] = useState(false);
+  const [completeLinkedTaskPromptOpen, setCompleteLinkedTaskPromptOpen] = useState(false);
   const [retrievedMemoryMessageId, setRetrievedMemoryMessageId] = useState<string | null>(null);
   const [decisionTreeOpen, setDecisionTreeOpen] = useState(false);
   const [conversationSearch, setConversationSearch] = useState('');
@@ -640,6 +641,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     enabled: Boolean(retrievedMemoryMessageId),
   });
   const linkedTaskCompleted = linkedWorkItem.data?.item?.completionStatus === 'completed';
+  const openLinkedDependencies = linkedWorkItem.data?.item?.blockedBy?.filter((dependency) => dependency.isOpen) ?? [];
   // A task Jeffrey has claimed keeps its owner: chatting here must not hand it to an agent.
   const linkedTaskIsSelfAssigned = isSelfAssigned(linkedWorkItem.data?.item?.assignees ?? []);
   const animateConversationExit = (id: string) => new Promise<void>((resolve) => {
@@ -980,8 +982,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     },
     onError: (error) => toastError('Could not restore the conversation.', error),
   });
-  const completeLinkedTask = useMutation({
-    mutationFn: () => api.completeWorkItem(linkedWorkItemId!),
+  const completeLinkedTaskMutation = useMutation({
+    mutationFn: (confirmedBlockerIds?: string[]) => api.completeWorkItem(linkedWorkItemId!, confirmedBlockerIds ?? []),
     onSuccess: async ({ item }) => {
       celebrate();
       queryClient.setQueryData<WorkItemDetail>(['work-item', item.id], (current) => current && ({ ...current, item }));
@@ -1002,6 +1004,14 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
     },
     onError: (error) => toastError('Could not complete the task.', error),
   });
+  const completeLinkedTask = {
+    ...completeLinkedTaskMutation,
+    mutate: (confirmedBlockerIds?: string[]) => completeLinkedTaskMutation.mutate(confirmedBlockerIds),
+  };
+  const requestLinkedTaskCompletion = () => {
+    if (openLinkedDependencies.length) setCompleteLinkedTaskPromptOpen(true);
+    else completeLinkedTask.mutate();
+  };
   const forkConversation = useMutation({
     mutationFn: api.forkSharedConversation,
     onSuccess: async ({ conversation }) => {
@@ -1410,7 +1420,13 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
           </>
         )}
       </aside>
-      <section className="agent-console" aria-label="Shared agent workspace">
+      <section className="agent-console" aria-label="Shared agent workspace" onClickCapture={(event) => {
+        if ((event.target as HTMLElement).closest('.complete-task-button')) {
+          event.preventDefault();
+          event.stopPropagation();
+          requestLinkedTaskCompletion();
+        }
+      }}>
         <header id="conversation-header" className={`agent-console-header${mobileHeaderOpen ? '' : ' is-mobile-header-collapsed'}${conversationId && selectedConversation ? ' has-conversation-actions' : ''}`}>{isPhoneChrome && conversationId && selectedConversation && <button type="button" className="mobile-header-handle" aria-label="Collapse conversation tray" title="Collapse conversation tray" onPointerDown={(event) => { mobileHeaderDragStartY.current = event.clientY; }} onPointerUp={(event) => { if (mobileHeaderDragStartY.current !== null && event.clientY - mobileHeaderDragStartY.current <= -36) setMobileHeaderOpen(false); mobileHeaderDragStartY.current = null; }} onPointerCancel={() => { mobileHeaderDragStartY.current = null; }} onClick={() => setMobileHeaderOpen(false)}><span /></button>}<div className="agent-console-title">{selectedConversation ? <ConversationOriginBadge workItemId={selectedConversation.workItemId} /> : <span className="eyebrow">Shared context</span>}<h2>{selectedConversation?.title
               ?? (pendingSelectedConversation?.id === conversationId ? pendingSelectedConversation.title
                   : conversationDetail.isLoading ? <span className="conversation-title-skeleton"><Skeleton width="240px" height="19px" /></span>
@@ -1572,7 +1588,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
               : <div key={`${row.a.id}-${row.b.id}`}>{rowContent}</div>;
           })}
           </div>
-          {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small>{completeLinkedTask.error && <small className="completion-prompt-error">Could not complete the task. Try again.</small>}</span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={() => completeLinkedTask.mutate()} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}
+          {completionPromptAvailable && <div className="completion-prompt" role="status"><span><strong>Preview approved successfully.</strong><small>Complete the linked task?</small>{completeLinkedTask.error && <small className="completion-prompt-error">Could not complete the task. Try again.</small>}</span><div><button type="button" className="button secondary compact" onClick={() => setDismissedCompletionPromptPromotionId(latestSuccessfulPromotion!.id)}>Not yet</button><button type="button" className="button primary compact" onClick={requestLinkedTaskCompletion} disabled={completeLinkedTask.isPending}>{completeLinkedTask.isPending ? <><LoaderCircle className="spin" size={12} /> Completing…</> : <><Check size={12} /> Complete task</>}</button></div></div>}
           {previewApprovalAvailable && <div className="preview-approval"><span><strong>Workbench preview has unpublished changes</strong><small>Review them on port 5181, then promote this source snapshot to live.</small></span><button className="button primary compact" onClick={() => approvePreview.mutate()} disabled={approvePreview.isPending}>{approvePreview.isPending ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />} {approvePreview.isPending ? 'Approving…' : 'Approve preview'}</button></div>}
           {previewApprovalAvailable && approvePreview.error && <p className="error-message">Could not approve preview: {approvePreview.error.message}</p>}
           {proposedPlan && proposedPlanConversationId === conversationId && <article className="chat-plan"><span className="eyebrow">Proposed follow-up tasks</span><h3>{proposedPlan.summary}</h3><ol>{proposedPlan.tasks.map((task, index) => <li key={`${task.title}-${index}`}><label><input type="checkbox" checked={selectedPlanTaskIndexes.has(index)} onChange={() => setSelectedPlanTaskIndexes((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} /><span><strong>{task.title}</strong>{(task.dependsOn ?? []).length > 0 && <small className="plan-blocked-by">Blocked by: {(task.dependsOn ?? []).map((blocker) => `${blocker + 1}. ${proposedPlan.tasks[blocker]?.title ?? 'unknown task'}`).join('; ')}</small>}<p>{task.description}</p></span></label></li>)}</ol><div><button className="button secondary" onClick={() => resolvePlan.mutate({ resolution: 'rejected' })}>Reject</button><button className="button primary" disabled={selectedPlanTaskIndexes.size === 0 || resolvePlan.isPending} onClick={() => setPlanArchivePromptOpen(true)}><Check size={14} /> Add {selectedPlanTaskIndexes.size} to queue</button></div></article>}
@@ -1629,6 +1645,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         </div>
       </section>
       {planArchivePromptOpen && <FollowUpArchiveDialog count={selectedPlanTaskIndexes.size} pending={resolvePlan.isPending} onClose={() => setPlanArchivePromptOpen(false)} onChoose={(archiveParent) => resolvePlan.mutate({ resolution: 'accepted', archiveParent })} />}
+      {completeLinkedTaskPromptOpen && linkedWorkItem.data?.item && <ConfirmationDialog title={`Complete “${linkedWorkItem.data.item.title}” anyway?`} description="This task still has open prerequisites." confirmLabel="Complete task" confirmVariant="primary" pending={completeLinkedTask.isPending} onClose={() => setCompleteLinkedTaskPromptOpen(false)} onConfirm={() => completeLinkedTask.mutate(openLinkedDependencies.map((dependency) => dependency.id))}><ul>{openLinkedDependencies.map((dependency) => <li key={dependency.id}>{dependency.title}</li>)}</ul></ConfirmationDialog>}
       {deleteConversationPromptOpen && conversationId && <ConfirmationDialog title="Delete this conversation?" description="This permanently deletes the conversation and cannot be undone." confirmLabel="Delete conversation" pending={deleteConversation.isPending} onClose={() => setDeleteConversationPromptOpen(false)} onConfirm={() => deleteConversation.mutate(conversationId)} />}
       {retrievedMemoryMessageId && <RetrievedMemoryDialog detail={retrievedMemoryDetail.data?.detail} loading={retrievedMemoryDetail.isLoading} onClose={() => setRetrievedMemoryMessageId(null)} />}
       {decisionTreeOpen && <DecisionTreeVisualizer messages={allConversationMessages} events={agentStreamEvents.data?.events ?? []} isLoadingEvents={agentStreamEvents.isLoading} onClose={() => setDecisionTreeOpen(false)} />}

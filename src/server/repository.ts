@@ -40,7 +40,7 @@ export type { ProviderWorkItem } from './services/provider-sync-service.js';
 export type DiffReviewScope = { workItemId: string } | { conversationId: string } | { reviewId: string };
 
 /** Who applied a lifecycle move, and what forced it when Workbench applied it as a cascade. */
-export interface LifecycleContext { actor?: Activity['actor']; reason?: string }
+export interface LifecycleContext { actor?: Activity['actor']; reason?: string; confirmedBlockerIds?: string[] }
 export interface StatusTransitionContext extends LifecycleContext { source?: string }
 
 interface ActivityRow {
@@ -1904,6 +1904,15 @@ export class WorkItemRepository {
   }
 
   archive(id: string, completed: boolean, withinTransaction = false, context: LifecycleContext = {}): WorkItem | null {
+    if (completed) {
+      const blockers = this.listOpenDependencies(id);
+      const confirmationMatchesBlockers = context.actor === 'jeffrey'
+        && blockers.length === (context.confirmedBlockerIds?.length ?? 0)
+        && blockers.every((blocker) => context.confirmedBlockerIds?.includes(blocker.id));
+      if (blockers.length && !confirmationMatchesBlockers) {
+        throw new WorkItemDependencyError(`Cannot complete this task while open prerequisites remain: ${blockers.map((blocker) => blocker.title).join(', ')}.`);
+      }
+    }
     return this.workItemLifecycle.archive(id, completed, withinTransaction, context);
   }
 
