@@ -684,7 +684,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
           {detail.data.runs.slice(0, runsVisibleCount).map((run, runIndex) => (
             <article className="run-card" data-agent={run.agent} key={run.id}>
               <header>
-                <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status === 'queued' && run.attempt > 0 ? `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…` : run.status}</span>
+                <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status === 'queued' && run.waitingReason ? run.waitingReason : run.status === 'queued' && run.attempt > 0 ? `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…` : run.status}</span>
                 <strong>{run.agent} · {run.kind}</strong>
                 <time>{new Date(run.createdAt).toLocaleString()}</time>
                 {(run.status === 'queued' || run.status === 'running') && <button className="cancel-run" onClick={() => cancelRun.mutate(run.id)}><X size={11} /> Cancel</button>}

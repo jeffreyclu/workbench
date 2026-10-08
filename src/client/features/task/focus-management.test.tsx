@@ -41,7 +41,7 @@ describe('WCAG AA: focus after asynchronous task actions', () => {
       id: runId, workItemId: taskId, kind: 'execute', requestedTarget: 'codex', requestedAgent: 'codex', agent: 'codex', status: 'failed',
       instructions: '', output: '', error: 'boom', startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z', createdAt: '2026-01-01T00:00:00Z',
       conversationId: null, messageId: null, model: null, accountProfile: 'default', executionProfile: null, inputTokens: null, outputTokens: null,
-      fallbackFrom: null, fallbackReason: null, attempt: 0, maxAttempts: 3, nextAttemptAt: null, resolvedWorkspace: null, origin: 'manual',
+      fallbackFrom: null, fallbackReason: null, attempt: 0, maxAttempts: 3, nextAttemptAt: null, waitingReason: null, resolvedWorkspace: null, origin: 'manual',
     };
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

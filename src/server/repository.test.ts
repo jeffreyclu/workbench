@@ -2269,6 +2269,22 @@ describe('WorkItemRepository', () => {
       expect(repository.dueWork().runIds).not.toContain(notYetDueRun.id);
     });
 
+    it('dueWork skips a queued run whose work item has an open prerequisite and records why', () => {
+      const blocker = repository.create({ title: 'Blocker', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const run = createQueuedRun();
+      repository.replaceDependencies(run.workItemId, [blocker.id]);
+
+      expect(repository.dueWork().runIds).not.toContain(run.id);
+      expect(repository.dueWork(6).runIds).not.toContain(run.id);
+      expect(repository.getRun(run.id)?.status).toBe('queued');
+      expect(repository.getRun(run.id)?.waitingReason).toBe('waiting on 1 prerequisite(s)');
+
+      repository.update(blocker.id, { status: 'done' });
+
+      expect(repository.dueWork().runIds).toContain(run.id);
+      expect(repository.getRun(run.id)?.waitingReason).toBeNull();
+    });
+
     it('dueWork(limit) returns only the oldest N queued runs when the backlog exceeds the ceiling', () => {
       const runs = [createQueuedRun(), createQueuedRun(), createQueuedRun(), createQueuedRun(), createQueuedRun()];
       const due = repository.dueWork(2).runIds;

@@ -27,6 +27,7 @@ export interface RunPatch {
   ownerId?: string | null;
   leaseExpiresAt?: string | null;
   nextAttemptAt?: string | null;
+  waitingReason?: string | null;
   attempt?: number;
   resolvedWorkspace?: string | null;
 }
@@ -47,6 +48,18 @@ function mapReviewHandoffRow(row: Record<string, string | null>): AgentRunReview
   };
 }
 
+/**
+ * Open prerequisites of a run's work item. "Open" matches
+ * `WorkItemRepository.listOpenDependencies`: the blocker is live (not deleted
+ * or archived) and neither completed nor done/canceled.
+ */
+const OPEN_PREREQUISITE_COUNT = `
+  SELECT COUNT(*) FROM work_item_dependencies dependency
+  JOIN work_items blocker ON blocker.id = dependency.blocker_work_item_id
+  WHERE dependency.work_item_id = agent_runs.work_item_id
+    AND blocker.deleted_at IS NULL AND blocker.archived_at IS NULL
+    AND blocker.completed_at IS NULL AND blocker.status NOT IN ('done', 'canceled')`;
+
 function mapRunRow(row: Record<string, string | null>): AgentRun {
   return {
     id: row.id!, workItemId: row.work_item_id!, kind: row.kind as AgentRun['kind'],
@@ -62,6 +75,7 @@ function mapRunRow(row: Record<string, string | null>): AgentRun {
     fallbackFrom: row.fallback_from as AgentRun['fallbackFrom'] ?? null, fallbackReason: row.fallback_reason,
     attempt: Number(row.attempt ?? 0), maxAttempts: Number(row.max_attempts ?? 3),
     nextAttemptAt: row.next_attempt_at ?? null,
+    waitingReason: row.waiting_reason ?? null,
     resolvedWorkspace: row.resolved_workspace ?? null,
     origin: (row.origin ?? 'manual') as AgentRun['origin'],
     reviewHandoff: mapReviewHandoffRow(row),
@@ -215,7 +229,7 @@ export class RunRepository {
       ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', error], ['model', changes.model], ['execution_profile', changes.executionProfile], ['account_profile', changes.accountProfile],
       ['input_tokens', changes.inputTokens], ['cache_creation_input_tokens', changes.cacheCreationInputTokens], ['cache_read_input_tokens', changes.cacheReadInputTokens], ['output_tokens', changes.outputTokens], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
-      ['next_attempt_at', changes.nextAttemptAt], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
+      ['next_attempt_at', changes.nextAttemptAt], ['waiting_reason', changes.waitingReason], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
     ]);
     return [
       ...[...columns].filter((entry): entry is [string, string | number | null] => entry[1] !== undefined),
@@ -474,20 +488,40 @@ export class RunRepository {
    */
   dueWork(limit?: number): { runIds: string[] } {
     const now = new Date().toISOString();
+    this.syncWaitingReasons();
+    const due = `
+      SELECT id FROM agent_runs
+      WHERE status = 'queued' AND message_id IS NULL
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+        AND (${OPEN_PREREQUISITE_COUNT}) = 0
+      ORDER BY created_at ASC, rowid ASC`;
     if (limit !== undefined) {
-      const running = this.runningCount();
-      const capacity = Math.max(0, limit - running);
+      const capacity = Math.max(0, limit - this.runningCount());
       if (capacity === 0) return { runIds: [] };
-      const rows = this.database.prepare(`
-        SELECT id FROM agent_runs
-        WHERE status = 'queued' AND message_id IS NULL
-          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-        ORDER BY created_at ASC, rowid ASC LIMIT ?
-      `).all(now, capacity) as Array<{ id: string }>;
+      const rows = this.database.prepare(`${due} LIMIT ?`).all(now, capacity) as Array<{ id: string }>;
       return { runIds: rows.map((row) => row.id) };
     }
-    const rows = this.database.prepare(`SELECT id FROM agent_runs WHERE status = 'queued' AND message_id IS NULL AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at ASC, rowid ASC`).all(now) as Array<{ id: string }>;
+    const rows = this.database.prepare(due).all(now) as Array<{ id: string }>;
     return { runIds: rows.map((row) => row.id) };
+  }
+
+  /**
+   * Records why a queued run is not due: its work item still has open
+   * prerequisites. Clears the reason once the blockers close or a human forces
+   * the run past the scheduler (it is no longer queued).
+   */
+  private syncWaitingReasons(): void {
+    this.database.prepare(`
+      UPDATE agent_runs
+      SET waiting_reason = 'waiting on ' || (${OPEN_PREREQUISITE_COUNT}) || ' prerequisite(s)'
+      WHERE status = 'queued' AND message_id IS NULL AND (${OPEN_PREREQUISITE_COUNT}) > 0
+        AND waiting_reason IS NOT 'waiting on ' || (${OPEN_PREREQUISITE_COUNT}) || ' prerequisite(s)'
+    `).run();
+    this.database.prepare(`
+      UPDATE agent_runs SET waiting_reason = NULL
+      WHERE waiting_reason IS NOT NULL
+        AND (status != 'queued' OR (${OPEN_PREREQUISITE_COUNT}) = 0)
+    `).run();
   }
 
   /** Count of agent_run rows currently claimed and executing (status = 'running'). */

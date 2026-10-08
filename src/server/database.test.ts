@@ -97,6 +97,7 @@ const EXPECTED_MIGRATIONS = [
   '081_audit_store_and_conversation_reads',
   '082_agent_stream_event_traces',
   '083_remove_session_feedback',
+  '084_agent_run_waiting_reason',
 ];
 
 describe('openDatabase', () => {
@@ -1049,6 +1050,21 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '050_session_feedback_decision_tree_snapshot'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '083_remove_session_feedback'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_feedback'").get()).toBeUndefined();
+    upgraded.close();
+  });
+
+  it('adds the run waiting reason column when upgrading from migration 083', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE agent_runs DROP COLUMN waiting_reason;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '084_agent_run_waiting_reason'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+    expect(columns.some((column) => column.name === 'waiting_reason')).toBe(true);
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '084_agent_run_waiting_reason'").get()).toBeTruthy();
     upgraded.close();
   });
 

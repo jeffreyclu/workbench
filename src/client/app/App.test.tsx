@@ -2208,7 +2208,7 @@ describe('task execution', () => {
       id: `${taskId}-run`, workItemId: taskId, kind: 'execute', requestedTarget: 'codex', requestedAgent: 'codex', agent: 'codex', status,
       instructions: '', output: '', error: '', startedAt: timestamp, completedAt: status === 'completed' ? timestamp : null, createdAt: timestamp,
       conversationId, messageId: null, model: null, accountProfile: 'default', executionProfile: null, inputTokens: null, outputTokens: null,
-      fallbackFrom: null, fallbackReason: null, attempt: 0, maxAttempts: 3, nextAttemptAt: null, resolvedWorkspace: null, origin: 'manual',
+      fallbackFrom: null, fallbackReason: null, attempt: 0, maxAttempts: 3, nextAttemptAt: null, waitingReason: null, resolvedWorkspace: null, origin: 'manual',
     };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input) === '/api/agent-accounts'
@@ -2238,7 +2238,7 @@ describe('task execution', () => {
       workItemId: taskId, kind: 'execute' as const, requestedTarget: 'codex' as const, status: 'completed' as const, instructions: '', output: '', error: '',
       startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z', createdAt: '2026-01-01T00:00:00Z', conversationId: null, messageId: null,
       model: null, executionProfile: null, inputTokens: null, outputTokens: null, fallbackFrom: null, fallbackReason: null,
-      attempt: 0, maxAttempts: 3, nextAttemptAt: null, resolvedWorkspace: null, origin: 'manual' as const,
+      attempt: 0, maxAttempts: 3, nextAttemptAt: null, waitingReason: null, resolvedWorkspace: null, origin: 'manual' as const,
     };
     const runs = [
       { ...baseRun, id: '00000000-0000-4000-8000-000000000011', requestedAgent: 'codex' as const, agent: 'codex' as const },

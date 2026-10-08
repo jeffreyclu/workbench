@@ -1097,6 +1097,8 @@ export interface AgentRun {
   attempt: number;
   maxAttempts: number;
   nextAttemptAt: string | null;
+  /** Why a queued run is not being started (open prerequisites); null when it is due. */
+  waitingReason: string | null;
   /** Directory this run resolved to and edits under. Recorded at dispatch so a run's filesystem target is durable, auditable, and lockable. */
   resolvedWorkspace: string | null;
   /** Historical dispatch origin. New runs are always manual. */

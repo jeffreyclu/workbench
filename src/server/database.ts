@@ -2418,6 +2418,14 @@ const schemaMigrations: readonly Migration[] = [
       database.exec('DROP TABLE IF EXISTS session_feedback;');
     },
   },
+  {
+    // Why a queued run is not due (open prerequisites); NULL when it is due.
+    id: '084_agent_run_waiting_reason',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'waiting_reason')) database.exec('ALTER TABLE agent_runs ADD COLUMN waiting_reason TEXT;');
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
