@@ -3,6 +3,7 @@ import { changeTypeLabel } from './change-type.js';
 import type { DiffHunkReview, DiffHunkReviewState, WorkspaceDiffFile } from './contracts.js';
 import { createReviewDirectorPlan } from './review-director.js';
 import { blockObligations } from './review-obligations.js';
+import type { ReviewDepthTier } from './review-dispatch.js';
 import type { ReviewTier } from './review-routing.js';
 
 /**
@@ -277,4 +278,116 @@ export function mergeAgentVerdict(
   if (existing.note.includes(verdict.note)) return null;
   const state = existing.state === 'needs_changes' || verdict.state === 'needs_changes' ? 'needs_changes' : 'commented';
   return { state, note: `${existing.note}\n\n${verdict.note}`.slice(0, MAX_NOTE_CHARS) };
+}
+
+/**
+ * The adversarial lens.
+ *
+ * A standard or sensitive review runs two lenses inside one review run. The
+ * correctness lens is the five-pass review above. The adversarial lens is a
+ * second vendor that tries to break the change. It derives its attacks from
+ * what the change is supposed to prevent, never from the existing tests, and
+ * it never sees the correctness lens's findings: if it did, it would confirm
+ * them instead of attacking independently.
+ */
+export const ADVERSARIAL_LEDGER_VERSION = 1;
+
+/** Tiers whose review runs the adversarial lens. Trivial runs correctness only. */
+export function reviewRunsAdversarialLens(tier: ReviewDepthTier): boolean {
+  return tier === 'sensitive' || tier === 'standard';
+}
+
+const ADVERSARIAL_PATTERN = /<adversarial-ledger>([\s\S]*?)<\/adversarial-ledger>/i;
+const MAX_DIFF_CHARS = 60_000;
+
+/** Everything the adversarial lens may know. There is deliberately no field
+ * for the correctness ledger or review prose: the builder cannot leak what it
+ * is never handed. */
+export interface AdversarialLensInput {
+  requirement: string;
+  acceptanceCriteria: string[];
+  baseSha: string | null;
+  files: Array<Pick<WorkspaceDiffFile, 'path' | 'patch' | 'isBinary'>>;
+}
+
+export function adversarialLensPrompt(input: AdversarialLensInput): string {
+  const { requirement, acceptanceCriteria, baseSha, files } = input;
+  let budget = MAX_DIFF_CHARS;
+  const diff = files.map((file) => {
+    const patch = file.isBinary ? '(binary file)' : file.patch ?? '(no patch recorded)';
+    const shown = patch.slice(0, Math.max(0, budget));
+    budget -= shown.length;
+    return `--- ${file.path}\n${shown}${shown.length < patch.length ? '\n(patch truncated; read the file for the rest)' : ''}`;
+  }).join('\n\n');
+  return `You are the adversarial reviewer. Your job is to break this change, not to grade it.
+Your working directory is a read-only checkout at the merge base${baseSha ? ` (${baseSha})` : ''}: the code as it was before the change. The change itself is the diff below. Do not edit files.
+
+Requirement:
+${requirement.trim() || '(none recorded)'}
+
+Acceptance criteria:
+${acceptanceCriteria.length ? acceptanceCriteria.map((criterion) => `- ${criterion}`).join('\n') : '- (none recorded; derive them from the requirement)'}
+
+Method:
+1. From the requirement and the acceptance criteria alone, list what this change is supposed to prevent or guarantee. Each is a target claim.
+2. Derive attacks from those claims: inputs, orderings, states, and failures that would make a claim false. Do not derive attacks from existing tests and do not treat passing tests as evidence that a claim holds.
+3. Run each attack against the diff by reading the code it changes and the code around it. Mark it "escaped" if the change lets it succeed, or "held" if the change stops it. Cite file:line evidence either way.
+4. You have not been given anyone else's findings. Do not ask for them.
+
+Write a short plain-English summary, then end with exactly one ledger block:
+<adversarial-ledger>{"version":${ADVERSARIAL_LEDGER_VERSION},"attacks":[{"targetClaim":"<what the change must prevent or guarantee>","method":"<the attack>","result":"escaped" or "held","evidence":"<why, with file:line>"}]}</adversarial-ledger>
+
+The diff:
+${diff || '(no diff available)'}`;
+}
+
+const adversarialLedgerSchema = z.object({
+  version: z.literal(ADVERSARIAL_LEDGER_VERSION),
+  attacks: z.array(z.object({
+    targetClaim: z.string().trim().min(1).max(500),
+    method: z.string().trim().min(1).max(1_000),
+    result: z.enum(['escaped', 'held']),
+    evidence: z.string().trim().min(1).max(1_000),
+  })).min(1),
+});
+
+export type AdversarialLedger = z.infer<typeof adversarialLedgerSchema>;
+export type AdversarialAttack = AdversarialLedger['attacks'][number];
+
+export type AdversarialLedgerParse = { ledger: AdversarialLedger; error: null } | { ledger: null; error: string };
+
+export function parseAdversarialLedger(output: string): AdversarialLedgerParse {
+  const blocks = output.match(new RegExp(ADVERSARIAL_PATTERN.source, 'gi')) ?? [];
+  if (blocks.length === 0) return { ledger: null, error: 'The adversarial review has no <adversarial-ledger> block.' };
+  if (blocks.length > 1) return { ledger: null, error: `The adversarial review has ${blocks.length} <adversarial-ledger> blocks; return exactly one.` };
+  let json: unknown;
+  try { json = JSON.parse(ADVERSARIAL_PATTERN.exec(output)![1].trim()); }
+  catch (error) { return { ledger: null, error: `The <adversarial-ledger> block is not valid JSON: ${error instanceof Error ? error.message : String(error)}` }; }
+  const parsed = adversarialLedgerSchema.safeParse(json);
+  if (!parsed.success) return { ledger: null, error: `The <adversarial-ledger> block does not match the schema: ${parsed.error.issues.map((issue) => `${issue.path.join('.') || 'ledger'} ${issue.message}`).join('; ')}.` };
+  return { ledger: parsed.data, error: null };
+}
+
+/** Both lenses' ledgers, persisted on the review run. */
+export interface ReviewLensLedgers {
+  tier: 'standard' | 'sensitive';
+  correctness: { agent: string; ledger: ReviewLedger | null };
+  adversarial: {
+    agent: string;
+    /** The commit the read-only checkout sat at; null when none could be made. */
+    baseSha: string | null;
+    ledger: AdversarialLedger | null;
+    /** The lens's prose summary, ledger removed. */
+    summary: string;
+    /** Why there is no ledger: the lens failed, was skipped, or returned an invalid block. */
+    error: string | null;
+  };
+}
+
+export function escapedAttacks(ledger: AdversarialLedger | null): AdversarialAttack[] {
+  return ledger?.attacks.filter((attack) => attack.result === 'escaped') ?? [];
+}
+
+export function stripAdversarialLedger(output: string): string {
+  return output.replace(new RegExp(ADVERSARIAL_PATTERN.source, 'gi'), '').replace(/\n{3,}/g, '\n\n').trim();
 }

@@ -20,11 +20,12 @@ import { reviewDispatchLabel, type AgentRunReviewDispatch, type ReviewDepthTier 
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { appendWorkLog } from './work-log.js';
+import { leftRunningBadge, settleRunServers, snapshotRunServers, type RunServerSnapshot } from './run-server-guard.js';
 import { CAPTURE_GATE_ISSUED_EVENT, CAPTURE_GATE_PROMPT, CAPTURE_GATE_SATISFIED_EVENT, captureGateHandoffLine, captureGateState } from './capture-gate.js';
 import { publishRunMarkdown } from './run-artifact-publish.js';
-import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
+import { adversarialLensAgent, describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness, reviewPullRequestUrl, runAdversarialLens } from './review-harness-runner.js';
 import { evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
-import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
+import { carryReviewLedger, parseReviewLedger, reviewHarnessPrompt, reviewRunsAdversarialLens } from '../shared/review-harness.js';
 import { FINAL_RESPONSE_CONTRACT, NO_UI_SURFACE_BADGE, namesUiSurface, verboseResponseRequested, writesClientFiles } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, memoryRetrievalEntries, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
@@ -1974,6 +1975,22 @@ function startReviewAutoScore(repository: WorkItemRepository, run: AgentRun, fal
   if (run.conversationId) void scheduleReviewAutoScore(repository, { conversationId: run.conversationId }, fallbackWorkspace);
 }
 
+/**
+ * A run must stop every dev server it starts. Survivors are killed, recorded
+ * on the task timeline, and returned as badges for the run's handoff.
+ */
+export async function settleRunServersForRun(repository: WorkItemRepository, workItemId: string, runId: string, snapshot: RunServerSnapshot | null, worktrees: string[]): Promise<string[]> {
+  if (!snapshot) return [];
+  try {
+    const badges = (await settleRunServers(snapshot, worktrees)).map(leftRunningBadge);
+    for (const badge of badges) repository.addActivity(workItemId, 'system', 'blocker', `Run ${runId.slice(0, 8)} ${badge}; it was stopped.`);
+    return badges;
+  } catch (error) {
+    console.error('Run server cleanup failed:', error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
 /** What a completed execute run changed. Git diff stats from each worktree
  * are authoritative; observed file writes, without line counts, stand in only
  * when no worktree could be measured. */
@@ -2152,10 +2169,15 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   // first few seconds of every run and the run reads as hung.
   if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● Starting ${run.kind}…` });
   const observedRunEvents: ObservedRunEvent[] = [];
+  // Servers already listening under the worktrees before the agent starts.
+  let serverSnapshot: RunServerSnapshot | null = null;
+  const guardedWorktrees = [...new Set(workspaceBindings.map((binding) => binding.worktree))];
   let externalActionGuard: ExternalActionProcessGuard | undefined;
   let stopExternalActionObserver: (() => void) | undefined;
   try {
     if (workspaceResolutionError) throw workspaceResolutionError;
+    // Tests run in the primary checkout, which hosts the real server.
+    if (!process.env.VITEST) serverSnapshot = await snapshotRunServers(guardedWorktrees).catch(() => null);
     const cwd = workspace ?? resolveWorkingDirectory(item);
     // Task executions reach this runner directly (including Retry), rather
     // than the shared-room dispatcher. Give them the same deterministic
@@ -2321,6 +2343,24 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // The model and effort tier are picked for Jeffrey, not by him. Record the
     // choice and its reason so the activity log explains what actually ran.
     repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
+    // Standard and sensitive reviews run a second, independent lens beside the
+    // correctness lens: the other vendor, a read-only checkout at the merge
+    // base, and no access to this run's findings. The tier is the dispatching
+    // execute run's; a review nobody dispatched has none and runs one lens.
+    const dispatchingRun = run.kind === 'review' ? repository.listRuns(item.id).find((candidate) => candidate.reviewDispatch?.reviewRunId === run.id) : undefined;
+    const lensTier = dispatchingRun?.reviewDispatch?.tier;
+    const adversarialLens = reviewHarness && lensTier && reviewRunsAdversarialLens(lensTier)
+      ? runAdversarialLens({
+        agent: adversarialLensAgent(run.agent),
+        harness: reviewHarness,
+        cwd,
+        requirement: `${item.title}\n${item.description}`.trim(),
+        acceptanceCriteria: dispatchingRun?.instructions.trim() ? [dispatchingRun.instructions.trim().slice(0, 4_000)] : [],
+        runAgent: async (lensAgent, lensCwd, lensPrompt) => (await runAgentCommandWithFallback(
+          lensAgent, lensCwd, lensPrompt, undefined, controller.signal, undefined, profile, undefined, undefined, 'review', run.accountProfile, undefined, undefined, undefined, false, false,
+        )).output,
+      })
+      : null;
     let result = run.agent === 'palmyra'
       ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, previousMessages: palmyraContext, imageAttachments: item.attachments ?? [], requiredWorkbenchTools, externalActionGuard, onProgress: (partialOutput) => {
         repository.updateRun(run.id, { output: partialOutput });
@@ -2540,6 +2580,14 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.addActivity(item.id, 'system', 'progress', CAPTURE_GATE_SATISFIED_EVENT);
     }
     const captureGateLine = captureGateHandoffLine(captureGateIssued, initialGateState === 'not_required' ? 'not_required' : captureGateState(observedRunEvents, `${result.output}\n${gateReply}`));
+    if (adversarialLens && lensTier && (lensTier === 'standard' || lensTier === 'sensitive')) {
+      const adversarial = await adversarialLens;
+      repository.updateRun(run.id, { reviewLenses: { tier: lensTier, correctness: { agent: result.agent, ledger: parseReviewLedger(result.output).ledger }, adversarial } });
+      const escaped = adversarial.ledger?.attacks.filter((attack) => attack.result === 'escaped').length ?? 0;
+      repository.addActivity(item.id, 'system', 'progress', adversarial.ledger
+        ? `Adversarial lens (${adversarial.agent}): ${adversarial.ledger.attacks.length} attack(s), ${escaped} escaped.`
+        : `Adversarial lens (${adversarial.agent}) produced no ledger: ${adversarial.error}`);
+    }
     if (reviewHarness) {
       const recorded = recordReviewHarnessVerdicts(repository, reviewHarness, result.output, reviewHarnessScopes, `${result.agent}, run ${run.id.slice(0, 8)}`);
       repository.addActivity(item.id, 'system', 'progress', `Review harness passed: every decision was checked in all five passes. ${recorded.recorded} verdict(s) recorded in the review queue${recorded.kept ? `; ${recorded.kept} left alone because Jeffrey or the Review Director already decided them` : ''}.`);
@@ -2572,6 +2620,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       verbose,
     });
     result = { ...result, output };
+    const leftRunning = await settleRunServersForRun(repository, item.id, run.id, serverSnapshot, guardedWorktrees);
     // Measured before integration, which resets an integrated worktree.
     const changeStats = run.kind === 'execute' ? await measureRunChanges(workspaceBindings, observedRunEvents) : [];
     const integrationCommits: string[] = [];
@@ -2597,7 +2646,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const finishPatch = { agent: result.agent, status: 'completed' as const, output, completedAt, ...telemetry };
     // Every run kind saves a handoff, so its summary, blockers, and learnings
     // are on record for the next agent and for Jeffrey.
-    const finished = repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt, captureGateLine, noUiSurface ? NO_UI_SURFACE_BADGE : undefined));
+    const finished = repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt, captureGateLine, noUiSurface ? NO_UI_SURFACE_BADGE : undefined, leftRunning));
     if (!finished) return;
     repository.recordMemoryCitations(output, { runId: run.id, messageId: run.messageId, conversationId: run.conversationId });
     if (executionPlan) repository.createExecutionPlan(item.id, executionPlan.summary, executionPlan.tasks);
@@ -2655,6 +2704,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       }
       return;
     }
+    await settleRunServersForRun(repository, item.id, run.id, serverSnapshot, guardedWorktrees);
     const message = error instanceof Error ? error.message : 'Agent run failed.';
     const terminalCheckpoint = error instanceof AgentTerminalWarningError ? error.checkpoint.trim() : '';
     const activeAgent = repository.getRun(run.id)?.agent ?? run.agent;

@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { DiffHunkReview, WorkspaceDiffFile } from './contracts.js';
 import { createReviewDirectorPlan } from './review-director.js';
 import {
+  adversarialLensPrompt,
   AGENT_REVIEW_NOTE_PREFIX,
+  ADVERSARIAL_LEDGER_VERSION,
+  escapedAttacks,
+  parseAdversarialLedger,
+  reviewRunsAdversarialLens,
+  stripAdversarialLedger,
   buildReviewHarness,
   mergeAgentVerdict,
   parseReviewLedger,
@@ -170,5 +176,47 @@ describe('review harness', () => {
     expect(reviewHarnessPrompt(unavailable)).toContain('Unavailable: No brokered diff.');
     expect(reviewHarnessViolations(unavailable, review(REVIEW_PASSES.map(() => ({ clear: [] }))))).toEqual([]);
     expect(reviewHarnessViolations(unavailable, review(REVIEW_PASSES.slice(0, 2).map(() => ({ clear: [] }))))[0]).toMatch(/once each, in order/);
+  });
+
+  describe('adversarial lens', () => {
+    const block = (attacks: unknown) => `Summary.\n<adversarial-ledger>${JSON.stringify({ version: ADVERSARIAL_LEDGER_VERSION, attacks })}</adversarial-ledger>`;
+    const attack = { targetClaim: 'No double charge', method: 'Replay the request', result: 'escaped', evidence: 'b.ts:9' };
+
+    it('parses attacks with a target claim, method, escaped|held result, and evidence', () => {
+      const parsed = parseAdversarialLedger(block([attack, { ...attack, result: 'held' }]));
+      expect(parsed.error).toBeNull();
+      expect(escapedAttacks(parsed.ledger)).toHaveLength(1);
+      expect(stripAdversarialLedger(block([attack]))).toBe('Summary.');
+    });
+
+    it('rejects a missing block, a repeated block, bad JSON, an unknown result, missing evidence, and no attacks', () => {
+      expect(parseAdversarialLedger('nothing').error).toMatch(/no <adversarial-ledger>/);
+      expect(parseAdversarialLedger(`${block([attack])}${block([attack])}`).error).toMatch(/2 <adversarial-ledger>/);
+      expect(parseAdversarialLedger('<adversarial-ledger>{</adversarial-ledger>').error).toMatch(/not valid JSON/);
+      expect(parseAdversarialLedger(block([{ ...attack, result: 'maybe' }])).error).toMatch(/result/);
+      expect(parseAdversarialLedger(block([{ ...attack, evidence: '' }])).error).toMatch(/evidence/);
+      expect(parseAdversarialLedger(block([])).error).toMatch(/attacks/);
+    });
+
+    it('runs only for standard and sensitive reviews', () => {
+      expect([reviewRunsAdversarialLens('sensitive'), reviewRunsAdversarialLens('standard'), reviewRunsAdversarialLens('trivial')]).toEqual([true, true, false]);
+    });
+
+    it('builds its prompt without the correctness ledger or review prose, by construction', () => {
+      // The input type has no field for either, and anything extra is ignored.
+      const correctness = review([{ clear: [1] }, { clear: [1] }, { clear: [1] }, { clear: [1] }, { clear: [1] }]);
+      const prompt = adversarialLensPrompt({
+        requirement: 'Charge once.', acceptanceCriteria: ['Replays are rejected.'], baseSha: 'abc123',
+        files: [{ path: 'a.ts', patch: '+x', isBinary: false }],
+        ...({ ledger: correctness, correctnessLedger: correctness } as object),
+      });
+      expect(prompt).not.toContain('review-ledger');
+      expect(prompt).not.toContain('Pass 1');
+      expect(prompt).toContain('Replays are rejected.');
+      expect(prompt).toContain('abc123');
+      expect(prompt).toContain('+x');
+      expect(prompt).toMatch(/Do not derive attacks from existing tests|not derive attacks from existing tests/);
+      expect(prompt).toContain('<adversarial-ledger>');
+    });
   });
 });

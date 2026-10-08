@@ -72,6 +72,12 @@ function withWholeChangeLedger(review: string, finding: string): string {
   return `${review}\n\n<review-ledger>${JSON.stringify(ledger)}</review-ledger>`;
 }
 
+/** Like withWholeChangeLedger, but also clears decision D1 in every pass. */
+function withDecisionsClearLedger(review: string, finding: string): string {
+  const ledger = { version: 1, passes: [1, 2, 3, 4, 5].map((pass) => ({ pass, clear: [1], findings: pass === 1 ? [{ decision: 0, severity: 'blocking', finding }] : [] })) };
+  return `${review}\n\n<review-ledger>${JSON.stringify(ledger)}</review-ledger>`;
+}
+
 describe('classifyExecution', () => {
   it('allows finite Vite builds while blocking persistent Vite servers', () => {
     expect(blockedPersistentForegroundCommand("/bin/zsh -lc 'npx vite build --configLoader runner'")).toBe(false);
@@ -832,9 +838,12 @@ fi`;
 
   it('dispatches a sensitive review automatically when an execute run changes src/server/database.ts', async () => {
     const completed = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Added the column.' } });
-    const review = JSON.stringify({ type: 'result', result: 'Review complete.' });
+    const review = JSON.stringify({ type: 'result', result: withDecisionsClearLedger('## Problem\nReview found one gap.\n\n## Solution\n### Pass 1\nBlocking: Pass 1 found a gap.\n\n### Pass 2\nNo material issues.\n\n### Pass 3\nNo material issues.\n\n### Pass 4\nNo material issues.\n\n### Pass 5\nNo material issues.\n\n## Context\nStatic review only.', 'Pass 1 found a gap.') });
+    const adversarial = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Attacked.\n<adversarial-ledger>{"version":1,"attacks":[{"targetClaim":"Schema upgrades","method":"Open an old database","result":"escaped","evidence":"database.ts:1"}]}</adversarial-ledger>' } });
+    // The same fake codex serves two roles: it implements, and from a read-only
+    // adversarial checkout it attacks.
     const { directory, log } = fakeAgentDirectory(
-      `printf 'export const added = true;\\n' >> src/server/database.ts\nprintf '%s\\n' '${completed}'`,
+      `case "$PWD" in *workbench-adversarial-*) printf '%s\\n' '${adversarial}';; *) printf 'export const added = true;\\n' >> src/server/database.ts\nprintf '%s\\n' '${completed}';; esac`,
       `printf '%s\\n' '${review}'`,
     );
     // Git must stay reachable for the diff stats; the fake agents still win.
@@ -867,7 +876,20 @@ fi`;
       'Review dispatched automatically to claude (chosen because implementer was codex): review: always / sensitive, because it touches data (src/server/database.ts).',
     );
     await waitFor(() => !isAgentRunActive(reviewRun.id) && repository.getRun(reviewRun.id)!.status !== 'queued', 10_000);
-    expect(readFileSync(log, 'utf8').trim().split('\n').slice(0, 2)).toEqual(['codex', 'claude']);
+    // The execute run, then both lenses of the one review run: Claude's correctness lens and the other vendor's adversarial lens.
+    const invocations = readFileSync(log, 'utf8').trim().split('\n');
+    expect(invocations[0]).toBe('codex');
+    expect(invocations.slice(1, 3).sort()).toEqual(['claude', 'codex']);
+    const lensed = repository.getRun(reviewRun.id)!;
+    expect(lensed.error).toBe('');
+    expect(lensed.status).toBe('completed');
+    expect(lensed.reviewLenses?.tier).toBe('sensitive');
+    expect(lensed.reviewLenses?.correctness.agent).toBe('claude');
+    expect(lensed.reviewLenses?.correctness.ledger?.passes[0].findings[0].finding).toBe('Pass 1 found a gap.');
+    expect(lensed.reviewLenses?.adversarial.agent).toBe('codex');
+    expect(lensed.reviewLenses?.adversarial.ledger?.attacks[0]).toEqual(expect.objectContaining({ result: 'escaped', evidence: 'database.ts:1' }));
+    // Neither lens carries the other's findings.
+    expect(JSON.stringify(lensed.reviewLenses?.adversarial)).not.toContain('Pass 1 found a gap.');
     database.close();
   });
 

@@ -70,6 +70,7 @@ import { ProjectColorDot } from '../../components/project/project-color';
 import { InlineProjectEditor } from '../../components/project/project-field';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
 import { reviewDispatchLabel } from '../../../shared/review-dispatch';
+import { ReviewLensSections } from './review-lens-sections.js';
 import { SourcesDialog } from '../source';
 import { createTaskStackViewModel } from '../../lib/stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../hooks/realtime';
@@ -725,6 +726,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
                 </tbody>
               </table>}
               {run.status === 'completed' && run.output && <div className="run-summary"><span className="section-label">Agent summary</span><AgentMessageBody body={run.output} running={false} workItemId={item.id} /></div>}
+              {run.reviewLenses && <ReviewLensSections lenses={run.reviewLenses} />}
               {run.reviewDispatch && <p className={`run-review-dispatch review-${run.reviewDispatch.mode}`}>{reviewDispatchLabel(run.reviewDispatch)}</p>}
               {run.status === 'completed' && run.reviewHandoff && <RunHandoffCard handoff={run.reviewHandoff} />}
               {run.error && <p className="error-message">{run.error}</p>}

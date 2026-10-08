@@ -106,6 +106,7 @@ const EXPECTED_MIGRATIONS = [
   '090_knowledge_drift_report',
   '091_agent_run_review_dispatch',
   '092_consolidation_proposals',
+  '093_agent_run_review_lenses',
 ];
 
 describe('openDatabase', () => {
@@ -209,6 +210,21 @@ describe('openDatabase', () => {
     const columns = upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
     expect(columns.map(({ name }) => name)).toContain('review_dispatch_json');
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '091_agent_run_review_dispatch'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the review lens ledgers when upgrading from migration 091', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE agent_runs DROP COLUMN review_lenses_json;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '093_agent_run_review_lenses'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+    expect(columns.map(({ name }) => name)).toContain('review_lenses_json');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '093_agent_run_review_lenses'").get()).toBeTruthy();
     upgraded.close();
   });
 

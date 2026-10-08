@@ -2579,6 +2579,17 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // A standard or sensitive review run's correctness and adversarial lens
+    // ledgers, stored together on the one run that owns both.
+    id: '093_agent_run_review_lenses',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'review_lenses_json')) {
+        database.exec("ALTER TABLE agent_runs ADD COLUMN review_lenses_json TEXT CHECK (review_lenses_json IS NULL OR json_valid(review_lenses_json));");
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

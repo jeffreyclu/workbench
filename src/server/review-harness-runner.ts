@@ -1,6 +1,11 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { SUPERVISOR_EVIDENCE_REASON_PREFIX, type DiffHunkReview, type WorkspaceDiff } from '../shared/contracts.js';
 import { buildReviewDecisions } from '../shared/review-decisions.js';
-import { buildReviewHarness, mergeAgentVerdict, parseReviewLedger, reviewHarnessVerdicts, type ReviewHarness } from '../shared/review-harness.js';
+import { adversarialLensPrompt, buildReviewHarness, mergeAgentVerdict, parseAdversarialLedger, parseReviewLedger, reviewHarnessVerdicts, stripAdversarialLedger, type ReviewHarness, type ReviewLensLedgers } from '../shared/review-harness.js';
 import { parseGitHubPullRequestUrl } from './github-pull-request-diff.js';
 import { publishRealtimeEvent } from './realtime.js';
 import type { DiffReviewScope, WorkItemRepository } from './repository.js';
@@ -110,4 +115,60 @@ export function recordReviewHarnessVerdicts(
   }
   if (recordedDecisions.size) publishRealtimeEvent('work-items', 'shared');
   return { recorded: recordedDecisions.size, kept: [...keptDecisions].filter((ordinal) => !recordedDecisions.has(ordinal)).length };
+}
+
+const execFileAsync = promisify(execFile);
+
+/** The other vendor. Palmyra reviews are attacked by Claude, as selectReviewAgent does. */
+export function adversarialLensAgent(correctnessAgent: string): 'claude' | 'codex' {
+  return correctnessAgent === 'claude' ? 'codex' : 'claude';
+}
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  return (await execFileAsync('git', args, { cwd, timeout: 60_000, maxBuffer: 1_048_576 })).stdout.trim();
+}
+
+/**
+ * Run the adversarial lens: the other vendor, in a read-only checkout at the
+ * merge base, given the diff and the task's requirement and nothing from the
+ * correctness lens. The lens never throws: a failure becomes the ledger's
+ * error, so it can never fail the review run that owns it.
+ */
+export async function runAdversarialLens(input: {
+  agent: 'claude' | 'codex';
+  harness: ReviewHarness;
+  cwd: string;
+  requirement: string;
+  acceptanceCriteria: string[];
+  runAgent: (agent: 'claude' | 'codex', cwd: string, prompt: string) => Promise<string>;
+}): Promise<ReviewLensLedgers['adversarial']> {
+  const { agent, harness } = input;
+  const failed = (error: string, baseSha: string | null = null): ReviewLensLedgers['adversarial'] => ({ agent, baseSha, ledger: null, summary: '', error });
+  if (!harness.files.length) return failed('There was no diff to attack.');
+  let checkout: string | null = null;
+  let baseSha: string | null = null;
+  try {
+    // A pull request names its base. A working-tree diff is taken against HEAD, so HEAD is its merge base.
+    baseSha = harness.source.kind === 'pull-request' && harness.source.baseSha ? harness.source.baseSha : await git(input.cwd, ['rev-parse', 'HEAD']);
+    checkout = await mkdtemp(join(tmpdir(), 'workbench-adversarial-'));
+    await git(input.cwd, ['worktree', 'add', '--detach', checkout, baseSha]);
+    await execFileAsync('chmod', ['-R', 'a-w', checkout]);
+    const output = await input.runAgent(agent, checkout, adversarialLensPrompt({
+      requirement: input.requirement,
+      acceptanceCriteria: input.acceptanceCriteria,
+      baseSha,
+      files: harness.files,
+    }));
+    const parsed = parseAdversarialLedger(output);
+    return { agent, baseSha, ledger: parsed.ledger, summary: stripAdversarialLedger(output).slice(0, 4_000), error: parsed.error };
+  } catch (error) {
+    return failed(error instanceof Error ? error.message : String(error), baseSha);
+  } finally {
+    if (checkout) {
+      const path = checkout;
+      await execFileAsync('chmod', ['-R', 'u+w', path]).catch(() => undefined);
+      await git(input.cwd, ['worktree', 'remove', '--force', path]).catch(() => undefined);
+      await rm(path, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
 }

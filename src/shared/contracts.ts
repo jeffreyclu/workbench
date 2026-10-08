@@ -3,6 +3,7 @@ import { REVIEW_CHANGE_TYPES } from './change-type.js';
 import { projectKey } from './project-name.js';
 import { aiProviderChoiceSchema, type AiProviderChoice } from './ai-providers.js';
 import type { AgentRunReviewDispatch } from './review-dispatch.js';
+import type { ReviewLensLedgers } from './review-harness.js';
 
 export const workItemStatusSchema = z.enum([
   'backlog',
@@ -1158,6 +1159,8 @@ export interface AgentRun {
   reviewHandoff: AgentRunReviewHandoff | null;
   /** Whether this execute run's change was sent to review, and at what depth. */
   reviewDispatch: AgentRunReviewDispatch | null;
+  /** A standard or sensitive review run's two lens ledgers; null for every other run. */
+  reviewLenses: ReviewLensLedgers | null;
 }
 
 /** A conversation-level alert threshold for cumulative cached-input spend.

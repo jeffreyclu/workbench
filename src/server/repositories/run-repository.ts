@@ -5,6 +5,7 @@ import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type AgentRunPromptSize, type A
 import { resolveCost } from '../model-pricing.js';
 import { WORKBENCH_PROJECT_KEY } from '../../shared/project-name.js';
 import type { AgentRunReviewDispatch } from '../../shared/review-dispatch.js';
+import type { ReviewLensLedgers } from '../../shared/review-harness.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
 export interface RunPatch {
@@ -34,6 +35,7 @@ export interface RunPatch {
   resolvedWorkspace?: string | null;
   promptSize?: AgentRunPromptSize | null;
   reviewDispatch?: AgentRunReviewDispatch | null;
+  reviewLenses?: ReviewLensLedgers | null;
 }
 
 function mapReviewHandoffRow(row: Record<string, string | null>): AgentRunReviewHandoff | null {
@@ -90,6 +92,7 @@ function mapRunRow(row: Record<string, string | null>): AgentRun {
     promptSize: row.prompt_size_json ? JSON.parse(row.prompt_size_json) as AgentRunPromptSize : null,
     reviewHandoff: mapReviewHandoffRow(row),
     reviewDispatch: row.review_dispatch_json ? JSON.parse(row.review_dispatch_json) as AgentRunReviewDispatch : null,
+    reviewLenses: row.review_lenses_json ? JSON.parse(row.review_lenses_json) as ReviewLensLedgers : null,
   };
 }
 
@@ -251,6 +254,7 @@ export class RunRepository {
       ['next_attempt_at', changes.nextAttemptAt], ['waiting_reason', changes.waitingReason], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
       ['prompt_size_json', changes.promptSize === undefined ? undefined : changes.promptSize === null ? null : JSON.stringify(changes.promptSize)],
       ['review_dispatch_json', changes.reviewDispatch === undefined ? undefined : changes.reviewDispatch === null ? null : JSON.stringify(changes.reviewDispatch)],
+      ['review_lenses_json', changes.reviewLenses === undefined ? undefined : changes.reviewLenses === null ? null : JSON.stringify(changes.reviewLenses)],
     ]);
     return [
       ...[...columns].filter((entry): entry is [string, string | number | null] => entry[1] !== undefined),
