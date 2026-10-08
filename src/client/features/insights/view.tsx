@@ -10,6 +10,7 @@ import { KnowledgeDriftPanel } from './knowledge-drift';
 import { KnowledgeUsagePanel } from './knowledge-usage';
 import { Tabs } from '../../components/tabs/tabs';
 import { readInsightsTab, writeInsightsTab, type InsightsTab } from '../../lib/preferences';
+import { toastError } from '../../state/toast-store';
 
 const INSIGHTS_TIMEFRAMES: readonly { value: InsightsTimeframe; label: string }[] = [
   { value: '15m', label: 'Last 15 minutes' },
@@ -178,7 +179,7 @@ export function InsightsView() {
   const memoryDiagnostics = useQuery({ queryKey: ['memory-diagnostics'], queryFn: api.getMemoryDiagnostics, enabled: selectedTab === 'system' });
   const queryClient = useQueryClient();
   const knowledgeDrift = useQuery({ queryKey: ['knowledge-drift'], queryFn: api.getKnowledgeDrift, enabled: selectedTab === 'system' });
-  const recheckKnowledgeDrift = useMutation({ mutationFn: api.recheckKnowledgeDrift, onSuccess: (report) => queryClient.setQueryData(['knowledge-drift'], report) });
+  const recheckKnowledgeDrift = useMutation({ mutationFn: api.recheckKnowledgeDrift, onSuccess: (report) => queryClient.setQueryData(['knowledge-drift'], report), onError: (error) => toastError('Could not re-check knowledge drift.', error) });
   const knowledgeUsage = useQuery({ queryKey: ['knowledge-usage'], queryFn: api.getKnowledgeUsage, enabled: selectedTab === 'system' });
   const mcpQuality = useQuery({ queryKey: ['mcp-quality'], queryFn: api.getMcpQualityHistory, enabled: selectedTab === 'system' });
   const data = insights.data;

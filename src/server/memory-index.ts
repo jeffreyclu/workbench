@@ -238,7 +238,7 @@ const NUMBERED_ENTRY_HEADING = /^#{2,3} <a id="(\d+)"><\/a>\s*(?:\d+\.\s*)?(.+)$
 function splitNumberedEntries(body: string): Array<{ id: string; title: string; body: string }> | null {
   const entries: Array<{ id: string; title: string; lines: string[] }> = [];
   const seen = new Set<string>();
-  let preamble: string[] = [];
+  const preamble: string[] = [];
   let inFence = false;
   for (const line of body.split('\n')) {
     if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;

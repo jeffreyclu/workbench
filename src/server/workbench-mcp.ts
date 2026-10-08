@@ -307,7 +307,7 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     const inferredProjectName = projectName ?? contextualItem?.projectName ?? null;
 
     // auto never filters: it searches everything and boosts the inferred project.
-    let appliedScope: 'conversation' | 'task' | 'project' | 'all' = scope === 'auto' ? 'all' : scope;
+    const appliedScope: 'conversation' | 'task' | 'project' | 'all' = scope === 'auto' ? 'all' : scope;
     const boostProject = scope === 'auto' && inferredProjectName ? projectKey(inferredProjectName) || undefined : undefined;
     if (appliedScope === 'conversation' && !conversationId) throw new ToolFailure('INVALID_ARGUMENT', 'conversation scope requires conversationId.');
     if (appliedScope === 'task' && !contextualItem) throw new ToolFailure('INVALID_ARGUMENT', 'task scope requires workItemId or a linked conversation.');

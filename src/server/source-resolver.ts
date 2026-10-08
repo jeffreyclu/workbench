@@ -78,6 +78,7 @@ function githubHeaders(token: string | undefined): Record<string, string> {
 
 function cleanActionsLog(value: string): string[] {
   return value
+    // eslint-disable-next-line no-control-regex -- strips ANSI escape sequences from CI logs
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
     .split(/\r?\n/)
     .map((line) => line.replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/, '').trimEnd());

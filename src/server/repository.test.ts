@@ -1870,7 +1870,7 @@ describe('WorkItemRepository', () => {
   });
 
   it('makes a live interjection an explicit immediate instruction while preserving its text', () => {
-    expect(interjectionSteeringPrompt('INTERJECTION!')).toContain('Acknowledge and apply this direction immediately');
+    expect(interjectionSteeringPrompt('INTERJECTION!')).toContain('Apply this direction immediately');
     expect(interjectionSteeringPrompt('INTERJECTION!')).toContain('INTERJECTION!');
   });
 
