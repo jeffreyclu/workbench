@@ -255,6 +255,24 @@ function splitNumberedEntries(body: string): Array<{ id: string; title: string; 
     .filter((entry) => nonEmpty(entry.body));
 }
 
+/**
+ * Every entry in a numbered file shares the file's mtime, so one new lesson
+ * would make all of its neighbours look new. An entry is dated by the latest
+ * calendar date written in it ("Learned 2026-10-08"), never later than the
+ * file itself; an undated entry falls back to the file's mtime.
+ */
+function numberedEntryDate(body: string, fileModifiedAt: string): string {
+  let latest: string | null = null;
+  for (const [literal] of body.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) {
+    const timestamp = Date.parse(`${literal}T00:00:00.000Z`);
+    if (!Number.isFinite(timestamp)) continue;
+    const iso = new Date(timestamp).toISOString();
+    if (iso.slice(0, 10) !== literal || iso > fileModifiedAt) continue;
+    if (!latest || iso > latest) latest = iso;
+  }
+  return latest ?? fileModifiedAt;
+}
+
 function collectDocCandidates(label: string, docsRoot: string): CandidateDocument[] {
   const candidates: CandidateDocument[] = [];
   for (const file of listMarkdownFiles(docsRoot)) {
@@ -272,7 +290,7 @@ function collectDocCandidates(label: string, docsRoot: string): CandidateDocumen
       for (const entry of entries) {
         candidates.push({
           source: 'doc', sourceId: `${sourceId}#${entry.id}`, conversationId: null, workItemId: null, actor: null,
-          title: entry.title, body: entry.body, createdAt,
+          title: entry.title, body: entry.body, createdAt: numberedEntryDate(entry.body, createdAt),
         });
       }
       continue;
@@ -706,6 +724,60 @@ function sourcePrior(document: Pick<MemoryDocumentRow, 'source' | 'source_id'>):
   return { label: document.source.replaceAll('_', ' '), multiplier: MEMORY_SOURCE_PRIORS[key] ?? 1 };
 }
 
+/**
+ * Words and phrases that make a request about recent events ("what changed",
+ * "today", "latest"). Such a question is answered by records that are new,
+ * not by records that merely share its topic words, so it switches retrieval
+ * to the time-scoped profile below. Matched as whole words on the request
+ * line only, never on the task or project context appended after it.
+ */
+export const TIME_SCOPED_QUERY_TERMS = [
+  'changed', 'changes', 'recent', 'recently', 'today', 'yesterday', 'this week', 'latest', 'new', 'what happened', 'since',
+] as const;
+
+export const TIME_SCOPED_WINDOW_DAYS = 7;
+const TIME_SCOPED_RECENCY_STEPS = [{ withinDays: 2, multiplier: 2 }, { withinDays: TIME_SCOPED_WINDOW_DAYS, multiplier: 1.5 }] as const;
+// Requests and chat describe what someone asked for. Task activity, the work
+// log (Workbench's chronology of completed runs), and numbered lessons record
+// what actually changed.
+const TIME_SCOPED_DEMOTED_SOURCES = new Set(['message', 'conversation', 'run_instructions', 'run_error']);
+const TIME_SCOPED_DEMOTION = 0.7;
+const WORK_LOG_SOURCE_ID = 'workbench-docs:work-log.md';
+const TIME_SCOPED_CHANGE_RECORD_PREFERENCE = 1.25;
+// Raising topical relevance to this power narrows the gap between a record
+// that repeats the question's words and one that describes the same change in
+// other words ("landed", "units", "lessons"), so recency and record type decide.
+const TIME_SCOPED_RELEVANCE_EXPONENT = 0.5;
+export const TIME_SCOPED_RETRIEVAL_STEP = `Time-scoped question: boosted records from the last ${TIME_SCOPED_WINDOW_DAYS} days`;
+
+function queryWords(value: string): string[] {
+  return value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+export function isTimeScopedMemoryQuery(query: string): boolean {
+  const text = ` ${queryWords(memoryQueryParts(query).primary).join(' ')} `;
+  return TIME_SCOPED_QUERY_TERMS.some((term) => text.includes(` ${term} `));
+}
+
+/**
+ * In a time-scoped request the trigger words say when, not what: the recency
+ * boost already answers "changes" and "today". Left in the keyword channel they
+ * reward boilerplate such as "Integrated agent changes into ...". Returns the
+ * request with them removed, or the request unchanged if nothing else remains.
+ */
+function timeScopedTopic(primary: string): string {
+  const terms = TIME_SCOPED_QUERY_TERMS.map((term) => term.split(' '));
+  const words = queryWords(primary);
+  const kept: string[] = [];
+  for (let index = 0; index < words.length;) {
+    const match = terms.find((term) => term.every((word, offset) => words[index + offset] === word));
+    if (match) index += match.length;
+    else kept.push(words[index++]);
+  }
+  const topic = kept.join(' ');
+  return significantTerms(topic).size ? topic : primary;
+}
+
 const RECENCY_EXEMPT_SOURCES = new Set(['doc', 'artifact']);
 
 function recencyMultiplier(createdAt: string): { ageDays: number | null; multiplier: number } {
@@ -718,21 +790,53 @@ function recencyMultiplier(createdAt: string): { ageDays: number | null; multipl
   };
 }
 
-function rankingPath(document: Pick<MemoryDocumentRow, 'source' | 'source_id' | 'created_at'>): {
+function timeScopedBoost(createdAt: string): { ageDays: number; multiplier: number } | null {
+  const timestamp = Date.parse(createdAt);
+  if (!Number.isFinite(timestamp)) return null;
+  const ageDays = Math.max(0, (Date.now() - timestamp) / 86_400_000);
+  const step = TIME_SCOPED_RECENCY_STEPS.find(({ withinDays }) => ageDays <= withinDays);
+  return step ? { ageDays, multiplier: step.multiplier } : null;
+}
+
+function rankingPath(document: Pick<MemoryDocumentRow, 'source' | 'source_id' | 'created_at'>, timeScoped = false): {
   prior: number;
   recency: number;
   path: string[];
 } {
   const prior = sourcePrior(document);
-  // Durable knowledge does not go stale by age, and a doc row's created_at is
-  // its indexing time, so recency only applies to chat and run records.
+  const changeRecord = document.source === 'activity' || document.source_id === WORK_LOG_SOURCE_ID || prior.label === 'numbered lesson';
+  const demotion = !timeScoped ? 1
+    : TIME_SCOPED_DEMOTED_SOURCES.has(document.source) ? TIME_SCOPED_DEMOTION
+      : changeRecord ? TIME_SCOPED_CHANGE_RECORD_PREFERENCE : 1;
+  const priorPath = [
+    `Source prior: ${prior.label} ×${prior.multiplier.toFixed(2)}`,
+    ...(demotion < 1 ? [`Time-scoped question: requests and chat rank below recorded changes ×${demotion.toFixed(2)}`] : []),
+    ...(demotion > 1 ? [`Time-scoped question: activity, work log, and lessons record changes ×${demotion.toFixed(2)}`] : []),
+  ];
+  // A time-scoped question boosts every new record, docs included: a doc
+  // row's created_at is its file mtime (a numbered entry's own date), so a
+  // lesson or work-log entry written today counts as new.
+  const boost = timeScoped ? timeScopedBoost(document.created_at) : null;
+  if (boost) {
+    return {
+      prior: prior.multiplier * demotion,
+      recency: boost.multiplier,
+      path: [
+        ...priorPath,
+        TIME_SCOPED_RETRIEVAL_STEP,
+        `Recency: ${Math.floor(boost.ageDays)}d old ×${boost.multiplier.toFixed(2)}`,
+      ],
+    };
+  }
+  // Durable knowledge does not go stale by age, so outside the time-scoped
+  // window recency decay only applies to chat and run records.
   const recency = RECENCY_EXEMPT_SOURCES.has(document.source) ? { ageDays: null, multiplier: 1 } : recencyMultiplier(document.created_at);
   const age = RECENCY_EXEMPT_SOURCES.has(document.source) ? 'not applied (durable)' : recency.ageDays === null ? 'unknown age' : `${Math.floor(recency.ageDays)}d old`;
   return {
-    prior: prior.multiplier,
+    prior: prior.multiplier * demotion,
     recency: recency.multiplier,
     path: [
-      `Source prior: ${prior.label} ×${prior.multiplier.toFixed(2)}`,
+      ...priorPath,
       `Recency: ${age} ×${recency.multiplier.toFixed(2)}`,
     ],
   };
@@ -796,14 +900,16 @@ function timeBucket(createdAt: string): string | null {
 /**
  * Preserve the strongest direct matches, then reduce repetition by task,
  * conversation, source, and quarter. Scores stay visible and comparable; the
- * diversity pass changes only selection order.
+ * diversity pass changes only selection order. A time-scoped question asks
+ * about one window, so it does not spread selection across quarters.
  */
-export function diversifyMemoryResults(results: MemorySearchResult[], limit: number): MemorySearchResult[] {
+export function diversifyMemoryResults(results: MemorySearchResult[], limit: number, options: { spreadAcrossTime?: boolean } = {}): MemorySearchResult[] {
+  const spreadAcrossTime = options.spreadAcrossTime ?? true;
   const safeLimit = Math.max(0, Math.min(limit, results.length));
   if (!safeLimit) return [];
   const ranked = [...results].sort((left, right) => right.score - left.score || right.createdAt.localeCompare(left.createdAt));
   const direct = ranked.filter((result) => result.retrievalPath.every((step) => step === 'Matched request'
-    || step.startsWith('Source prior:') || step.startsWith('Recency:')));
+    || step.startsWith('Source prior:') || step.startsWith('Recency:') || step.startsWith('Time-scoped question:')));
   const protectedCount = Math.min(direct.length, Math.max(1, Math.min(5, Math.ceil(safeLimit * 0.5))));
   const selected = direct.slice(0, protectedCount);
   const selectedKeys = new Set(selected.map((result) => `${result.source}:${result.sourceId}`));
@@ -816,7 +922,7 @@ export function diversifyMemoryResults(results: MemorySearchResult[], limit: num
     if (result.workItemId) workItemCounts.set(result.workItemId, (workItemCounts.get(result.workItemId) ?? 0) + 1);
     if (result.conversationId) conversationCounts.set(result.conversationId, (conversationCounts.get(result.conversationId) ?? 0) + 1);
     sourceCounts.set(result.source, (sourceCounts.get(result.source) ?? 0) + 1);
-    const bucket = timeBucket(result.createdAt);
+    const bucket = spreadAcrossTime ? timeBucket(result.createdAt) : null;
     if (bucket) timeCounts.set(bucket, (timeCounts.get(bucket) ?? 0) + 1);
   };
   selected.forEach(recordSelection);
@@ -826,7 +932,7 @@ export function diversifyMemoryResults(results: MemorySearchResult[], limit: num
     let bestAdjustedScore = Number.NEGATIVE_INFINITY;
     for (let index = 0; index < remaining.length; index += 1) {
       const candidate = remaining[index];
-      const bucket = timeBucket(candidate.createdAt);
+      const bucket = spreadAcrossTime ? timeBucket(candidate.createdAt) : null;
       const adjustedScore = candidate.score
         * Math.pow(0.82, candidate.workItemId ? workItemCounts.get(candidate.workItemId) ?? 0 : 0)
         * Math.pow(0.86, candidate.conversationId ? conversationCounts.get(candidate.conversationId) ?? 0 : 0)
@@ -870,8 +976,19 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     || CONTEXT_REFERENTIAL_REQUEST.test(primary));
   const contextWeight = contextDependent ? 0.72 : 0.14;
   const fileBacked = Boolean(database.location());
+  const timeScoped = isTimeScopedMemoryQuery(trimmed);
+  const lexicalPrimary = timeScoped ? timeScopedTopic(primary) : primary;
+  // Old records that share the topic words fill the candidate pool long before
+  // a new record that describes the change in other words. A time-scoped
+  // question therefore gets a second pass over only the last week's records;
+  // its ranks are ranks among recent records, which is the population the
+  // question asks about.
+  const passes = [scope, ...(timeScoped ? [{
+    sql: `${scope.sql} AND md.created_at >= ?`,
+    parameters: [...scope.parameters, new Date(Date.now() - (TIME_SCOPED_WINDOW_DAYS * 86_400_000)).toISOString()],
+  }] : [])];
 
-  const lexicalRows = (text: string): RankedChunk[] => {
+  const lexicalRows = (text: string, pass: typeof scope): RankedChunk[] => {
     const matchQuery = buildMemoryFtsMatchQuery(text);
     if (!matchQuery) return [];
     return database.prepare(`
@@ -880,65 +997,71 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
       JOIN memory_chunks ON memory_chunks.id = memory_chunks_fts.chunk_id
       JOIN memory_documents md ON md.id = memory_chunks.document_id
       WHERE memory_chunks_fts MATCH ?
-        ${scope.sql}
+        ${pass.sql}
       ORDER BY bm25(memory_chunks_fts)
       LIMIT ${MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE}
-    `).all(matchQuery, ...scope.parameters) as RankedChunk[];
+    `).all(matchQuery, ...pass.parameters) as RankedChunk[];
   };
 
-  const primaryLexicalRows = fileBacked ? [] : lexicalRows(primary);
-  const contextLexicalRows = fileBacked || !context ? [] : lexicalRows(context);
   const chunks = new Map<string, { documentId: string; text: string }>();
   const signals = new Map<string, ChunkSignals>();
   const addRankedRows = (rows: RankedChunk[], key: 'primaryLexicalRank' | 'contextLexicalRank') => {
     rows.forEach((row, rank) => {
       const chunkId = String(row.chunk_id);
       chunks.set(chunkId, { documentId: row.document_id, text: row.text });
-      signals.set(chunkId, { ...signals.get(chunkId), [key]: rank });
+      const signal = signals.get(chunkId);
+      if (signal?.[key] === undefined || rank < signal[key]) signals.set(chunkId, { ...signal, [key]: rank });
     });
   };
-  addRankedRows(primaryLexicalRows, 'primaryLexicalRank');
-  addRankedRows(contextLexicalRows, 'contextLexicalRank');
+  if (!fileBacked) {
+    for (const pass of passes) {
+      addRankedRows(lexicalRows(lexicalPrimary, pass), 'primaryLexicalRank');
+      if (context) addRankedRows(lexicalRows(context, pass), 'contextLexicalRank');
+    }
+  }
 
   const bestPrimarySemanticByDocument = new Map<string, number>();
   let primaryQueryVector: Float32Array | null = null;
   try {
     const semanticQueries = context ? [primary, context] : [primary];
-    const semantic = fileBacked
-      ? await searchSemanticTexts(
-          database,
-          semanticQueries,
-          scope.sql,
-          scope.parameters,
-          MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE,
-          MIN_SEMANTIC_SIMILARITY,
-          buildMemoryFtsMatchQuery(primary),
-          context ? buildMemoryFtsMatchQuery(context) : null,
-        )
-      : await embedTexts(semanticQueries).then((queryVectors) => searchSemanticChunks(
-          database,
-          queryVectors,
-          scope.sql,
-          scope.parameters,
-          MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE,
-          MIN_SEMANTIC_SIMILARITY,
-        ));
-    if (semantic.primaryVector) {
-      primaryQueryVector = semantic.primaryVector;
-      addRankedRows(semantic.primaryLexical.map((row) => ({ chunk_id: row.id, document_id: row.documentId, text: row.text })), 'primaryLexicalRank');
-      addRankedRows(semantic.contextLexical.map((row) => ({ chunk_id: row.id, document_id: row.documentId, text: row.text })), 'contextLexicalRank');
-      const addSemanticRows = (rows: typeof semantic.primary, key: 'primarySemanticSimilarity' | 'contextSemanticSimilarity') => {
-        rows.forEach((row) => {
-          const chunkId = String(row.id);
-          chunks.set(chunkId, { documentId: row.documentId, text: row.text });
-          signals.set(chunkId, { ...signals.get(chunkId), [key]: row.similarity });
-          if (key === 'primarySemanticSimilarity') {
-            bestPrimarySemanticByDocument.set(row.documentId, Math.max(bestPrimarySemanticByDocument.get(row.documentId) ?? -1, row.similarity));
-          }
-        });
-      };
-      addSemanticRows(semantic.primary, 'primarySemanticSimilarity');
-      if (semanticQueries.length > 1) addSemanticRows(semantic.context, 'contextSemanticSimilarity');
+    const queryVectors = fileBacked ? null : await embedTexts(semanticQueries);
+    for (const pass of passes) {
+      const semantic = queryVectors
+        ? await searchSemanticChunks(
+            database,
+            queryVectors,
+            pass.sql,
+            pass.parameters,
+            MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE,
+            MIN_SEMANTIC_SIMILARITY,
+          )
+        : await searchSemanticTexts(
+            database,
+            semanticQueries,
+            pass.sql,
+            pass.parameters,
+            MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE,
+            MIN_SEMANTIC_SIMILARITY,
+            buildMemoryFtsMatchQuery(lexicalPrimary),
+            context ? buildMemoryFtsMatchQuery(context) : null,
+          );
+      if (semantic.primaryVector) {
+        primaryQueryVector = semantic.primaryVector;
+        addRankedRows(semantic.primaryLexical.map((row) => ({ chunk_id: row.id, document_id: row.documentId, text: row.text })), 'primaryLexicalRank');
+        addRankedRows(semantic.contextLexical.map((row) => ({ chunk_id: row.id, document_id: row.documentId, text: row.text })), 'contextLexicalRank');
+        const addSemanticRows = (rows: typeof semantic.primary, key: 'primarySemanticSimilarity' | 'contextSemanticSimilarity') => {
+          rows.forEach((row) => {
+            const chunkId = String(row.id);
+            chunks.set(chunkId, { documentId: row.documentId, text: row.text });
+            signals.set(chunkId, { ...signals.get(chunkId), [key]: row.similarity });
+            if (key === 'primarySemanticSimilarity') {
+              bestPrimarySemanticByDocument.set(row.documentId, Math.max(bestPrimarySemanticByDocument.get(row.documentId) ?? -1, row.similarity));
+            }
+          });
+        };
+        addSemanticRows(semantic.primary, 'primarySemanticSimilarity');
+        if (semanticQueries.length > 1) addSemanticRows(semantic.context, 'contextSemanticSimilarity');
+      }
     }
   } catch (error) {
     console.error('[memory-index] embedding query failed; falling back to full-text results only', error);
@@ -956,7 +1079,7 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     if (!document) continue;
     const searchable = `${document.title}\n${chunk.text}`;
     const signal = signals.get(chunkId) ?? {};
-    const primaryCoverage = lexicalCoverage(searchable, primary);
+    const primaryCoverage = lexicalCoverage(searchable, lexicalPrimary);
     const contextCoverage = context ? lexicalCoverage(searchable, context) : 0;
     if (contextDependent && contextCoverage < 0.2 && (signal.contextSemanticSimilarity ?? -1) < 0.5) continue;
     const primaryScore = combinedChannelScore(
@@ -997,10 +1120,10 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     if (options.excludeGeneratedConversationId && document.conversation_id === options.excludeGeneratedConversationId
       && (document.actor === 'codex' || document.actor === 'claude' || document.actor === 'palmyra' || document.actor === 'system')) continue;
     if (excludedBody && normalizedMemoryBody(document.body) === excludedBody) continue;
-    const ranking = rankingPath(document);
-    const score = best.relevance
+    const ranking = rankingPath(document, timeScoped);
+    const score = (timeScoped ? Math.pow(best.relevance, TIME_SCOPED_RELEVANCE_EXPONENT) : best.relevance)
       * ranking.prior
-      * lexicalImportanceMultiplier(document, primary)
+      * lexicalImportanceMultiplier(document, lexicalPrimary)
       * ranking.recency
       * (corroboration.get(document.id) ?? 1)
       * personalImportanceMultiplier(document, options.importanceProfile)
@@ -1009,7 +1132,11 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     directResults.push({
       source: document.source, sourceId: document.source_id, title: document.title, snippet: chunk.text,
       createdAt: document.created_at, conversationId: document.conversation_id, workItemId: document.work_item_id,
-      actor: document.actor, score, retrievalPath: ['Matched request', ...ranking.path],
+      actor: document.actor, score, retrievalPath: [
+        'Matched request',
+        ...(timeScoped ? ['Time-scoped question: topic match softened to √relevance'] : []),
+        ...ranking.path,
+      ],
     });
   }
   const collapsedDirect = collapseNearDuplicateMessages(directResults);
@@ -1049,13 +1176,13 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
       && (result.actor === 'codex' || result.actor === 'claude' || result.actor === 'palmyra' || result.actor === 'system')) return [];
     if (excludedBody && normalizedMemoryBody(result.snippet) === excludedBody) return [];
     const documentId = graphDocumentIds.get(`${result.source}:${result.sourceId}`);
-    const lexical = lexicalCoverage(`${result.title}\n${result.snippet}`, primary);
+    const lexical = lexicalCoverage(`${result.title}\n${result.snippet}`, lexicalPrimary);
     const semantic = semanticStrength(documentId ? bestPrimarySemanticByDocument.get(documentId) : undefined);
     const queryAffinity = Math.max(lexical, semantic);
     if (queryAffinity <= 0) return [];
     const document = graphDocuments.get(`${result.source}:${result.sourceId}`);
     if (!document) return [];
-    const ranking = rankingPath(document);
+    const ranking = rankingPath(document, timeScoped);
     return [{
       ...result,
       score: result.score * queryAffinity * 0.55 * ranking.prior * ranking.recency,
@@ -1068,5 +1195,5 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     const key = `${result.source}:${result.sourceId}`;
     if (!merged.has(key)) merged.set(key, result);
   }
-  return diversifyMemoryResults(collapseNearDuplicateMessages([...merged.values()]), limit);
+  return diversifyMemoryResults(collapseNearDuplicateMessages([...merged.values()]), limit, { spreadAcrossTime: !timeScoped });
 }

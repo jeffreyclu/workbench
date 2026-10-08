@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
-import { buildMemoryFtsMatchQuery, chunkText, collectMemoryDocuments, diversifyMemoryResults, indexPendingMemory, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, MEMORY_SOURCE_PRIORS, pruneLegacyAuditMemory, pruneLegacyAuditMemoryBatch, reciprocalRankFusion, searchMemory, setEmbedder, type MemorySearchResult } from './memory-index.js';
+import { buildMemoryFtsMatchQuery, chunkText, collectMemoryDocuments, diversifyMemoryResults, indexPendingMemory, isTimeScopedMemoryQuery, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, MEMORY_SOURCE_PRIORS, pruneLegacyAuditMemory, pruneLegacyAuditMemoryBatch, reciprocalRankFusion, searchMemory, setEmbedder, TIME_SCOPED_QUERY_TERMS, TIME_SCOPED_RETRIEVAL_STEP, type MemorySearchResult } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { WorkItemRepository } from './repository.js';
 
@@ -74,6 +74,16 @@ describe('buildMemoryFtsMatchQuery', () => {
   it('lets BM25 rank significant terms instead of requiring every context word', () => {
     expect(buildMemoryFtsMatchQuery('quartz rollout\nRelevant prior decisions constraints and preferences'))
       .toBe('"quartz" OR "rollout" OR "decisions" OR "constraints" OR "preferences"');
+  });
+});
+
+describe('isTimeScopedMemoryQuery', () => {
+  it('triggers on every listed term as a whole word in the request line only', () => {
+    for (const term of TIME_SCOPED_QUERY_TERMS) expect(isTimeScopedMemoryQuery(`${term} in workbench memory`)).toBe(true);
+    expect(isTimeScopedMemoryQuery('What changes to Workbench memory were made?')).toBe(true);
+    expect(isTimeScopedMemoryQuery('workbench memory ranking')).toBe(false);
+    expect(isTimeScopedMemoryQuery('renewal of the newsletter')).toBe(false);
+    expect(isTimeScopedMemoryQuery('memory ranking\nTask: what changed / recently / today')).toBe(false);
   });
 });
 
@@ -230,6 +240,27 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     expect(rows[3].title).toBe('Plain');
 
     expect(collectMemoryDocuments(database, { docRoots: roots }).upserted).toBe(0);
+    rmSync(root, { recursive: true });
+  });
+
+  it('dates each numbered entry by its latest written date, never later than the file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-memory-entry-dates-'));
+    const file = join(root, 'lessons.md');
+    writeFileSync(file, [
+      '## <a id="1"></a>1. Old lesson', '', 'Learned 2026-09-02, revisited 2026-09-21.', '',
+      '## <a id="2"></a>2. Undated lesson', '', 'No date here.', '',
+      '## <a id="3"></a>3. Future reference', '', 'Learned 2026-10-01; expires 2027-01-01.',
+    ].join('\n'));
+    const modifiedAt = new Date('2026-10-08T20:46:47.000Z');
+    utimesSync(file, modifiedAt, modifiedAt);
+    collectMemoryDocuments(database, { docRoots: [{ label: 'local', path: root }] });
+
+    const rows = database.prepare("SELECT source_id, created_at FROM memory_documents WHERE source = 'doc' ORDER BY source_id").all() as Array<{ source_id: string; created_at: string }>;
+    expect(rows).toEqual([
+      { source_id: 'local:lessons.md#1', created_at: '2026-09-21T00:00:00.000Z' },
+      { source_id: 'local:lessons.md#2', created_at: modifiedAt.toISOString() },
+      { source_id: 'local:lessons.md#3', created_at: '2026-10-01T00:00:00.000Z' },
+    ]);
     rmSync(root, { recursive: true });
   });
 
@@ -435,8 +466,11 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     expect(results.map(({ sourceId }) => sourceId)).not.toContain('current-question');
     expect(results[0]?.retrievalPath).toEqual([
       'Matched request',
+      'Time-scoped question: topic match softened to √relevance',
       'Source prior: numbered lesson ×1.60',
-      expect.stringMatching(/^Recency:/),
+      'Time-scoped question: activity, work log, and lessons record changes ×1.25',
+      TIME_SCOPED_RETRIEVAL_STEP,
+      'Recency: 0d old ×2.00',
     ]);
 
     const messageResults = await searchMemory(database, query, {
@@ -478,6 +512,33 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
 
     expect(results[0]?.sourceId).toBe('jeffrey-claim');
     expect(results[0]!.score).toBeGreaterThan(results.find((result) => result.sourceId === 'agent-claim')!.score);
+  });
+
+  it('switches to the recent-changes profile only for a time-scoped question over the same documents', async () => {
+    const now = Date.now();
+    const daysAgo = (days: number) => new Date(now - (days * 86_400_000)).toISOString();
+    insertDocument('august-artifact', 'artifact', 'Shared Workbench memory', 'Shared Workbench memory catalogue for Workbench memory.', null, { createdAt: '2026-08-23T12:00:00.000Z' });
+    insertDocument('august-message', 'message', 'Room message', 'write this to workbench memory', null, { conversationId: 'august-room', actor: 'jeffrey', createdAt: '2026-08-26T12:00:00.000Z' });
+    insertDocument('wave-landed', 'activity', 'Agent harness plan', 'Wave 1 landed on main: numbered memory entries, the lessons catalogue, and lint units.', 'harness-task', { actor: 'claude', createdAt: daysAgo(0.5) });
+    insertDocument('workbench-docs:work-log.md', 'doc', 'Work log', '## [today] execute | workbench | Memory badge lists only retrieved items.', null, { createdAt: daysAgo(1) });
+    insertDocument('last-week-output', 'run_output', 'Memory drift check', 'Added a nightly memory drift report.', 'drift-task', { createdAt: daysAgo(5) });
+    await indexPendingMemory(database);
+
+    const timeScoped = await searchMemory(database, 'what changed in workbench memory today', { limit: 10 });
+    expect(timeScoped.slice(0, 3).map(({ sourceId }) => sourceId).sort()).toEqual(['last-week-output', 'wave-landed', 'workbench-docs:work-log.md']);
+    expect(timeScoped.find(({ sourceId }) => sourceId === 'wave-landed')?.retrievalPath).toEqual(expect.arrayContaining([
+      TIME_SCOPED_RETRIEVAL_STEP, 'Recency: 0d old ×2.00', 'Time-scoped question: activity, work log, and lessons record changes ×1.25',
+    ]));
+    expect(timeScoped.find(({ sourceId }) => sourceId === 'last-week-output')?.retrievalPath).toContain('Recency: 5d old ×1.50');
+    for (const result of timeScoped.filter(({ createdAt }) => createdAt < '2026-09-01')) {
+      expect(result.retrievalPath).not.toContain(TIME_SCOPED_RETRIEVAL_STEP);
+    }
+    expect(timeScoped.find(({ sourceId }) => sourceId === 'august-message')?.retrievalPath ?? [])
+      .not.toContain(TIME_SCOPED_RETRIEVAL_STEP);
+
+    const topical = await searchMemory(database, 'workbench memory catalogue', { limit: 10 });
+    expect(topical[0]?.sourceId).toBe('august-artifact');
+    expect(topical.flatMap(({ retrievalPath }) => retrievalPath).some((step) => step.startsWith('Time-scoped question:'))).toBe(false);
   });
 
   it('uses recency to break otherwise comparable evidence rankings', async () => {
