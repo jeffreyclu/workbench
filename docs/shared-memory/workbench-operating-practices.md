@@ -634,3 +634,21 @@ Rule: confirm first that the working-tree diff equals the reverse of the landed 
 `git stash push -m "<why>" -- <those files>`. The tree matches HEAD, nothing is lost, and the stash
 entry is junk Jeffrey can drop. Typecheck main in a clean detached worktree at HEAD, never in the
 primary checkout, so a stale working tree cannot produce phantom errors.
+
+## <a id="39"></a>39. Runtime code resolves repository paths from the working directory, never from its own file
+
+Learned 2026-10-08 when the first promotion of the agent-harness work crashed on boot. A promoted
+release is a copy of `src/server`, `src/shared`, and `dist/client` under
+`.workbench-runtime/releases/<id>`, started with the repository as its working directory. `docs/`,
+`scripts/`, and everything else stay in the repository. The new persona loader built its path with
+`new URL('../../docs/personas/', import.meta.url)`, which exists in the repository and not in the
+release copy, so the release exited with ENOENT while the gateway kept the old build and retried
+every second. The preflight did not catch it because it booted the repository sources, not a copy.
+
+Rule: any server module that reads or writes repository-owned files (`docs/shared-memory`,
+`docs/personas`, `docs/work-log.md`, `scripts/agent-bin`) resolves them from `process.cwd()` with an
+environment override for tests, the way `work-log.ts`, `record-learning.ts`, `knowledge-drift.ts`,
+and `memory-index.ts` already do. `import.meta.url` is only for files that ship inside `src/`. The
+promotion preflight now boots a release-shaped copy (`scripts/promote-runtime.ts`), so a path that
+only works in the repository fails the gate instead of the live switch. When a promotion "succeeds"
+but `/api/health` keeps the old `buildId`, read `data/logs/runtime.err.log` for the boot error.
