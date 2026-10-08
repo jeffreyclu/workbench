@@ -2590,6 +2590,30 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // Accepting a consolidation proposal applies each item separately. A
+    // proposal that stops at a failed item is "partially_applied", and every
+    // item's outcome is kept so the card can list what landed and what failed.
+    // SQLite cannot widen a CHECK in place, so the table is rebuilt.
+    id: '094_consolidation_apply_results',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE consolidation_proposals_next (
+          id TEXT PRIMARY KEY,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'superseded', 'partially_applied')),
+          items_json TEXT NOT NULL CHECK (json_valid(items_json) AND json_type(items_json) = 'array'),
+          apply_results_json TEXT CHECK (apply_results_json IS NULL OR (json_valid(apply_results_json) AND json_type(apply_results_json) = 'array')),
+          created_at TEXT NOT NULL,
+          resolved_at TEXT
+        );
+        INSERT INTO consolidation_proposals_next (id, status, items_json, created_at, resolved_at)
+          SELECT id, status, items_json, created_at, resolved_at FROM consolidation_proposals;
+        DROP TABLE consolidation_proposals;
+        ALTER TABLE consolidation_proposals_next RENAME TO consolidation_proposals;
+        CREATE INDEX idx_consolidation_proposals_status_created ON consolidation_proposals(status, created_at DESC);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

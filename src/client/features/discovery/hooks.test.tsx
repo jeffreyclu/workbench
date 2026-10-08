@@ -35,6 +35,7 @@ const inbox: DiscoveryInbox = {
   lastRun: null,
   running: false,
   queueProposal: null,
+  consolidationProposal: null,
 };
 
 const workItemsPage = { items: [], nextCursor: null, totalCount: 0, proposal: null };

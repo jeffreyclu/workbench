@@ -29,6 +29,7 @@ import { QueuePlanningService } from './services/queue-planning-service.js';
 import { ExecutionService } from './services/execution-service.js';
 import { WorkItemService } from './services/work-item-service.js';
 import { ConversationService } from './services/conversation-service.js';
+import { getVisibleConsolidationProposal } from './consolidation-store.js';
 import { ShortTermMemoryStore } from './short-term-memory.js';
 import { normalizeLabels, providerSyncFields, providerValues, sameProviderValue, type ProviderFieldValue, type ProviderSnapshotRow, type ProviderSnapshotValues } from './repositories/provider-sync-support.js';
 import { EXTERNAL_ACTION_GRANT_TTL_MS, mergeExternalActionAuthorizations, type ExternalActionAuthorization } from './external-action-authorization.js';
@@ -283,7 +284,12 @@ export class WorkItemRepository {
     const candidates = this.discovery.listCandidates(view);
     const counts = this.discovery.getCandidateCounts();
     const { run, running } = this.discovery.getLastRun();
-    return { candidates, pendingCount: counts.pending, reviewedCount: counts.reviewed, lastRun: run, running, queueProposal: this.getPendingProposal() };
+    return { candidates, pendingCount: counts.pending, reviewedCount: counts.reviewed, lastRun: run, running, queueProposal: this.getPendingProposal(), consolidationProposal: getVisibleConsolidationProposal(this.database) };
+  }
+
+  /** Short-term memory conversations, as the consolidation pass reads them. */
+  listShortTermMemoryConversations(): ReturnType<ShortTermMemoryStore['conversations']> {
+    return this.shortTermMemory.conversations();
   }
 
   startDiscoveryRun(): DiscoveryRun {

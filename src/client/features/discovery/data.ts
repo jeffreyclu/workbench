@@ -16,4 +16,5 @@ export const discoveryData = {
   bulkResolve: (ids: string[], action: 'convert' | 'dismiss' | 'snooze') => api.bulkResolveDiscovery(ids, action),
   restore: api.restoreDiscovery,
   update: api.updateDiscovery,
+  resolveConsolidation: api.resolveConsolidationProposal,
 };

@@ -107,6 +107,7 @@ const EXPECTED_MIGRATIONS = [
   '091_agent_run_review_dispatch',
   '092_consolidation_proposals',
   '093_agent_run_review_lenses',
+  '094_consolidation_apply_results',
 ];
 
 describe('openDatabase', () => {
@@ -225,6 +226,36 @@ describe('openDatabase', () => {
     const columns = upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
     expect(columns.map(({ name }) => name)).toContain('review_lenses_json');
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '093_agent_run_review_lenses'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('lets consolidation proposals record partial applies when upgrading from migration 093', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    // Rebuild the table exactly as migration 092 left it, with a row to carry forward.
+    current.exec(`
+      DROP TABLE consolidation_proposals;
+      CREATE TABLE consolidation_proposals (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'superseded')),
+        items_json TEXT NOT NULL CHECK (json_valid(items_json) AND json_type(items_json) = 'array'),
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+      );
+      CREATE INDEX idx_consolidation_proposals_status_created ON consolidation_proposals(status, created_at DESC);
+      INSERT INTO consolidation_proposals (id, status, items_json, created_at) VALUES ('kept', 'pending', '[]', '2026-10-01T00:00:00.000Z');
+    `);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '094_consolidation_apply_results'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(consolidation_proposals)').all() as Array<{ name: string }>;
+    expect(columns.map(({ name }) => name)).toContain('apply_results_json');
+    expect(upgraded.prepare("SELECT status FROM consolidation_proposals WHERE id = 'kept'").get()).toEqual({ status: 'pending' });
+    upgraded.prepare("UPDATE consolidation_proposals SET status = 'partially_applied', apply_results_json = '[]' WHERE id = 'kept'").run();
+    expect(upgraded.prepare("SELECT status FROM consolidation_proposals WHERE id = 'kept'").get()).toEqual({ status: 'partially_applied' });
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '094_consolidation_apply_results'").get()).toBeTruthy();
     upgraded.close();
   });
 

@@ -840,6 +840,8 @@ export interface DiscoveryInbox {
   lastRun: DiscoveryRun | null;
   running: boolean;
   queueProposal: QueueProposal | null;
+  /** The pending consolidation proposal, or the latest one that stopped partway through applying. */
+  consolidationProposal: ConsolidationProposal | null;
 }
 export const updateDiscoveryCandidateSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
@@ -1704,16 +1706,31 @@ export const consolidationProposalItemSchema = z.discriminatedUnion('verdict', [
   z.object({ ...consolidationItemBase, verdict: z.literal('archive_then_remove'), reason: z.string() }),
 ]);
 
-export const consolidationProposalStatusSchema = z.enum(['pending', 'accepted', 'rejected', 'superseded']);
+export const consolidationProposalStatusSchema = z.enum(['pending', 'accepted', 'rejected', 'superseded', 'partially_applied']);
+
+/**
+ * One item's outcome after Jeffrey accepts. Items apply in order (promote,
+ * keep, archive-then-remove) and stop at the first failure; later items stay
+ * `not_attempted`.
+ */
+export const consolidationApplyResultSchema = z.object({
+  provenanceId: z.string().min(1),
+  verdict: z.enum(['promote', 'keep', 'archive_then_remove']),
+  status: z.enum(['applied', 'failed', 'not_attempted']),
+  detail: z.string(),
+});
 
 export type ConsolidationSource = z.infer<typeof consolidationSourceSchema>;
 export type ConsolidationProvenance = z.infer<typeof consolidationProvenanceSchema>;
 export type ConsolidationProposalItem = z.infer<typeof consolidationProposalItemSchema>;
+export type ConsolidationApplyResult = z.infer<typeof consolidationApplyResultSchema>;
 
 export interface ConsolidationProposal {
   id: string;
   status: z.infer<typeof consolidationProposalStatusSchema>;
   items: ConsolidationProposalItem[];
+  /** Per-item outcomes once accepted; null while pending, rejected, or superseded. */
+  applyResults: ConsolidationApplyResult[] | null;
   createdAt: string;
   resolvedAt: string | null;
 }

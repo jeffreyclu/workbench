@@ -1,4 +1,4 @@
-import type { DiscoveryCandidate, DiscoveryInbox } from '../../shared/contracts';
+import type { ConsolidationProposal, DiscoveryCandidate, DiscoveryInbox } from '../../shared/contracts';
 import { request } from './request';
 
 export const discoveryClient = {
@@ -8,4 +8,5 @@ export const discoveryClient = {
   updateDiscovery: (id: string, input: { title?: string; description?: string }) => request(`/api/discovery/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
   bulkResolveDiscovery: (ids: string[], action: 'convert' | 'dismiss' | 'snooze') => request<{ candidates: DiscoveryCandidate[] }>('/api/discovery/bulk', { method: 'POST', body: JSON.stringify({ ids, action }) }),
   restoreDiscovery: (id: string) => request(`/api/discovery/${id}/restore`, { method: 'POST' }),
+  resolveConsolidationProposal: (id: string, resolution: 'accepted' | 'rejected') => request<{ proposal: ConsolidationProposal }>(`/api/consolidation/proposals/${id}/${resolution}`, { method: 'POST' }),
 };

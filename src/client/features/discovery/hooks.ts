@@ -60,8 +60,17 @@ export function useDiscoveryInbox() {
     onSuccess: () => invalidateDiscovery(queryClient),
     onError: (error) => toastError('Could not merge this discovery into the task.', error),
   });
+  const resolveConsolidation = useMutation({
+    mutationFn: ({ id, resolution }: { id: string; resolution: 'accepted' | 'rejected' }) => discoveryData.resolveConsolidation(id, resolution),
+    onSuccess: ({ proposal }, { resolution }) => {
+      invalidateDiscovery(queryClient);
+      if (proposal.status === 'partially_applied') toast.error('Consolidation stopped partway. The card lists what was applied and what failed.');
+      else toast.success(resolution === 'accepted' ? 'Consolidation proposal accepted.' : 'Consolidation proposal rejected.');
+    },
+    onError: (error) => toastError('Could not update the consolidation proposal.', error),
+  });
   return {
-    inboxView, setInboxView, selected, setSelected, inbox, activeTasks, scan, resolveCandidate, bulkResolve, restore, resolveMerge,
+    inboxView, setInboxView, selected, setSelected, inbox, activeTasks, scan, resolveCandidate, bulkResolve, restore, resolveMerge, resolveConsolidation,
   };
 }
 

@@ -23,6 +23,7 @@ import { createConversationRouter } from './routes/conversation-router.js';
 import { createReviewRouter } from './routes/review-router.js';
 import { createWorkItemRouter } from './routes/work-item-router.js';
 import { createQueueRouter } from './routes/queue-router.js';
+import { createConsolidationRouter } from './routes/consolidation-router.js';
 import { createSourceConnectionRouter } from './routes/source-connection-router.js';
 import { createExecutionRouter } from './routes/execution-router.js';
 import { createLinearRouter } from './routes/linear-router.js';
@@ -76,6 +77,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   app.use(createReviewRouter(context));
   app.use(createWorkItemRouter(context));
   app.use(createQueueRouter(context));
+  app.use(createConsolidationRouter(context));
   app.use(createSourceConnectionRouter(context));
   app.use(createGitHubRouter(context));
   app.use(createMcpRouter(context));

@@ -30,6 +30,7 @@ const inbox: DiscoveryInbox = {
   lastRun: null,
   running: false,
   queueProposal: null,
+  consolidationProposal: null,
 };
 
 afterEach(() => { cleanup(); toast.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });

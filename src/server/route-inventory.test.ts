@@ -107,6 +107,7 @@ const baselineInventory = [
   'GET /api/review-assist/auto-score',
   'POST /api/queue/undo',
   'POST /api/queue/plan',
+  'POST /api/consolidation/proposals',
   'POST /api/runtime/retire',
   'GET /api/integrations/slack',
   'POST /api/integrations/slack/test',
@@ -119,6 +120,7 @@ const baselineInventory = [
   'GET /api/source-connections/:provider/mcp/oauth/callback',
   'DELETE /api/source-connections/:provider',
   'POST /api/queue/proposals/:id/:resolution',
+  'POST /api/consolidation/proposals/:id/:resolution',
   'GET /api/work-items/:id',
   'GET /api/work-items/:id/workspace-diff',
   'GET /api/work-items/:id/workspace-diff/refs',
@@ -227,7 +229,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(193);
+    expect(baselineInventory).toHaveLength(195);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

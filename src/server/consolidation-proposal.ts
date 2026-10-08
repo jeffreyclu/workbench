@@ -7,7 +7,6 @@ import { marked } from 'marked';
 import {
   consolidationModelResponseSchema,
   consolidationModelVerdictSchema,
-  consolidationProposalItemSchema,
   type ConsolidationProposal,
   type ConsolidationProposalItem,
   type ConsolidationProvenance,
@@ -17,6 +16,8 @@ import { runAgentCommand, type CliAgent } from './agent-runner.js';
 import type { WorkbenchDatabase } from './database.js';
 import { defaultRecordLearningDirectories, findSecretPattern, indexedFiles, type RecordLearningDirectories } from './record-learning.js';
 import type { ShortTermMemoryStore } from './short-term-memory.js';
+
+export { getConsolidationProposal } from './consolidation-store.js';
 
 /**
  * Builds a memory consolidation proposal. A cheap model suggests a verdict for
@@ -233,7 +234,7 @@ export async function buildConsolidationProposal(inputs: ConsolidationInputs, op
 
 /** Stores a pending proposal and supersedes any earlier pending one. */
 export function saveConsolidationProposal(database: WorkbenchDatabase, items: ConsolidationProposalItem[]): ConsolidationProposal {
-  const proposal: ConsolidationProposal = { id: randomUUID(), status: 'pending', items, createdAt: new Date().toISOString(), resolvedAt: null };
+  const proposal: ConsolidationProposal = { id: randomUUID(), status: 'pending', items, applyResults: null, createdAt: new Date().toISOString(), resolvedAt: null };
   database.exec('BEGIN IMMEDIATE;');
   try {
     database.prepare("UPDATE consolidation_proposals SET status = 'superseded', resolved_at = ? WHERE status = 'pending'").run(proposal.createdAt);
@@ -245,19 +246,6 @@ export function saveConsolidationProposal(database: WorkbenchDatabase, items: Co
     throw error;
   }
   return proposal;
-}
-
-export function getConsolidationProposal(database: WorkbenchDatabase, id: string): ConsolidationProposal | null {
-  const row = database.prepare('SELECT id, status, items_json, created_at, resolved_at FROM consolidation_proposals WHERE id = ?').get(id) as
-    { id: string; status: ConsolidationProposal['status']; items_json: string; created_at: string; resolved_at: string | null } | undefined;
-  if (!row) return null;
-  return {
-    id: row.id,
-    status: row.status,
-    items: consolidationProposalItemSchema.array().parse(JSON.parse(row.items_json)),
-    createdAt: row.created_at,
-    resolvedAt: row.resolved_at,
-  };
 }
 
 // Source-level claim detection. The record is parsed as markdown and each link
