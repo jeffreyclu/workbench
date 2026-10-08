@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, measurePromptSize, missingReviewPasses, providerSessionForTaskTurn, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, reviewFallbackReason, reviewPassCompletionPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, selectReviewAgent, shouldContinueCacheHandoff, taskPromptContentSize, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, measurePromptSize, missingReviewPasses, providerSessionForTaskTurn, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, reviewFallbackReason, reviewPassCompletionPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, selectReviewAgent, shouldContinueCacheHandoff, taskPromptContentSize, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError, ProviderRefusalError } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -497,6 +497,11 @@ describe('classifyExecution', () => {
     // Agent prose that merely contains the word "limit" is not a provider failure.
     expect(isAgentCapacityError(failure)).toBe(false);
     expect(isTransientAgentError(failure)).toBe(false);
+
+    const refusalText = "Opus 5.5's safeguards flagged this message. Please try again.\nDetails: [reasoning_extraction]\nRequest ID: req_123\nUnrelated provider footer";
+    const refusal = terminalExitFailure({ stderr: '', terminalError: '', finalOutput: refusalText, progress: '', command: 'claude', code: 1 });
+    expect(refusal).toBeInstanceOf(ProviderRefusalError);
+    expect(refusal.message).toBe("Opus 5.5's safeguards flagged this message. Please try again.\nDetails: [reasoning_extraction]\nRequest ID: req_123");
   });
 
   it.each(['codex', 'claude'] as const)('lets %s complete after more than the former economy tool-call ceiling', async (agent) => {
@@ -819,6 +824,24 @@ fi`;
       verification: [],
       uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'],
     }));
+    database.close();
+  });
+
+  it('stores a Claude safeguard refusal as the run error and activity blocker', async () => {
+    const refusal = 'Claude safeguards flagged this message. Please try again.\nDetails: [reasoning_extraction]\nRequest ID: req_123';
+    const terminalEvent = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: refusal });
+    const { directory } = fakeAgentDirectory('exit 1', `printf '%s\\n' '${terminalEvent}'`);
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Handle provider refusal', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Implement it.');
+
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+
+    expect(repository.getRun(run.id)).toEqual(expect.objectContaining({
+      status: 'failed', failureKind: 'provider_refusal', error: refusal,
+    }));
+    expect(repository.listActivity(task.id).find((entry) => entry.kind === 'blocker')?.body).toBe(`execute failed: ${refusal}`);
     database.close();
   });
 

@@ -1118,6 +1118,7 @@ export interface AgentRun {
   instructions: string;
   output: string;
   error: string;
+  failureKind: 'provider_refusal' | null;
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;

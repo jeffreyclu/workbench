@@ -129,10 +129,13 @@ export class WorkbenchAdminService {
     if (prior.status === 'canceled' && !await waitForCancellationToSettle(this.repository, prior.id)) {
       return { status: 409, body: { error: 'The canceled agent is still stopping. Try again in a moment.' } } as ActionFailure;
     }
-    // Scoped to this run's own agent: a task can legitimately have two active
+    const retryAgent = prior.failureKind === 'provider_refusal'
+      ? prior.agent === 'claude' ? 'codex' : 'claude'
+      : prior.agent;
+    // Scoped to this retry's agent: a task can legitimately have two active
     // threads (Codex + Claude) at once, and retrying one failed/canceled
     // thread must not be blocked by its sibling's unrelated active run.
-    if (this.repository.activeRunsForItem(prior.workItemId).some((run) => run.agent === prior.agent)) {
+    if (this.repository.activeRunsForItem(prior.workItemId).some((run) => run.agent === retryAgent)) {
       return { status: 409, body: { error: 'This task already has an active agent run.' } } as ActionFailure;
     }
     const item = this.repository.get(prior.workItemId);
@@ -142,10 +145,13 @@ export class WorkbenchAdminService {
     const conversation = prior.conversationId
       ? this.repository.listConversations('all').find((entry) => entry.id === prior.conversationId) ?? this.repository.getOrCreateWorkConversation(item.id, item.title)
       : this.repository.getOrCreateWorkConversation(item.id, item.title);
-    const run = this.repository.prepareRunRetry(prior.id);
+    const run = this.repository.prepareRunRetry(prior.id, retryAgent);
     if (!run) return { status: 409, body: { error: 'This run is no longer retryable.' } } as ActionFailure;
     this.repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'workbench_admin' });
-    const activity = this.repository.addActivity(item.id, 'system', 'execution_retried', `Retrying ${prior.agent} ${prior.kind} after the prior attempt ${prior.status}.`);
+    const retryReason = prior.failureKind === 'provider_refusal'
+      ? `Retrying ${prior.kind} with ${retryAgent} because ${prior.agent} refused the request.`
+      : `Retrying ${prior.agent} ${prior.kind} after the prior attempt ${prior.status}.`;
+    const activity = this.repository.addActivity(item.id, 'system', 'execution_retried', retryReason);
     const sourceContext = await this.sourceContextFor(item);
     void executeAgentRun(this.repository, run, OWNER_ID, LEASE_MS, sourceContext);
     return { run, conversation, activity };

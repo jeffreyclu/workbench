@@ -2270,8 +2270,8 @@ export class WorkItemRepository {
    * a second execution. See `ExecutionService.prepareRunRetry` for why both
    * writes share one transaction.
    */
-  prepareRunRetry(id: string): AgentRun | null {
-    return this.execution.prepareRunRetry(id);
+  prepareRunRetry(id: string, retryAgent?: AgentRun['agent']): AgentRun | null {
+    return this.execution.prepareRunRetry(id, retryAgent);
   }
 
   prepareSharedMessageRetry(id: string): SharedMessage | null {

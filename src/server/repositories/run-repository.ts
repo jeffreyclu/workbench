@@ -11,6 +11,7 @@ export interface RunPatch {
   status?: AgentRun['status'];
   output?: string;
   error?: string;
+  failureKind?: AgentRun['failureKind'];
   startedAt?: string | null;
   completedAt?: string | null;
   model?: string;
@@ -70,6 +71,7 @@ function mapRunRow(row: Record<string, string | null>): AgentRun {
     requestedTarget: row.requested_target as AgentRun['requestedTarget'],
     requestedAgent: (row.requested_agent ?? row.agent) as AgentRun['agent'], agent: row.agent as AgentRun['agent'],
     status: row.status as AgentRun['status'], instructions: row.instructions!, output: row.output!, error: row.error!,
+    failureKind: (row.failure_kind as AgentRun['failureKind']) ?? null,
     startedAt: row.started_at, completedAt: row.completed_at, createdAt: row.created_at!,
     conversationId: row.conversation_id, messageId: row.message_id,
     model: row.model, executionProfile: row.execution_profile as AgentRun['executionProfile'],
@@ -234,9 +236,11 @@ export class RunRepository {
   private patchEntries(id: string, changes: RunPatch): Array<[string, string | number | null]> {
     // Runs are retried in place, so clear any error left by the previous
     // attempt as soon as the reused run completes or is canceled.
-    const error = changes.error ?? (changes.status === 'completed' || changes.status === 'canceled' ? '' : undefined);
+    const terminalReset = changes.status === 'completed' || changes.status === 'canceled';
+    const error = changes.error ?? (terminalReset ? '' : undefined);
+    const failureKind = changes.failureKind !== undefined ? changes.failureKind : terminalReset ? null : undefined;
     const columns = new Map<string, string | number | null | undefined>([
-      ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', error], ['model', changes.model], ['execution_profile', changes.executionProfile], ['account_profile', changes.accountProfile],
+      ['agent', changes.agent], ['status', changes.status], ['output', changes.output], ['error', error], ['failure_kind', failureKind], ['model', changes.model], ['execution_profile', changes.executionProfile], ['account_profile', changes.accountProfile],
       ['input_tokens', changes.inputTokens], ['cache_creation_input_tokens', changes.cacheCreationInputTokens], ['cache_read_input_tokens', changes.cacheReadInputTokens], ['output_tokens', changes.outputTokens], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
       ['next_attempt_at', changes.nextAttemptAt], ['waiting_reason', changes.waitingReason], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
@@ -275,7 +279,7 @@ export class RunRepository {
    */
   reopenForRetry(id: string): boolean {
     return Number(this.database.prepare(`UPDATE agent_runs
-      SET status = 'queued', error = '', started_at = NULL, completed_at = NULL,
+      SET status = 'queued', error = '', failure_kind = NULL, started_at = NULL, completed_at = NULL,
           owner_id = NULL, lease_expires_at = NULL, next_attempt_at = NULL, attempt = 0,
           cancel_requested = 0, cancel_requested_at = NULL
       WHERE id = ? AND status IN ('failed', 'canceled')`).run(id).changes) > 0;

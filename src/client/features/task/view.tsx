@@ -79,6 +79,13 @@ import { focusElement } from '../../lib/focus';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
+export function runStatusLabel(run: Pick<AgentRun, 'status' | 'waitingReason' | 'attempt' | 'maxAttempts' | 'failureKind'>): string {
+  if (run.status === 'failed' && run.failureKind === 'provider_refusal') return 'provider refused the request';
+  if (run.status === 'queued' && run.waitingReason) return run.waitingReason;
+  if (run.status === 'queued' && run.attempt > 0) return `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…`;
+  return run.status;
+}
+
 const PROMPT_SIZE_ROWS = [
   ['System contract', 'systemContractChars'],
   ['Persona', 'personaChars'],
@@ -699,7 +706,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
           {detail.data.runs.slice(0, runsVisibleCount).map((run, runIndex) => (
             <article className="run-card" data-agent={run.agent} key={run.id}>
               <header>
-                <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{run.status === 'queued' && run.waitingReason ? run.waitingReason : run.status === 'queued' && run.attempt > 0 ? `Retrying (attempt ${run.attempt + 1} of ${run.maxAttempts})…` : run.status}</span>
+                <span className={`run-status run-${run.status}`}>{run.status === 'running' && <LoaderCircle className="spin" size={11} />}{runStatusLabel(run)}</span>
                 <strong>{run.agent} · {run.kind}</strong>
                 <time>{new Date(run.createdAt).toLocaleString()}</time>
                 {(run.status === 'queued' || run.status === 'running') && <button className="cancel-run" onClick={() => cancelRun.mutate(run.id)}><X size={11} /> Cancel</button>}

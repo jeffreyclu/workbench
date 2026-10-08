@@ -69,15 +69,25 @@ export class ExecutionService {
    * `failed`. Both writes now share one `UnitOfWork` transaction so they
    * commit or roll back together.
    */
-  prepareRunRetry(id: string): AgentRun | null {
+  prepareRunRetry(id: string, retryAgent?: AgentRun['agent']): AgentRun | null {
     return this.unitOfWork.transaction(() => {
       const run = this.runs.get(id);
       if (!run || (run.status !== 'failed' && run.status !== 'canceled')) return null;
       if (!this.runs.reopenForRetry(id)) return null;
+      if (retryAgent && retryAgent !== run.agent) {
+        this.runs.update(id, {
+          agent: retryAgent,
+          fallbackFrom: run.agent,
+          fallbackReason: 'The prior provider refused the request; retrying with a different vendor.',
+        });
+      }
       if (run.messageId) this.database.prepare(`UPDATE shared_messages
         SET status = 'running', error = '', completed_at = NULL, owner_id = NULL, lease_expires_at = NULL,
             attempt = attempt + 1, next_attempt_at = NULL
         WHERE id = ? AND status IN ('failed', 'canceled')`).run(run.messageId);
+      if (run.messageId && retryAgent && retryAgent !== run.agent) this.database.prepare(`UPDATE shared_messages
+        SET author = ?, fallback_from = ?, fallback_reason = ?
+        WHERE id = ?`).run(retryAgent, run.agent, 'The prior provider refused the request; retrying with a different vendor.', run.messageId);
       return this.runs.get(id);
     });
   }

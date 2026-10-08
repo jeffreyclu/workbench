@@ -131,6 +131,22 @@ describe('WorkbenchAdminService.startWorkItemExecution', () => {
     expect('runs' in result && result.runs.map((run) => run.agent)).toEqual(['codex']);
   });
 
+  it('retries a provider refusal with the other vendor', async () => {
+    const task = repository.create({ title: 'Retry refused request', description: '', priority: 2, status: 'blocked', projectName: null, workspacePath: null, dueDate: null });
+    const conversation = repository.getOrCreateWorkConversation(task.id, task.title);
+    const message = repository.createSharedMessage('claude', '', 'failed', conversation.id);
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Implement it.', conversation.id, message.id);
+    repository.updateRun(run.id, { status: 'failed', error: 'Safeguards flagged this message.', failureKind: 'provider_refusal' });
+
+    const result = await admin.retryRun(run.id, { force: false });
+
+    expect('run' in result && result.run).toEqual(expect.objectContaining({
+      id: run.id, status: 'queued', requestedAgent: 'claude', agent: 'codex', failureKind: null, fallbackFrom: 'claude',
+    }));
+    expect(repository.getSharedMessageById(message.id)).toEqual(expect.objectContaining({ status: 'running', author: 'codex', fallbackFrom: 'claude' }));
+    expect(repository.listActivity(task.id).find((entry) => entry.kind === 'execution_retried')?.body).toBe('Retrying execute with codex because claude refused the request.');
+  });
+
   it('puts dual task execution through the same durable conversation group as dual chat', async () => {
     const task = repository.create({ title: 'Review the connector PR', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     repository.update(task.id, { assignees: ['codex', 'claude'] });
