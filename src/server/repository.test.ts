@@ -318,6 +318,16 @@ describe('WorkItemRepository', () => {
     expect(repository.createRun(item.id, 'analysis', 'claude', 'claude', '', null, null, 'manual', 'work').accountProfile).toBe('work');
   });
 
+  it('persists the prompt section breakdown on an agent run', () => {
+    const item = repository.create({ title: 'Measure prompt size', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const run = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
+    const promptSize = { totalChars: 55, systemContractChars: 10, personaChars: 9, taskDescriptionChars: 8, strategyChars: 7, conversationHistoryChars: 6, shortTermMemoryChars: 5, durablePrefetchChars: 4, connectionContextChars: 3, repoRoutingBlockChars: 3 };
+
+    repository.updateRun(run.id, { promptSize });
+
+    expect(repository.getRun(run.id)?.promptSize).toEqual(promptSize);
+  });
+
   it('finalizes work owned by a runtime that is deliberately stopping', () => {
     const item = repository.create({ title: 'Promote safely', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const conversation = repository.getOrCreateWorkConversation(item.id, item.title);

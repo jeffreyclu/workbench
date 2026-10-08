@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, SUPERVISOR_EVIDENCE_REASON_PREFIX, defaultAccountProfileForTask, type AgentRun, type AgentStreamEvent, type GitHubPullRequestDiff, type SharedMessage, type WorkItem, type WorkspaceDiff } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, mcpTraceEventForProviderItem, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, measurePromptSize, mcpTraceEventForProviderItem, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, taskPromptContentSize, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
@@ -1281,6 +1281,33 @@ ${connectionContext}
 Complete the current request above. The previous conversation and completed work are already present in this session; do not re-read or reconstruct them. The repository-access correction above supersedes every conflicting workspace rule retained by the provider session. Use the Workbench MCP \`recall_context\` tool when durable context outside the live session could improve the work, especially for research, analysis, strategy, and bug-fix turns. If a finite long-running command already exists, use \`list_managed_commands\` or \`inspect_managed_command\` and its saved disk log before starting another attempt; rerun only unfinished work. Apply Jeffrey's newest instruction directly, preserve existing workspace edits, and finish with one concise result and focused verification.`;
 }
 
+export function measureSharedReplyPromptSize(input: {
+  prompt: string;
+  agent: AgentRun['agent'];
+  thread: SharedMessage[];
+  shortTermContext: string;
+  memoryContext: string;
+  connectionContext: string;
+  linked?: { item: WorkItem; run: AgentRun };
+  executionWorkspaces?: readonly RunWorkspaceBinding[];
+  resumed: boolean;
+}) {
+  const executionWorkspaces = input.executionWorkspaces ?? [];
+  const sections = input.resumed ? {
+    shortTermMemoryChars: compactSharedBrief(input.shortTermContext, 2_400).length,
+    durablePrefetchChars: input.memoryContext.length,
+    connectionContextChars: input.connectionContext.length,
+    repoRoutingBlockChars: input.linked ? repositoryRoutingPrompt(input.linked.item, listCandidateWorkspaces(), executionWorkspaces).length : 0,
+  } : {
+    ...(input.linked
+      ? taskPromptContentSize(input.linked.item, input.linked.run, input.shortTermContext, input.memoryContext, executionWorkspaces)
+      : { shortTermMemoryChars: compactSharedBrief(input.shortTermContext, 2_400).length, durablePrefetchChars: input.memoryContext.length }),
+    conversationHistoryChars: compactConversationHistory(input.thread).length,
+    connectionContextChars: input.connectionContext.length,
+  };
+  return measurePromptSize(input.prompt, sections, input.agent === 'claude' ? RUNNER_SYSTEM_CONTRACT.length : 0);
+}
+
 /** The repository returns conversation messages in chronological order. */
 export function latestHumanMessageForSharedReply(thread: SharedMessage[]): string {
   return thread.filter((message) => message.author === 'jeffrey').at(-1)?.body ?? '';
@@ -1786,6 +1813,18 @@ export async function replyInSharedRoom(
     const prompt = resumeProviderId
       ? withReviewHarness(`${buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, latestUserMessage)}\n\n${linkedItem ? repositoryRoutingPrompt(linkedItem, listCandidateWorkspaces(), workspaceBindings) : ''}`.trim())
       : freshPrompt;
+    const promptSize = measureSharedReplyPromptSize({
+      prompt,
+      agent,
+      thread,
+      shortTermContext,
+      memoryContext,
+      connectionContext,
+      linked: linkedItem && linkedRun ? { item: linkedItem, run: linkedRun } : undefined,
+      executionWorkspaces: workspaceBindings,
+      resumed: Boolean(resumeProviderId),
+    });
+    if (runId) repository.updateRun(runId, { promptSize });
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
       promptChars: prompt.length,
       sharedContextChars: shortTermContext.length,

@@ -51,6 +51,32 @@ describe('shared-room final response supervision', () => {
     database.close();
   });
 
+  it('persists prompt accounting for a task-linked shared reply', async () => {
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Restart linked API', description: 'Restore the process.', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const conversation = repository.createConversation('Restart linked API', task.id);
+    repository.createSharedMessage('jeffrey', 'Restart the linked API.', 'queued', conversation.id, [], 'claude', 'standard');
+
+    const [reply] = dispatchNextSharedTurn(repository, conversation.id);
+    await vi.waitFor(() => expect(repository.getSharedMessageById(reply.id)).toMatchObject({ status: 'completed' }));
+
+    const promptSize = repository.getRunByMessage(reply.id)?.promptSize;
+    expect(promptSize).toEqual(expect.objectContaining({
+      totalChars: expect.any(Number),
+      systemContractChars: expect.any(Number),
+      taskDescriptionChars: expect.any(Number),
+      conversationHistoryChars: expect.any(Number),
+      repoRoutingBlockChars: expect.any(Number),
+    }));
+    expect(promptSize!.totalChars).toBeGreaterThan(0);
+    expect(promptSize!.systemContractChars).toBeGreaterThan(0);
+    expect(promptSize!.taskDescriptionChars).toBeGreaterThan(0);
+    expect(promptSize!.conversationHistoryChars).toBeGreaterThan(0);
+    expect(promptSize!.repoRoutingBlockChars).toBeGreaterThan(0);
+    database.close();
+  });
+
   it('publishes the answer when Claude\'s brevity-only retry is still too long', async () => {
     const longDraft = Array.from({ length: 168 }, (_, index) => `word${index}`).join(' ');
     runAgentCommandWithFallback.mockResolvedValue({

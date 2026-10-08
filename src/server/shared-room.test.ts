@@ -9,7 +9,7 @@ import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool
 import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
 import { resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
 import { reviewHarnessPrompt } from '../shared/review-harness.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -262,6 +262,20 @@ describe('compactConversationHistory', () => {
     expect(resumed).toContain('Repeated requirement notice');
     expect(fresh).toContain('Required execution discipline:');
     expect(resumed).not.toContain('Required execution discipline:');
+  });
+
+  it('records shared-room history, memory, and connection prompt sections', () => {
+    const thread = [message(0, 'Inspect the current run.'), message(1, 'I am checking it.')];
+    const prompt = buildSharedReplyPrompt('codex', 'Short-term facts.', 'Connected source facts.', thread, undefined, 'conversation-id', EXTERNAL_ACTION_CONTRACT, fallbackTurnGrounding(thread), 'message-id', 'Durable facts.');
+    const size = measureSharedReplyPromptSize({ prompt, agent: 'codex', thread, shortTermContext: 'Short-term facts.', memoryContext: 'Durable facts.', connectionContext: 'Connected source facts.', resumed: false });
+    const sectionTotal = Object.entries(size).filter(([key]) => key !== 'totalChars').reduce((sum, [, chars]) => sum + chars, 0);
+
+    expect(sectionTotal).toBe(size.totalChars);
+    expect(size.systemContractChars).toBeGreaterThan(0);
+    expect(size.conversationHistoryChars).toBeGreaterThan(0);
+    expect(size.shortTermMemoryChars).toBeGreaterThan(0);
+    expect(size.durablePrefetchChars).toBeGreaterThan(0);
+    expect(size.connectionContextChars).toBeGreaterThan(0);
   });
 
   it('keeps the newest turns, compacts older turns, and respects its prompt budget', () => {

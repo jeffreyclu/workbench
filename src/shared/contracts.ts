@@ -1086,6 +1086,20 @@ export interface AgentRunReviewHandoff {
   createdAt: string;
 }
 
+/** Character counts for the exact provider payload assembled for one run. */
+export interface AgentRunPromptSize {
+  totalChars: number;
+  systemContractChars: number;
+  personaChars: number;
+  taskDescriptionChars: number;
+  strategyChars: number;
+  conversationHistoryChars: number;
+  shortTermMemoryChars: number;
+  durablePrefetchChars: number;
+  connectionContextChars: number;
+  repoRoutingBlockChars: number;
+}
+
 export interface AgentRun {
   id: string;
   workItemId: string;
@@ -1125,6 +1139,8 @@ export interface AgentRun {
   resolvedWorkspace: string | null;
   /** Historical dispatch origin. New runs are always manual. */
   origin: 'manual' | 'autonomous';
+  /** Exact prompt-section character counts captured immediately before dispatch. */
+  promptSize: AgentRunPromptSize | null;
   /** Present only after a completed coding run writes its immutable reviewer map. */
   reviewHandoff: AgentRunReviewHandoff | null;
 }

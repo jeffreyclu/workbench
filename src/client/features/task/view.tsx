@@ -78,6 +78,18 @@ import { focusElement } from '../../lib/focus';
 import { WorkspaceDiffView } from '../workspace-diff/view';
 import type { AgentAccountProfile } from '../../data/runtime-client';
 
+const PROMPT_SIZE_ROWS = [
+  ['System contract', 'systemContractChars'],
+  ['Persona', 'personaChars'],
+  ['Task description', 'taskDescriptionChars'],
+  ['Strategy', 'strategyChars'],
+  ['Conversation history', 'conversationHistoryChars'],
+  ['Short-term memory', 'shortTermMemoryChars'],
+  ['Durable prefetch', 'durablePrefetchChars'],
+  ['Connection context', 'connectionContextChars'],
+  ['Repo routing block', 'repoRoutingBlockChars'],
+] as const satisfies ReadonlyArray<readonly [string, keyof NonNullable<AgentRun['promptSize']>]>;
+
 /**
  * IDE LEGACY-AFFECTING: Workspace review is now a closed disclosure. The
  * existing task detail still loads the same review data, but task selection no
@@ -694,6 +706,13 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
               {run.status === 'running' && !run.conversationId && <div className="live-output-label"><span /> Live activity & reasoning summaries</div>}
               {run.output && run.status !== 'completed' && !run.conversationId && <LiveRunOutput output={run.output} />}
               {run.model && <span className="model-badge" title={formatRunTelemetry(run)}>Requested {run.requestedAgent[0].toUpperCase() + run.requestedAgent.slice(1)} · Actual {run.agent[0].toUpperCase() + run.agent.slice(1)}{run.fallbackFrom ? ' (fallback)' : ''} · {run.accountProfile} · {run.model} · {formatRunBadge(run)}</span>}
+              {run.promptSize && <table className="prompt-size-table">
+                <caption>Prompt size <span>{run.promptSize.totalChars.toLocaleString()} chars</span></caption>
+                <tbody>
+                  {PROMPT_SIZE_ROWS.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{run.promptSize![key].toLocaleString()}</td></tr>)}
+                  <tr className="prompt-size-total"><th scope="row">Total</th><td>{run.promptSize.totalChars.toLocaleString()}</td></tr>
+                </tbody>
+              </table>}
               {run.status === 'completed' && run.output && <div className="run-summary"><span className="section-label">Agent summary</span><AgentMessageBody body={run.output} running={false} workItemId={item.id} /></div>}
               {run.error && <p className="error-message">{run.error}</p>}
               {run.conversationId && <button className="open-run-chat" onClick={() => onOpenConversation(run.conversationId!)}><MessageCircle size={13} /> Open execution chat</button>}

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
-import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, missingReviewPasses, providerSessionForTaskTurn, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, reviewPassCompletionPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
+import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, measurePromptSize, missingReviewPasses, providerSessionForTaskTurn, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, reviewPassCompletionPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, shouldContinueCacheHandoff, taskPromptContentSize, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError } from './agent-runner.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -115,6 +115,24 @@ describe('classifyExecution', () => {
     const prompt = buildPrompt(task, { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun);
     expect(prompt).toContain('Attached task files:');
     expect(prompt).toContain('brief.pdf (application/pdf, 42 bytes): /tmp/workbench-attachments/brief.pdf');
+  });
+
+  it('partitions a task prompt into named sections that add to the dispatched payload', () => {
+    const task = { ...item('Measure prompt sections'), description: 'Implementation context.', strategy: 'Ship the smallest safe change.' };
+    const run = { agent: 'codex', kind: 'execute', instructions: 'Implement and verify it.' } as AgentRun;
+    const prompt = buildPrompt(task, run, 'Short-term facts.', EXTERNAL_ACTION_CONTRACT, 'Durable facts.');
+    const size = measurePromptSize(prompt, taskPromptContentSize(task, run, 'Short-term facts.', 'Durable facts.'));
+    const sectionTotal = Object.entries(size).filter(([key]) => key !== 'totalChars').reduce((sum, [, chars]) => sum + chars, 0);
+
+    expect(size.totalChars).toBe(prompt.length);
+    expect(sectionTotal).toBe(size.totalChars);
+    expect(size.systemContractChars).toBeGreaterThan(0);
+    expect(size.personaChars).toBeGreaterThan(0);
+    expect(size.taskDescriptionChars).toBeGreaterThan(0);
+    expect(size.strategyChars).toBeGreaterThan(0);
+    expect(size.shortTermMemoryChars).toBeGreaterThan(0);
+    expect(size.durablePrefetchChars).toBeGreaterThan(0);
+    expect(size.repoRoutingBlockChars).toBeGreaterThan(0);
   });
 
   it('scales execution effort with task complexity and risk', () => {
@@ -784,7 +802,17 @@ fi`;
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['codex', 'claude']);
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({
       status: 'completed', requestedAgent: 'codex', agent: 'claude', fallbackFrom: 'codex', fallbackReason: expect.stringContaining('429'),
+      promptSize: expect.objectContaining({
+        totalChars: expect.any(Number),
+        systemContractChars: expect.any(Number),
+        taskDescriptionChars: expect.any(Number),
+        repoRoutingBlockChars: expect.any(Number),
+      }),
     }));
+    expect(repository.getRun(run.id)!.promptSize!.totalChars).toBeGreaterThan(0);
+    expect(repository.getRun(run.id)!.promptSize!.systemContractChars).toBeGreaterThan(0);
+    expect(repository.getRun(run.id)!.promptSize!.taskDescriptionChars).toBeGreaterThan(0);
+    expect(repository.getRun(run.id)!.promptSize!.repoRoutingBlockChars).toBeGreaterThan(0);
     expect(repository.getRun(run.id)?.reviewHandoff).toEqual(expect.objectContaining({
       agentRunId: run.id,
       formatVersion: 1,

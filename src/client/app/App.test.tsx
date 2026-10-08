@@ -2241,7 +2241,7 @@ describe('task execution', () => {
       attempt: 0, maxAttempts: 3, nextAttemptAt: null, waitingReason: null, resolvedWorkspace: null, origin: 'manual' as const,
     };
     const runs = [
-      { ...baseRun, id: '00000000-0000-4000-8000-000000000011', requestedAgent: 'codex' as const, agent: 'codex' as const },
+      { ...baseRun, id: '00000000-0000-4000-8000-000000000011', requestedAgent: 'codex' as const, agent: 'codex' as const, promptSize: { totalChars: 1234, systemContractChars: 400, personaChars: 100, taskDescriptionChars: 200, strategyChars: 50, conversationHistoryChars: 150, shortTermMemoryChars: 100, durablePrefetchChars: 80, connectionContextChars: 74, repoRoutingBlockChars: 80 } },
       { ...baseRun, id: '00000000-0000-4000-8000-000000000012', requestedAgent: 'claude' as const, agent: 'claude' as const },
     ];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
@@ -2255,6 +2255,10 @@ describe('task execution', () => {
     await screen.findByText('Agent runs');
     expect(document.querySelector('.run-card[data-agent="codex"]')).toBeTruthy();
     expect(document.querySelector('.run-card[data-agent="claude"]')).toBeTruthy();
+    expect(screen.getByText('Prompt size').closest('caption')).toHaveTextContent('1,234 chars');
+    expect(screen.getByText('System contract')).toBeTruthy();
+    expect(screen.getByText('Repo routing block')).toBeTruthy();
+    expect(screen.getByText('Total').nextElementSibling).toHaveTextContent('1,234');
 
     const editProfile = await screen.findByRole('button', { name: 'Edit profile' });
     expect(editProfile).toHaveTextContent('');
