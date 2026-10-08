@@ -918,6 +918,68 @@ fi`,
     database.close();
   });
 
+  describe('capture gate', () => {
+    const toolEvents = (count: number) => Array.from({ length: count }, (_, index) => JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: `echo ${index}` } }));
+    const answer = (text: string) => JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } });
+    const runGate = async (firstLines: string[], secondLines: string[]) => {
+      const printAll = (lines: string[]) => lines.map((line) => `printf '%s\\n' '${line}'`).join('\n');
+      const { directory, log } = fakeAgentDirectory(
+        `count=$(/usr/bin/wc -l < "\${0%/*}/spawns.log")
+if [ "$count" -eq 1 ]; then
+${printAll(firstLines)}
+else
+${printAll(secondLines)}
+fi`,
+        'exit 1',
+      );
+      const database = openDatabase(':memory:');
+      const repository = new WorkItemRepository(database);
+      const task = repository.create({ title: 'Gate', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+      const run = repository.createRun(task.id, 'analysis', 'codex', 'codex', 'Investigate the module.');
+      await executeAgentRun(repository, run, 'test-owner', 60_000);
+      const events = repository.listActivity(task.id).map((entry) => entry.body);
+      const spawns = readFileSync(log, 'utf8').trim().split('\n').length;
+      const finished = repository.getRun(run.id)!;
+      database.close();
+      return { events, spawns, finished };
+    };
+
+    it('issues exactly one follow-up after ten tool uses with no learning, then completes', async () => {
+      const { events, spawns, finished } = await runGate([...toolEvents(10), answer('Investigated.')], [answer('Still no declaration.')]);
+      expect(spawns).toBe(2);
+      expect(finished.status).toBe('completed');
+      expect(finished.output).toBe('Investigated.');
+      expect(events).toContain('capture gate: follow-up issued');
+      expect(finished.reviewHandoff?.learnings).toEqual(['Capture gate: follow-up issued; no lesson or declaration']);
+    });
+
+    it('records the declared-none path from the follow-up in the handoff', async () => {
+      const { spawns, finished } = await runGate([...toolEvents(10), answer('Investigated.')], [answer('Nothing non-obvious learned.')]);
+      expect(spawns).toBe(2);
+      expect(finished.reviewHandoff?.learnings).toEqual(['Capture gate: follow-up issued; "Nothing non-obvious learned."']);
+    });
+
+    it('issues no follow-up when a record_learning call was made', async () => {
+      const learning = JSON.stringify({ type: 'item.completed', item: { type: 'mcp_tool_call', server: 'workbench', tool: 'record_learning', status: 'completed', result: { citation: '[operating-practices.md#3]' } } });
+      const { events, spawns, finished } = await runGate([...toolEvents(10), learning, answer('Investigated.')], [answer('unused')]);
+      expect(spawns).toBe(1);
+      expect(events).toContain('capture gate: satisfied');
+      expect(events).not.toContain('capture gate: follow-up issued');
+      expect(finished.reviewHandoff?.learnings).toEqual(['operating-practices.md#3', 'Capture gate: satisfied; lesson recorded']);
+    });
+
+    it('issues no follow-up when the final answer holds the literal sentence', async () => {
+      const { spawns, finished } = await runGate([...toolEvents(10), answer('Investigated. Nothing non-obvious learned.')], [answer('unused')]);
+      expect(spawns).toBe(1);
+      expect(finished.reviewHandoff?.learnings).toEqual(['Capture gate: satisfied; "Nothing non-obvious learned."']);
+    });
+
+    it('issues no follow-up for trivial runs', async () => {
+      const { spawns } = await runGate([...toolEvents(3), answer('Quick.')], [answer('unused')]);
+      expect(spawns).toBe(1);
+    });
+  });
+
   it('retries a deferred execute response once under the same supervisor used by conversations', async () => {
     const deferred = '## Problem\nThe change is pending.\n\n## Solution\nSay the word and I will implement it.\n\n## Context\nNothing changed.';
     const recovered = '## Problem\nThe requested command was unavailable.\n\n## Solution\nBlocked: the provider returned command unavailable.\n\n## Context\nNot verified.';

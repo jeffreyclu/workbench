@@ -20,6 +20,7 @@ import { reviewDispatchLabel, type AgentRunReviewDispatch, type ReviewDepthTier 
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { appendWorkLog } from './work-log.js';
+import { CAPTURE_GATE_ISSUED_EVENT, CAPTURE_GATE_PROMPT, CAPTURE_GATE_SATISFIED_EVENT, captureGateHandoffLine, captureGateState } from './capture-gate.js';
 import { publishRunMarkdown } from './run-artifact-publish.js';
 import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
 import { evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
@@ -2594,6 +2595,39 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         const retryError = supervisorRetryError(retryDecision);
         if (retryError) throw new Error(retryError);
     }
+    // Capture gate: substantive work records a lesson or says none. One
+    // follow-up turn at most; the run completes whatever it answers, and a
+    // failed follow-up never fails the run that already finished its work.
+    let captureGateIssued = false;
+    let gateReply = '';
+    const initialGateState = result.agent === 'palmyra' ? 'not_required' as const : captureGateState(observedRunEvents, result.output);
+    if (initialGateState === 'follow_up') {
+      captureGateIssued = true;
+      repository.addActivity(item.id, 'system', 'progress', CAPTURE_GATE_ISSUED_EVENT);
+      try {
+        const gateAgent = result.agent;
+        const priorUsage = result.usage;
+        const priorCost = result.costUsd;
+        const followUp = await runAgentCommandWithFallback(gateAgent, cwd, CAPTURE_GATE_PROMPT, undefined, controller.signal, undefined, profile, (usage) => {
+          const combined = addUsage(priorUsage, usage);
+          repository.updateRun(run.id, { inputTokens: combined.inputTokens, cacheCreationInputTokens: combined.cacheCreationInputTokens, cacheReadInputTokens: combined.cacheReadInputTokens, outputTokens: combined.outputTokens });
+        }, (entries, producingAgent) => {
+          for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
+          for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
+          for (const entry of entries) observedRunEvents.push(observedEventFromAudit(entry));
+        }, run.kind, run.accountProfile, undefined, undefined, gateAgent === 'claude' ? result.sessionId ?? undefined : undefined, false, false, priorUsage,
+        // A provider that cannot resume still sees the question with the answer it is about.
+        `${CAPTURE_GATE_PROMPT}\n\nYour final answer for this task so far:\n${compactPromptSection(result.output, 6_000)}`, externalActionGuard);
+        // The follow-up's own reply is not the deliverable: keep the original answer.
+        result = { ...result, usage: followUp.usage, costUsd: priorCost == null && followUp.costUsd == null ? null : (priorCost ?? 0) + (followUp.costUsd ?? 0) };
+        gateReply = followUp.output;
+      } catch (error) {
+        console.error('[agent-runner] capture-gate follow-up failed; completing the run without it', error);
+      }
+    } else if (initialGateState !== 'not_required') {
+      repository.addActivity(item.id, 'system', 'progress', CAPTURE_GATE_SATISFIED_EVENT);
+    }
+    const captureGateLine = captureGateHandoffLine(captureGateIssued, initialGateState === 'not_required' ? 'not_required' : captureGateState(observedRunEvents, `${result.output}\n${gateReply}`));
     if (reviewHarness) {
       const recorded = recordReviewHarnessVerdicts(repository, reviewHarness, result.output, reviewHarnessScopes, `${result.agent}, run ${run.id.slice(0, 8)}`);
       repository.addActivity(item.id, 'system', 'progress', `Review harness passed: every decision was checked in all five passes. ${recorded.recorded} verdict(s) recorded in the review queue${recorded.kept ? `; ${recorded.kept} left alone because Jeffrey or the Review Director already decided them` : ''}.`);
@@ -2648,7 +2682,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const finishPatch = { agent: result.agent, status: 'completed' as const, output, completedAt, ...telemetry };
     // Every run kind saves a handoff, so its summary, blockers, and learnings
     // are on record for the next agent and for Jeffrey.
-    const finished = repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt));
+    const finished = repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt, captureGateLine));
     if (!finished) return;
     repository.recordMemoryCitations(output, { runId: run.id, messageId: run.messageId, conversationId: run.conversationId });
     if (executionPlan) repository.createExecutionPlan(item.id, executionPlan.summary, executionPlan.tasks);

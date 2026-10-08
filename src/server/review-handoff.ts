@@ -41,7 +41,7 @@ function blockersFromOutput(output: string): string[] {
 }
 
 /** Citation ids from `record_learning` responses, which return `[file.md#N]`. */
-function learningsFromEvents(events: ObservedRunEvent[]): string[] {
+export function learningsFromEvents(events: ObservedRunEvent[]): string[] {
   return unique(events
     .filter((event) => event.result && /(?:^|[.__])record_learning$/.test(event.detail))
     .flatMap((event) => extractMemoryCitations(event.result!).map((citation) => citation.entryId)));
@@ -52,7 +52,7 @@ function learningsFromEvents(events: ObservedRunEvent[]): string[] {
  * The final model message is a navigation summary only: it cannot establish
  * that a test, build, or any other command ran successfully.
  */
-export function buildAgentRunReviewHandoff(run: AgentRun, output: string, events: ObservedRunEvent[], createdAt: string): AgentRunReviewHandoff {
+export function buildAgentRunReviewHandoff(run: AgentRun, output: string, events: ObservedRunEvent[], createdAt: string, captureGate?: string): AgentRunReviewHandoff {
   const files = observedFiles(events);
   const decisions = unique(events.filter((event) => event.streamKind === 'decision').map((event) => event.detail));
   const verification = events
@@ -81,7 +81,7 @@ export function buildAgentRunReviewHandoff(run: AgentRun, output: string, events
     uncertainties: verification.length === 0 ? ['No completed test, build, typecheck, or lint command was observed by the runner.'] : [],
     tradeoffs: decisions.map((decision) => ({ decision, rationale: 'Recorded by the agent debugger during this run.' })),
     blockers: unique([...blockersFromOutput(output), ...refused]).slice(0, MAX_LIST_ITEMS),
-    learnings: learnings.slice(0, MAX_LIST_ITEMS),
+    learnings: [...learnings.slice(0, MAX_LIST_ITEMS), ...(captureGate ? [captureGate] : [])],
     priorArt: priorArt.slice(0, MAX_LIST_ITEMS),
     unverifiedClaim: verification.length === 0 && claimsCompletion(output),
     createdAt,
