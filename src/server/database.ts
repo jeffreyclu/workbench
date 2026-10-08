@@ -2562,6 +2562,23 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // Memory consolidation proposals: validated verdicts awaiting Jeffrey's
+    // decision. A newer pending proposal supersedes the previous one.
+    id: '092_consolidation_proposals',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE consolidation_proposals (
+          id TEXT PRIMARY KEY,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'superseded')),
+          items_json TEXT NOT NULL CHECK (json_valid(items_json) AND json_type(items_json) = 'array'),
+          created_at TEXT NOT NULL,
+          resolved_at TEXT
+        );
+        CREATE INDEX idx_consolidation_proposals_status_created ON consolidation_proposals(status, created_at DESC);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

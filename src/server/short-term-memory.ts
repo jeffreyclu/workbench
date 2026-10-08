@@ -193,6 +193,11 @@ export class ShortTermMemoryStore {
     return { text: output === prefix ? `${prefix}No active conversation memory yet.` : output, items };
   }
 
+  /** Every active conversation with content, rendered whole. Consolidation reads all of them, not a budgeted top five. */
+  conversations(): Array<{ id: string; title: string; body: string; updatedAt: string }> {
+    return this.memories().filter((memory) => memory.entries.length || memory.sharedBrief.trim()).map((memory) => ({ id: memory.id, title: memory.title, body: renderConversation(memory), updatedAt: memory.updatedAt }));
+  }
+
   context(scope: { conversationId?: string; workItemId?: string; query?: string } = {}, budget = 2_400): string {
     return this.contextWithItems(scope, budget).text;
   }

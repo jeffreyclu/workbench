@@ -1,0 +1,16 @@
+{
+  "duplicate": {
+    "source": "pinned_message",
+    "author": "jeffrey",
+    "body": "Reminder: only run the test file you touched, plus npm run typecheck. Never the whole vitest suite."
+  },
+  "staleRun": {
+    "source": "run_learning",
+    "learning": "The run waited on the review worktree to finish integrating, then continued once it cleared."
+  },
+  "reusableFinding": {
+    "source": "short_term_memory",
+    "title": "Where run learnings live",
+    "facts": "Run handoff learnings are stored as a JSON array in agent_run_review_handoffs.learnings_json and mapped at src/server/repositories/run-repository.ts:52."
+  }
+}

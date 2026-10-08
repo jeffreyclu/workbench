@@ -1669,3 +1669,48 @@ export const listAuditLogQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
   cursor: z.string().optional(),
 });
+
+// Memory consolidation. The model proposes verdicts; the server validates every
+// one before it is stored or shown. Provenance always comes from the server's
+// own candidate, never from the model.
+export const consolidationSourceSchema = z.enum(['short_term_memory', 'pinned_message', 'run_learning', 'memory_entry']);
+
+const consolidationVerdictBase = { provenanceId: z.string().trim().min(1).max(300) };
+
+export const consolidationModelVerdictSchema = z.discriminatedUnion('verdict', [
+  z.object({ ...consolidationVerdictBase, verdict: z.literal('promote'), targetFile: z.string().trim().min(1).max(200), title: z.string().trim().min(1).max(200), text: z.string().trim().min(1).max(4_000) }),
+  // `coveredBy` marks an "already covered" keep and must cite an existing entry as `[file.md#N]`.
+  z.object({ ...consolidationVerdictBase, verdict: z.literal('keep'), coveredBy: z.string().trim().min(1).max(300).nullish() }),
+  z.object({ ...consolidationVerdictBase, verdict: z.literal('archive_then_remove'), reason: z.string().trim().min(1).max(1_000) }),
+]);
+
+export const consolidationModelResponseSchema = z.object({ items: z.array(z.unknown()).max(2_000) });
+
+export const consolidationProvenanceSchema = z.object({
+  source: consolidationSourceSchema,
+  /** Conversation, message, or run id; `file.md#N` for an existing entry. */
+  id: z.string().min(1),
+  learningIndex: z.number().int().nonnegative().optional(),
+});
+
+const consolidationItemBase = { provenanceId: z.string().min(1), provenance: consolidationProvenanceSchema };
+
+export const consolidationProposalItemSchema = z.discriminatedUnion('verdict', [
+  z.object({ ...consolidationItemBase, verdict: z.literal('promote'), targetFile: z.string(), title: z.string(), text: z.string() }),
+  z.object({ ...consolidationItemBase, verdict: z.literal('keep'), coveredBy: z.string().nullable() }),
+  z.object({ ...consolidationItemBase, verdict: z.literal('archive_then_remove'), reason: z.string() }),
+]);
+
+export const consolidationProposalStatusSchema = z.enum(['pending', 'accepted', 'rejected', 'superseded']);
+
+export type ConsolidationSource = z.infer<typeof consolidationSourceSchema>;
+export type ConsolidationProvenance = z.infer<typeof consolidationProvenanceSchema>;
+export type ConsolidationProposalItem = z.infer<typeof consolidationProposalItemSchema>;
+
+export interface ConsolidationProposal {
+  id: string;
+  status: z.infer<typeof consolidationProposalStatusSchema>;
+  items: ConsolidationProposalItem[];
+  createdAt: string;
+  resolvedAt: string | null;
+}

@@ -4,6 +4,8 @@ export type MemoryTier = typeof MEMORY_TIERS[number];
 export interface MemoryEntry {
   id: number;
   title: string;
+  /** Text between this entry's heading and the next numbered heading. */
+  body: string;
 }
 
 export interface MemoryFileAnalysis {
@@ -27,7 +29,12 @@ const unnumberedHeading = /^#{2,3} (?!<a id="\d+"><\/a>\d+\. ).+$/m;
 const citation = /\[([\w.-]+\.md)#(\d+)\]/g;
 
 export function analyzeMemoryFile(source: string): MemoryFileAnalysis {
-  const entries = [...source.matchAll(numberedHeading)].map((match) => ({ id: Number(match[1]), title: match[2] }));
+  const headings = [...source.matchAll(numberedHeading)];
+  const entries = headings.map((match, index) => ({
+    id: Number(match[1]),
+    title: match[2],
+    body: source.slice(match.index + match[0].length, headings[index + 1]?.index ?? source.length).trim(),
+  }));
   const counts = new Map<number, number>();
   for (const entry of entries) counts.set(entry.id, (counts.get(entry.id) ?? 0) + 1);
   return {

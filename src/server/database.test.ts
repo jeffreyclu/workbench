@@ -105,6 +105,7 @@ const EXPECTED_MIGRATIONS = [
   '089_agent_run_handoff_unverified_claim',
   '090_knowledge_drift_report',
   '091_agent_run_review_dispatch',
+  '092_consolidation_proposals',
 ];
 
 describe('openDatabase', () => {

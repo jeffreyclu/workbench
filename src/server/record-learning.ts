@@ -63,7 +63,7 @@ export function findSecretPattern(text: string): string | null {
 const provenancePattern = /^(?:https?:\/\/\S+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
 const numberedHeading = /^#{2,3} <a id="(\d+)"><\/a>\1\. /gm;
 
-interface Catalogue { path: string; directory: string }
+export interface Catalogue { path: string; directory: string }
 
 function catalogues(directories: RecordLearningDirectories): Catalogue[] {
   return [
@@ -72,7 +72,8 @@ function catalogues(directories: RecordLearningDirectories): Catalogue[] {
   ];
 }
 
-function indexedFiles(directories: RecordLearningDirectories): Map<string, Catalogue> {
+/** Topic files listed in a catalogue row that also exist on disk, keyed by file name. */
+export function indexedFiles(directories: RecordLearningDirectories): Map<string, Catalogue> {
   const files = new Map<string, Catalogue>();
   for (const catalogue of catalogues(directories)) {
     if (!existsSync(catalogue.path)) continue;
