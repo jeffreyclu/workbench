@@ -10,6 +10,7 @@ const fileTiers = new Map<string, string>();
 const sharedDirectory = join(process.cwd(), 'docs/shared-memory');
 const knowledgeDirectory = join(homedir(), 'Documents/Workbench/notes/knowledge');
 const metadata: Record<string, Metadata> = {
+  'discard-log.md': { load: 'archive', keywords: ['discarded entries'], refs: [] },
   'engineering-standards.md': { load: 'core', keywords: ['TypeScript conventions', 'feature flags'], refs: ['working-with-jeffrey.md'] },
   'integration-constraints.md': { load: 'core', keywords: ['Tailscale', 'Slack Workflow Builder'], refs: [] },
   'migration-log.md': { load: 'archive', keywords: ['2026-08-23 consolidation'], refs: [] },

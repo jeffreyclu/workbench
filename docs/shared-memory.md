@@ -4,6 +4,7 @@ Read these rows first, then open only matching files. Entry counts are generated
 
 | Path | Entries | Tier | Load | Keywords (owned here) | Cross-refs |
 | --- | ---: | --- | --- | --- | --- |
+| `discard-log.md` | 0 | workbench | archive | discarded entries | — |
 | `engineering-standards.md` | 41 | workbench | core | TypeScript conventions; feature flags | `working-with-jeffrey.md` |
 | `integration-constraints.md` | 8 | workbench | core | Tailscale; Slack Workflow Builder | — |
 | `migration-log.md` | 1 | workbench | archive | 2026-08-23 consolidation | — |
