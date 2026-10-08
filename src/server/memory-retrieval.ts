@@ -1,4 +1,4 @@
-import type { AgentRun } from '../shared/contracts.js';
+import type { AgentRun, RetrievedMemoryDetail } from '../shared/contracts.js';
 
 export const DEFAULT_DURABLE_MEMORY_SOURCES = [
   'conversation',
@@ -169,4 +169,13 @@ export function durableMemoryPrompt(evidence: DurableMemoryEvidence[], budget = 
   }
   if (!entries.length) return '';
   return `${DURABLE_MEMORY_PROMPT_PREFIX}${entries.join('\n')}${DURABLE_MEMORY_PROMPT_SUFFIX}`;
+}
+
+/** Splits a reply's memory into searched evidence (counted) and always-injected short-term items (listed separately). */
+export function retrievedMemoryDetailFor(query: string, evidence: DurableMemoryEvidence[], shortTermItems: Array<{ source: string; title: string; body: string; createdAt: string; retrievalPath?: string[] }>): { count: number; detail: RetrievedMemoryDetail } {
+  const items = evidence.map(({ entryId, source, title, body, createdAt, retrievalPath }) => {
+    const citation = source === 'memory_entry' ? /^memory_entry:(.+#\d+)$/.exec(entryId ?? '')?.[1] : undefined;
+    return { source, title, body, createdAt, retrievalPath, ...(citation ? { citation: `[${citation}]` } : {}) };
+  });
+  return { count: items.length, detail: { query, items, shortTermItems } };
 }

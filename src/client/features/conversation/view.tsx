@@ -207,7 +207,7 @@ export function memoryBadgePresentation(retrievedMemoryCount: number | null): { 
   if (typeof retrievedMemoryCount === 'number') {
     return {
       label: String(retrievedMemoryCount),
-      title: `Supplied ${retrievedMemoryCount} memory item${retrievedMemoryCount === 1 ? '' : 's'} from active context and long-term search — click to view`,
+      title: `Supplied ${retrievedMemoryCount} memory item${retrievedMemoryCount === 1 ? '' : 's'} retrieved by long-term search — click to view`,
       disabled: false,
     };
   }

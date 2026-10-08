@@ -1332,9 +1332,13 @@ export interface AgentStreamEvent {
 }
 
 /** The exact memory query and matches behind a reply's retrievedMemoryCount, fetched on demand when the memory badge is clicked. */
+export interface RetrievedMemoryItem { source: string; title: string; body: string; createdAt: string; retrievalPath?: string[]; /** `[file.md#N]` for numbered lesson entries. */ citation?: string }
 export interface RetrievedMemoryDetail {
   query: string;
-  items: Array<{ source: string; title: string; body: string; createdAt: string; retrievalPath?: string[] }>;
+  /** Only what durable retrieval returned for the query; this is what retrievedMemoryCount counts. */
+  items: RetrievedMemoryItem[];
+  /** Always-injected short-term context (open conversations), never counted as retrieved. */
+  shortTermItems?: RetrievedMemoryItem[];
 }
 export interface PublishedArtifact { id: string; url: string; title: string; }
 

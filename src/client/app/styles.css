@@ -1609,6 +1609,10 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .retrieved-memory-item-source { color: var(--muted); font: 9px 'DM Mono'; letter-spacing: .04em; text-transform: uppercase; }
 .retrieved-memory-item-path { margin: 6px 0 0; color: #bfe153; font: 10px/1.45 'DM Mono'; }
 .retrieved-memory-item-body { margin: 6px 0; color: #cfcec4; font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
+.retrieved-memory-section-title { margin: 12px 0 8px; font-size: 12px; }
+.retrieved-memory-short-term { margin-top: 16px; }
+.retrieved-memory-short-term summary { cursor: pointer; color: var(--muted); font: 10px/1.45 'DM Mono'; padding: 6px 0; }
+.retrieved-memory-short-term .retrieved-memory-items { margin-top: 8px; }
 .retrieved-memory-item time { color: var(--muted); font: 9px 'DM Mono'; }
 .recipient-badge { display: inline-flex; align-items: center; padding: 2px 6px; color: #c6f432; background: #202714; border: 1px solid #596234; border-radius: 999px; font: 9px/1.2 'DM Mono'; letter-spacing: .04em; }
 .interjection-badge { display: inline-flex; align-items: center; padding: 2px 6px; color: #a8d9ff; background: #15232d; border: 1px solid #31546a; border-radius: 999px; font: 9px/1.2 'DM Mono'; letter-spacing: .04em; }

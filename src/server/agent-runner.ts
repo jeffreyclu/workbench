@@ -28,7 +28,7 @@ import { evidencePromptBlock, type ExternalEvidence } from './external-evidence.
 import { carryReviewLedger, parseReviewLedger, reviewHarnessPrompt, reviewRunsAdversarialLens } from '../shared/review-harness.js';
 import { FINAL_RESPONSE_CONTRACT, NO_UI_SURFACE_BADGE, namesUiSurface, verboseResponseRequested, writesClientFiles } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, memoryRetrievalEntries, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, memoryRetrievalEntries, retrievedMemoryCountForAttempt, retrievedMemoryDetailFor, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
 import { currentTurnAuthorityContract, finalizeSupervisedOutput, isStatusOnlyTurn, superviseDraft, superviseExternalAction, supervisedRetryPrompt, supervisorRetryError, supervisorPromptContract } from './supervisor.js';
 import { listCandidateWorkspaces } from './workspace-candidates.js';
@@ -2256,16 +2256,10 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget, memoryPlan.inlineBodies);
-    const retrievedMemoryItems = [
-      ...shortTermMemory.items,
-      ...memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
-    ];
+    const retrievedMemory = retrievedMemoryDetailFor(memoryQuery, memoryEvidence, shortTermMemory.items);
     if (run.messageId) repository.updateSharedMessage(run.messageId, {
-      retrievedMemoryCount: retrievedMemoryItems.length,
-      retrievedMemoryDetail: {
-        query: memoryQuery,
-        items: retrievedMemoryItems,
-      },
+      retrievedMemoryCount: retrievedMemory.count,
+      retrievedMemoryDetail: retrievedMemory.detail,
     });
     if (resumesSession) repository.addActivity(item.id, 'system', 'progress', `Resuming ${run.agent === 'palmyra' ? 'Palmyra context' : 'Claude session'} with bounded continuation context.`);
     // Every review runs the same deterministic harness over the Review
@@ -2315,7 +2309,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       strategyChars: item.strategy?.length ?? 0,
       instructionChars: run.instructions.length,
       sharedContextChars: sharedContext.length,
-      retrievedMemoryCount: retrievedMemoryItems.length,
+      retrievedMemoryCount: retrievedMemory.count,
       shortTermMemoryCount: shortTermMemory.items.length,
       longTermMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryChars: memoryContext.length,

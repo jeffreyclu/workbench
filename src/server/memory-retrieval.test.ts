@@ -5,6 +5,7 @@ import {
   durableMemoryRetrievalPlan,
   isExplicitMemoryRequest,
   retrievedMemoryCountForAttempt,
+  retrievedMemoryDetailFor,
   selectDurableMemoryEvidence,
   shouldPrefetchDurableMemory,
   type DurableMemoryEvidence,
@@ -143,5 +144,22 @@ describe('durable memory prefetch', () => {
     ], null, { promptBudget: 12_000, maxItems: 100 });
 
     expect(results.map(({ title }) => title)).toEqual(['Direct answer', 'Still useful']);
+  });
+});
+
+describe('retrievedMemoryDetailFor', () => {
+  it('counts only retrieved evidence and keeps short-term items under their own key', () => {
+    const shortTerm = ['Pluto', 'Golden dataset', 'Modal'].map((title) => ({ source: 'active_conversation', title, body: title, createdAt: '2026-09-01T12:00:00.000Z' }));
+    const { count, detail } = retrievedMemoryDetailFor('password grant', [
+      evidence({ source: 'memory_entry', entryId: 'memory_entry:lessons.md#4' }),
+      evidence({ entryId: 'doc:readme' }),
+    ], shortTerm);
+
+    expect(count).toBe(2);
+    expect(detail.items).toHaveLength(2);
+    expect(detail.items[0]).toMatchObject({ citation: '[lessons.md#4]' });
+    expect(detail.items[1]).not.toHaveProperty('citation');
+    expect(detail.shortTermItems).toEqual(shortTerm);
+    expect(detail.query).toBe('password grant');
   });
 });

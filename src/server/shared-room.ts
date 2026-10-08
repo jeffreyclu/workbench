@@ -19,7 +19,7 @@ import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarnes
 import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, memoryRetrievalEntries, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, memoryRetrievalEntries, retrievedMemoryCountForAttempt, retrievedMemoryDetailFor, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
 import { preflightWorkbenchTools } from './palmyra-workbench-tools.js';
@@ -1790,16 +1790,10 @@ export async function replyInSharedRoom(
     const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget, memoryPlan.inlineBodies);
     const shortTermMemory = repository.getSharedContextWithItems(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });
     const shortTermContext = shortTermMemory.text;
-    const retrievedMemoryItems = [
-      ...shortTermMemory.items,
-      ...memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
-    ];
+    const retrievedMemory = retrievedMemoryDetailFor(memoryQuery, memoryEvidence, shortTermMemory.items);
     repository.updateSharedMessage(messageId, {
-      retrievedMemoryCount: retrievedMemoryItems.length,
-      retrievedMemoryDetail: {
-        query: memoryQuery,
-        items: retrievedMemoryItems,
-      },
+      retrievedMemoryCount: retrievedMemory.count,
+      retrievedMemoryDetail: retrievedMemory.detail,
     });
     const freshPrompt = withReviewHarness(buildSharedReplyPrompt(
       agent,
@@ -1844,7 +1838,7 @@ export async function replyInSharedRoom(
       sharedContextChars: shortTermContext.length,
       connectionContextChars: connectionContext.length,
       conversationMessageCount: thread.length,
-      retrievedMemoryCount: retrievedMemoryItems.length,
+      retrievedMemoryCount: retrievedMemory.count,
       shortTermMemoryCount: shortTermMemory.items.length,
       longTermMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryChars: memoryContext.length,
