@@ -35,6 +35,8 @@
     "memory:index": "tsx scripts/index-memory.ts",
     "memory:catalogue": "tsx scripts/lint-memory-citations.ts --write-catalogues",
     "lint:memory": "tsx scripts/lint-memory-citations.ts",
+    "personas:sync": "tsx scripts/sync-personas.ts",
+    "lint:personas": "tsx scripts/sync-personas.ts --check",
     "discovery:scan": "tsx scripts/discover.ts --force",
     "backup:run": "tsx scripts/backup.ts",
     "backup:install": "zsh scripts/install-backup-schedule.sh",

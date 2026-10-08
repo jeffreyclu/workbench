@@ -9,6 +9,7 @@ import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../s
 import { agentSubprocessEnv } from './agent-security.js';
 import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, measurePromptSize, missingReviewPasses, providerSessionForTaskTurn, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, reviewFallbackReason, reviewPassCompletionPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, selectReviewAgent, shouldContinueCacheHandoff, taskPromptContentSize, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError, ProviderRefusalError } from './agent-runner.js';
 import { openDatabase } from './database.js';
+import { loadPersonaFiles, parsePersona, personaBody, personaPrompt, renderClaudeAgent } from './personas.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
 
@@ -1408,9 +1409,8 @@ fi`,
     const run = { agent: 'codex', kind: 'review', instructions: '' } as AgentRun;
     const prompt = buildPrompt(item('Review PR 5246'), run);
     expect(prompt).toContain('Authoritative persona: frontend-reviewer');
-    expect(prompt).toContain('Read the Linear issue context and PR description first');
-    expect(prompt).toContain('All five passes are static');
-    expect(prompt).toContain('Do not install dependencies, run tests, run the app, inspect CI');
+    expect(prompt).toContain(personaBody('frontend-reviewer'));
+    expect(prompt).toContain('reading exercise, not an execution exercise');
     expect(prompt).toContain('Complete these five review passes separately and in this order');
     expect(prompt).toContain('1. Correctness and readability');
     expect(prompt).toContain('2. Performance and scaling');
@@ -1469,13 +1469,7 @@ fi`,
     const run = { agent: 'codex', kind: 'execute', instructions: '' } as AgentRun;
     const prompt = buildPrompt(item('Implement the connector UI'), run);
     expect(prompt).toContain('Authoritative persona: frontend-engineer');
-    expect(prompt).toContain('Read and follow every applicable repository instruction');
-    expect(prompt).toContain('correctness, readability, maintainability, performance, then scalability');
-    expect(prompt).toContain('Start from an implementation plan');
-    expect(prompt).toContain('Separate concerns explicitly');
-    expect(prompt).toContain('Prefer pure, memoized React presentation components');
-    expect(prompt).toContain("TanStack Query's caching and targeted invalidation capabilities");
-    expect(prompt).toContain('represent every criterion in tests');
+    expect(prompt).toContain(personaBody('frontend-engineer'));
   });
 
   it('routes backend implementation through the principal backend engineer protocol', () => {
@@ -1483,10 +1477,7 @@ fi`,
     const backendItem = item('Implement provider sync API endpoint');
     const prompt = buildPrompt(backendItem, run);
     expect(prompt).toContain('Authoritative persona: backend-engineer');
-    expect(prompt).toContain('correctness, reliability, security, readability, maintainability, performance, then scalability');
-    expect(prompt).toContain('Separate transport, application logic, domain logic, persistence, and provider integrations');
-    expect(prompt).toContain('retries, timeouts, cancellation, idempotency, concurrency, and partial failure');
-    expect(prompt).toContain('safe migrations and staged rollouts');
+    expect(prompt).toContain(personaBody('backend-engineer'));
     expect(classifyExecution(backendItem).instructions).toContain('authoritative backend-engineer persona');
   });
 
@@ -1717,5 +1708,19 @@ Question or requested change: Replace this hook with the established memoized he
       expect(second).toBeGreaterThan(first - 1_000); // jitter makes exact comparison unreliable, but exponential base grows
       expect(large).toBeLessThanOrEqual(60_000);
     });
+  });
+});
+
+describe('persona definitions', () => {
+  it('loads every persona from docs/personas with Claude frontmatter stripped from the prompt', () => {
+    const personas = loadPersonaFiles();
+    expect(personas.map((persona) => persona.name)).toEqual(expect.arrayContaining([
+      'backend-engineer', 'bug-investigator', 'codebase-analyst', 'doc-writer', 'frontend-engineer',
+      'frontend-reviewer', 'implementation-planner', 'researcher',
+    ]));
+    for (const persona of personas) {
+      expect(personaPrompt(persona.name)).not.toMatch(/^(?:description|tools|model):/m);
+      expect(renderClaudeAgent(parsePersona(renderClaudeAgent(persona)))).toBe(renderClaudeAgent(persona));
+    }
   });
 });

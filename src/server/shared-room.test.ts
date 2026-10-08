@@ -9,6 +9,7 @@ import { claimWarmProcess, hasWarmProcess, resetPoolForTest } from './agent-pool
 import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasUnverifiedCompletionClaim } from './agent-runner.js';
 import { resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
 import { reviewHarnessPrompt } from '../shared/review-harness.js';
+import { personaBody } from './personas.js';
 import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
@@ -698,7 +699,7 @@ describe('compactConversationHistory', () => {
 
     expect(classification.kind).toBe('review');
     expect(prompt).toContain('Authoritative persona: frontend-reviewer');
-    expect(prompt).toContain('You are the only authoritative source for code reviews');
+    expect(prompt).toContain(personaBody('frontend-reviewer'));
     database.close();
   });
 
