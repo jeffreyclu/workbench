@@ -1864,26 +1864,39 @@ const sessionTurnTails = new Map<string, Promise<void>>();
  * never overlaps its capability file. Waiters start in arrival order.
  */
 async function withSessionTurnLock<T>(lockKey: string, signal: AbortSignal, onWait: () => void, run: () => Promise<T>): Promise<T> {
-  const previous = sessionTurnTails.get(lockKey);
-  let release!: () => void;
-  const mine = new Promise<void>((resolve) => { release = resolve; });
-  const tail = (previous ?? Promise.resolve()).then(() => mine);
-  sessionTurnTails.set(lockKey, tail);
+  const { previous, release } = enqueueSessionTurn(lockKey);
   try {
     if (previous) {
       onWait();
-      await new Promise<void>((resolve, reject) => {
-        const abort = () => reject(new Error('Agent run canceled.'));
-        if (signal.aborted) return abort();
-        signal.addEventListener('abort', abort, { once: true });
-        void previous.then(() => { signal.removeEventListener('abort', abort); resolve(); });
-      });
+      await awaitPreviousSessionTurn(previous, signal);
     }
     return await run();
   } finally {
     release();
-    if (sessionTurnTails.get(lockKey) === tail) sessionTurnTails.delete(lockKey);
   }
+}
+
+/** Takes the next slot in a session's queue synchronously; `release` must run when the turn ends or is dropped. */
+function enqueueSessionTurn(lockKey: string): { previous: Promise<void> | undefined; release: () => void } {
+  const previous = sessionTurnTails.get(lockKey);
+  let resolveMine!: () => void;
+  const mine = new Promise<void>((resolve) => { resolveMine = resolve; });
+  const tail = (previous ?? Promise.resolve()).then(() => mine);
+  sessionTurnTails.set(lockKey, tail);
+  const release = () => {
+    resolveMine();
+    if (sessionTurnTails.get(lockKey) === tail) sessionTurnTails.delete(lockKey);
+  };
+  return { previous, release };
+}
+
+function awaitPreviousSessionTurn(previous: Promise<void>, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => reject(new Error('Agent run canceled.'));
+    if (signal.aborted) return abort();
+    signal.addEventListener('abort', abort, { once: true });
+    void previous.then(() => { signal.removeEventListener('abort', abort); resolve(); });
+  });
 }
 
 /** A session turn failure after the provider streamed its first event: the turn may already have acted. */
@@ -1985,26 +1998,44 @@ function sessionTerminalMessage(snapshot: SessionTurnSnapshot, turn: AgentTurnRe
 export async function recoverSharedSessionTurns(repository: WorkItemRepository, options: { claimRetryMs?: number } = {}): Promise<string[]> {
   const rows = repository.database.prepare("SELECT conversation_id, agent, last_event_offset FROM agent_sessions WHERE state != 'stopped'").all() as Array<{ conversation_id: string; agent: SessionAgent; last_event_offset: number }>;
   const recovered: string[] = [];
-  for (const row of rows) {
+  // Every live session takes its queue slot before any await, so no task run
+  // can start on a session whose unfinished reply is still being recovered.
+  const slots = rows.map((row) => enqueueSessionTurn(`${row.conversation_id}:${row.agent}`));
+  await Promise.all(rows.map(async (row, index) => {
+    const { previous, release } = slots[index];
+    try {
+      await recoverSessionRow(row, previous);
+    } finally {
+      release();
+    }
+  }));
+  return recovered;
+
+  async function recoverSessionRow(row: { conversation_id: string; agent: SessionAgent; last_event_offset: number }, previous: Promise<void> | undefined): Promise<void> {
     const key = { conversationId: row.conversation_id, agent: row.agent };
     const status = readAgentSessionStatus(key);
-    if (!status) continue;
+    if (!status) return;
     const session = { ...key, socketPath: status.socketPath };
     const { events } = await tail(session, row.last_event_offset, 0);
     const starts = events.filter((event) => event.source === 'host' && event.type === 'turn_started' && event.turnId);
     const last = starts.at(-1);
-    if (!last?.turnId) continue;
+    if (!last?.turnId) return;
     const messageId = sessionTurnMessageId(last.turnId);
     const message = repository.getSharedMessageById(messageId);
-    if (!message || message.status !== 'running') continue;
+    if (!message || message.status !== 'running') return;
     // The previous runtime's lease must lapse before this one may own the reply.
     const deadline = Date.now() + (options.claimRetryMs ?? LEASE_MS + 5_000);
     while (!repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) {
       if (Date.now() >= deadline) break;
       await new Promise((wait) => setTimeout(wait, 1_000));
     }
-    if (repository.getSharedMessageById(messageId)?.status !== 'running') continue;
+    if (repository.getSharedMessageById(messageId)?.status !== 'running') return;
     const runId = repository.getRunByMessage(messageId)?.id;
+    if (previous) {
+      if (runId) repository.updateRun(runId, { waitingReason: SESSION_TURN_WAITING_REASON });
+      await awaitPreviousSessionTurn(previous, new AbortController().signal);
+      if (runId) repository.updateRun(runId, { waitingReason: null });
+    }
     if (runId) repository.claimRun(runId, OWNER_ID, LEASE_MS);
     const lease = setInterval(() => {
       try { repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS); if (runId) repository.renewRunLease(runId, OWNER_ID, LEASE_MS); } catch { /* retried next tick */ }
@@ -2030,7 +2061,6 @@ export async function recoverSharedSessionTurns(repository: WorkItemRepository, 
       try { clearTurnCapability(guard, last.turnId); } catch { /* best effort */ }
     }
   }
-  return recovered;
 }
 
 export async function replyInSharedRoom(
@@ -2528,7 +2558,7 @@ export async function replyInSharedRoom(
         }
       } else result = await runPerRunReply();
     } catch (error) {
-      if (agent === 'claude' && !isPairedReply && isAgentCapacityError(error)) {
+      if (agent === 'claude' && !isPairedReply && canFallBackToPerRun(error) && isAgentCapacityError(error)) {
         const reason = error instanceof Error ? error.message : String(error);
         repository.updateSharedMessage(messageId, { body: '● Claude is at capacity. Continuing this tracked turn with steerable Codex…', author: 'codex', model: modelFor('codex', profile), fallbackFrom: 'claude', fallbackReason: reason.slice(0, 500) });
         if (runId) repository.updateRun(runId, { agent: 'codex', model: modelFor('codex', profile), fallbackFrom: 'claude', fallbackReason: reason.slice(0, 500) });
