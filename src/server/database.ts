@@ -2707,16 +2707,19 @@ const schemaMigrations: readonly Migration[] = [
       const narrow = "failure_kind IN ('provider_refusal')";
       if (!row?.sql.includes(narrow)) return;
       const version = (database.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version;
-      // The documented procedure for changing only a constraint, which node:sqlite
-      // blocks unless defensive mode is lifted for these statements.
-      database.enableDefensive(false);
+      // The documented procedure for changing only a constraint. Newer node:sqlite
+      // builds open in defensive mode and expose enableDefensive to lift it for
+      // these statements; Node 22.19 (the live runtime) has neither, and the
+      // writable_schema edit works there as is.
+      const defensive = database as unknown as { enableDefensive?: (enabled: boolean) => void };
+      defensive.enableDefensive?.(false);
       try {
         database.exec('PRAGMA writable_schema = ON;');
         database.prepare("UPDATE sqlite_master SET sql = replace(sql, ?, ?) WHERE type = 'table' AND name = 'agent_runs'")
           .run(narrow, "failure_kind IN ('provider_refusal', 'runtime_promoted')");
         database.exec(`PRAGMA schema_version = ${version + 1}; PRAGMA writable_schema = OFF;`);
       } finally {
-        database.enableDefensive(true);
+        defensive.enableDefensive?.(true);
       }
     },
   },
