@@ -2495,7 +2495,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.setConversationPalmyraContext(run.conversationId, JSON.stringify(result.messages));
     }
     const persistedFallbackReason = reviewFallbackReason(run, result.agent, result.fallbackReason, repository.listRuns(item.id));
-    if (persistedFallbackReason !== result.fallbackReason) result = { ...result, fallbackReason: persistedFallbackReason };
+    if (persistedFallbackReason !== result.fallbackReason) result = { ...result, fallbackReason: persistedFallbackReason } as typeof result;
     const rawOutput = result.output;
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason, costUsd: result.costUsd ?? null };
     let executionPlan: { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null; dependsOn: number[] }> } | null = null;
