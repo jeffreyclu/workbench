@@ -4,9 +4,13 @@ import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { agentEnvironmentForWorkspace, commandFor } from '../src/server/agent-runner.js';
+import { CODEX_APP_SERVER_ARGS, codexThreadBootstrapRequest, codexTurnStartParams } from '../src/server/shared-room.js';
 
 const cwd = process.cwd();
 const port = 5199;
@@ -142,6 +146,137 @@ async function killChild() {
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
 }
 
+type RpcEvent = { id?: number; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown>; error?: { message?: string } };
+let codexChild: ChildProcessWithoutNullStreams | undefined;
+const rpcEvents: RpcEvent[] = [];
+let nextRpcId = 1;
+
+function codexSend(method: string, params?: Record<string, unknown> | null) {
+  if (!codexChild?.stdin.writable) throw new Error('Codex app-server stdin is not writable');
+  const message = { jsonrpc: '2.0', id: nextRpcId++, method, ...(params === undefined ? {} : { params }) };
+  log('sent', message);
+  codexChild.stdin.write(`${JSON.stringify(message)}\n`);
+  return message.id;
+}
+
+function codexNotification(method: string, params: Record<string, unknown> = {}) {
+  const message = { jsonrpc: '2.0', method, params };
+  log('sent', message);
+  codexChild?.stdin.write(`${JSON.stringify(message)}\n`);
+}
+
+async function waitForRpc(predicate: (event: RpcEvent) => boolean, label: string, start = rpcEvents.length, timeoutMs = 120_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const event = rpcEvents.slice(start).find(predicate);
+    if (event) return event;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function codexRequest(method: string, params?: Record<string, unknown> | null) {
+  const start = rpcEvents.length;
+  const id = codexSend(method, params);
+  const event = await waitForRpc((candidate) => candidate.id === id, `${method} response`, start);
+  if (event.error) throw new Error(`${method}: ${event.error.message ?? 'unknown error'}`);
+  return event.result ?? {};
+}
+
+function startCodex() {
+  const mcpUrl = `http://127.0.0.1:${port}/mcp`;
+  const args = [...CODEX_APP_SERVER_ARGS, '-c', `mcp_servers.workbench.url="${mcpUrl}"`];
+  codexChild = spawn('codex', args, {
+    cwd,
+    env: { ...agentEnvironmentForWorkspace('codex', 'default', cwd), WORKBENCH_LOCAL_MCP_TOKEN: 'loopback' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  codexChild.stderr.on('data', (chunk) => console.error(`codex_stderr ${chunk.toString('utf8').trim()}`));
+  createInterface({ input: codexChild.stdout }).on('line', (line) => {
+    try {
+      const event = JSON.parse(line) as RpcEvent;
+      rpcEvents.push(event);
+      if (event.method === 'turn/started' || event.method === 'turn/completed' || event.method === 'item/completed' || event.id !== undefined) log('event', event);
+    } catch { console.log(`codex_stdout ${line}`); }
+  });
+  codexChild.once('exit', (code, signal) => log('codex_exit', { code, signal }));
+  log('codex_started', { pid: codexChild.pid, args });
+}
+
+async function codexProcessInfo(label: string) {
+  if (!codexChild?.pid) throw new Error('Codex did not start');
+  const output = await new Promise<string>((resolve, reject) => execFile('ps', ['-o', 'pid,lstart', '-p', String(codexChild.pid)], (error, stdout) => error ? reject(error) : resolve(stdout.trim())));
+  log('ps', { label, output });
+}
+
+async function codexTurn(threadId: string, label: string, prompt: string, overrides: Record<string, unknown> = {}) {
+  const start = rpcEvents.length;
+  const params = { ...codexTurnStartParams(threadId, cwd, prompt), ...overrides };
+  await codexRequest('turn/start', params);
+  const completed = await waitForRpc((event) => event.method === 'turn/completed' && event.params?.threadId === threadId, `${label} completed`, start);
+  await codexProcessInfo(label);
+  return completed;
+}
+
+async function killCodex() {
+  if (!codexChild || codexChild.exitCode !== null || codexChild.signalCode !== null) return;
+  codexChild.kill('SIGTERM');
+  await Promise.race([once(codexChild, 'exit'), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+  if (codexChild.exitCode === null && codexChild.signalCode === null) codexChild.kill('SIGKILL');
+}
+
+async function mainCodex() {
+  await startServer();
+  startCodex();
+  await codexRequest('initialize', { clientInfo: { name: 'workbench', title: 'Workbench', version: '0.1.0' }, capabilities: { experimentalApi: true, requestAttestation: false } });
+  codexNotification('initialized');
+  const bootstrap = codexThreadBootstrapRequest(cwd);
+  bootstrap.params.config = { 'mcp_servers.workbench.url': `http://127.0.0.1:${port}/mcp`, 'mcp_servers.workbench.bearer_token_env_var': 'WORKBENCH_LOCAL_MCP_TOKEN' };
+  const thread = await codexRequest(bootstrap.method, bootstrap.params);
+  const threadRecord = thread.thread as Record<string, unknown> | undefined;
+  const threadId = String(threadRecord?.id ?? thread.threadId);
+  if (!threadId || threadId === 'undefined') throw new Error(`thread/start returned no thread id: ${JSON.stringify(thread)}`);
+  log('thread_started', { threadId });
+
+  await codexTurn(threadId, 'multi_turn_1', 'Reply with exactly: one');
+  await codexTurn(threadId, 'multi_turn_2', 'Reply with exactly: two');
+  await codexTurn(threadId, 'multi_turn_3', 'Reply with exactly: three');
+
+  const interruptStart = rpcEvents.length;
+  await codexRequest('turn/start', codexTurnStartParams(threadId, cwd, 'Use Bash to sleep for 20 seconds, then reply with exactly: interrupted-test.'));
+  const started = await waitForRpc((event) => event.method === 'turn/started' && event.params?.threadId === threadId, 'turn/started', interruptStart);
+  const startedTurn = started.params?.turn as Record<string, unknown> | undefined;
+  const turnId = String(startedTurn?.id ?? started.params?.turnId);
+  await waitForRpc((event) => event.method === 'item/completed' && /agentMessage|agent_message/.test(String((event.params?.item as Record<string, unknown> | undefined)?.type)), 'first agent text', interruptStart);
+  await codexRequest('turn/interrupt', { threadId, turnId });
+  await waitForRpc((event) => event.method === 'turn/completed' && event.params?.threadId === threadId, 'interrupted completion', interruptStart);
+  await codexTurn(threadId, 'interrupt_follow_up', 'Reply with exactly: after-interrupt');
+
+  const markerRoot = await mkdtemp(join(tmpdir(), 'codex-session-spike-'));
+  const firstCwd = join(markerRoot, 'one'); const secondCwd = join(markerRoot, 'two');
+  await mkdir(firstCwd); await mkdir(secondCwd);
+  await writeFile(join(markerRoot, 'one.marker'), 'one'); await writeFile(join(markerRoot, 'two.marker'), 'two');
+  await codexTurn(threadId, 'override_one', 'Use Bash to print pwd and cat ../one.marker. Reply with both outputs only.', { cwd: firstCwd, model: 'gpt-6.1-sol', effort: 'low' });
+  await codexTurn(threadId, 'override_two', 'Use Bash to print pwd and cat ../two.marker. Reply with both outputs only.', { cwd: secondCwd, model: 'gpt-6.1-sol', effort: 'high' });
+
+  await codexTurn(threadId, 'mcp_before_restart', 'Call the spike_ping MCP tool and reply with its returned JSON only.');
+  await stopServer(); await startServer();
+  try {
+    await codexTurn(threadId, 'mcp_after_restart', 'Call the spike_ping MCP tool and reply with its returned JSON only.');
+    log('mcp_reconnect', { firstWorkingStep: 'automatic' });
+  } catch (automaticError) {
+    log('mcp_reconnect', { automatic: String(automaticError) });
+    for (const [method, params] of [['mcpServerStatus/list', { threadId }], ['config/mcpServer/reload', null]] as const) {
+      await codexRequest(method, params);
+      try { await codexTurn(threadId, `mcp_after_${method}`, 'Call the spike_ping MCP tool and reply with its returned JSON only.'); log('mcp_reconnect', { firstWorkingStep: method }); return; } catch (error) { log('mcp_reconnect', { [method]: String(error) }); }
+    }
+    await killCodex(); startCodex();
+    await codexRequest('initialize', { clientInfo: { name: 'workbench', title: 'Workbench', version: '0.1.0' }, capabilities: { experimentalApi: true, requestAttestation: false } }); codexNotification('initialized');
+    await codexRequest('thread/resume', { threadId, cwd, approvalPolicy: 'never', sandbox: 'danger-full-access', config: bootstrap.params.config });
+    await codexTurn(threadId, 'mcp_after_resume', 'Call the spike_ping MCP tool and reply with its returned JSON only.'); log('mcp_reconnect', { firstWorkingStep: 'thread/resume' });
+  }
+}
+
 async function main() {
   await startServer();
   startClaude();
@@ -196,9 +331,10 @@ async function main() {
 }
 
 try {
-  await main();
+  if (process.env.SPIKE_PROVIDER === 'codex') await mainCodex(); else await main();
 } finally {
   await killChild();
+  await killCodex();
   await stopServer();
   console.log('cleanup_complete');
 }
