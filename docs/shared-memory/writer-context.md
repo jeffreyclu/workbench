@@ -340,7 +340,7 @@ anyone is reviewing.
 
 ### <a id="23"></a>23. Profile-panel rendering ownership
 
-Jeffrey clarified on 2026-10-08: simple optional JSX uses inline condition && content, not mutable ReactNode scratch values. Credential field handlers should be named in the owning orchestrator or owned by the child; do not duplicate callbacks or pass whole input trees as inline slot props. Simple value-selection ternaries, such as choosing tool versus tools, are appropriate; nested ternaries are not. Group panel components by tab, and move configuration/exported domain types out of components. Shared Writer notes fe-web-app-stack-migration.md entry 2 updated.
+Jeffrey clarified on 2026-10-08: simple optional JSX uses inline condition && content, not mutable ReactNode scratch values. Credential field handlers should be named in the owning orchestrator or owned by the child; do not duplicate callbacks or pass whole input trees as inline slot props. Simple value-selection ternaries, such as choosing tool versus tools, are appropriate; nested ternaries are not. Do not declare let merely to select one value in an if; inline simple single-consumer choices at the prop (team access/loading placeholder). A secret input uses one per-field revealed flag and explicit masked/revealed render paths, not scattered derived variables for its type/label/icon/tooltip; keep the empty-secret readback guard. Group panel components by tab, and move configuration/exported domain types out of components. Shared Writer notes fe-web-app-stack-migration.md entry 2 updated.
 
 ### <a id="24"></a>24. Profile-panel authority and mode boundaries
 

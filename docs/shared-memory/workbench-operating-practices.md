@@ -658,3 +658,21 @@ but `/api/health` keeps the old `buildId`, read `data/logs/runtime.err.log` for 
 src/client/features/discovery/consolidation-card.tsx had passing unit tests but no render site and no styles, so users never saw it. Unit tests on a component do not prove it is reachable. Before changing a feature card, grep for where it is mounted. Also, a real consolidation proposal reviewed 462 entries: 15 archive, 0 promote, 447 keep. Keep verdicts change nothing, so the UI should lead with counts, list only archive and promote items, and fold the keeps into a closed disclosure. That rule now lives in discovery/logic.ts. Unverified in a browser as of 2026-10-08.
 
 *Provenance: d75ec969-7666-4431-8d65-a4883a0da300*
+
+### <a id="41"></a>41. A long-lived agent process cannot carry per-turn authority in its environment
+
+Found while planning persistent agent sessions (2026-10-08). The git/gh/curl shims in `scripts/agent-bin/external-action-command-guard.mjs` read the external-action capability from `process.env.WORKBENCH_EXTERNAL_CAPABILITY`. `externalActionGuardEnvironment()` in `src/server/external-action-command-guard.ts` sets that variable once, when the process is spawned. That works only because every turn spawns a new CLI. A process that serves many turns would keep the first turn's capability, or none, for its whole life. Any persistent-session design must first move the capability into a file the runner rewrites at the start of each turn and clears at its end. The env variable then holds only the file's path. Two other places assume a fresh process: `providerSessionForAuthorization` and the status-only-turn reset in `src/server/shared-room.ts` both start a new provider session on purpose.
+
+CLI facts checked locally the same day (`claude` 2.1.295, `codex-cli` 0.161.0):
+- `claude -p` accepts `--session-id <uuid>`, so Workbench can choose the session id up front.
+- `--replay-user-messages` echoes stdin user messages on stdout (stream-json in and out).
+- `--permission-prompts none` denies anything that would prompt instead of blocking.
+- `codex app-server` has a user-wide `daemon` subcommand. It loads `~/.codex` config, so it skips Workbench's `--ignore-user-config` and per-account isolation.
+
+Not verified: whether Claude's stream-json stdin accepts an interrupt or model-switch control request.
+
+*Provenance: 8567e598-6c93-445d-81de-dc19ff351629*
+
+### <a id="42"></a>42. Older memory replies store a merged count and no entry ids
+
+Replies stored before the memory split keep the old combined total in their memory count. Reply 8ca506d5 stored 13 but had only 8 retrieved items. Badge code must work out the count when the reply is read, by counting retrieved items. It must not trust the stored total, and it must not rewrite stored rows. These older replies also saved no entry ids. That means `[file.md#N]` citations cannot be rebuilt for their `doc` lesson items. Only new replies can show those citations. Citations come from any entry id that ends in `#N` (`memoryCitation` in src/server/memory-retrieval.ts), not from the item's type.

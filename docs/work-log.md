@@ -1,0 +1,13 @@
+# Work log
+
+Append-only chronology of completed runs, written by Workbench on run completion. Never edit existing lines.
+
+## [2026-10-08] execute | workbench | The memory badge counted open-conversation context as search results. Reply 8ca506d5 showed 13 items; 5 were never retrieved. [run:b576a362-8516-417f-8bc1-1babea2fd17f] [task:4b6857a6-8f64-451a-983b-0eff4692f542]
+## [2026-10-08] review | workbench | **Reject.** New replies separate retrieved and short-term items, but the change doesn’t fully satisfy the task: legacy badges remain inflated and real numbered lessons lack citations. [run:bf432e8f-f189-49a7-880f-860501ff9cd7] [task:4b6857a6-8f64-451a-983b-0eff4692f542]
+## [2026-10-08] execute | workbench | The Consolidation card was never shown or styled. It would have listed all 462 entries, including 447 "keep" entries that change nothing. [run:d75ec969-7666-4431-8d65-a4883a0da300] [task:99a668ff-6150-4b56-b188-1321db5a4d6c]
+## [2026-10-08] review | workbench | **Approve with non-blocking comments.** Yes—the change fulfills the task: only actionable items are visible, keeps are collapsed, zero-action proposals offer Reject only, and partial results remain visible. [run:fd8b2569-fd08-4711-9335-7514dae0537c] [task:99a668ff-6150-4b56-b188-1321db5a4d6c]
+## [2026-10-08] execute | workbench | Duplicate room messages outranked durable Workbench memory. [run:62eceec4-08f2-486c-9b25-5a537c34c33a] [task:bd37e9e2-8188-4ffd-bd7d-7173df6fa3d5]
+## [2026-10-08] execute | workbench | The memory badge change had two blocking problems: [run:e60d1b83-4a5c-4162-b5e7-0ceff873e47a] [task:17a433c4-c356-48ea-bfbf-6e465b21db5c]
+## [2026-10-08] strategy | workbench | Each room message starts a new Claude or Codex process. You want one long-lived agent process that Workbench only sends messages to. [run:be06d6cb-4a58-4100-9768-517534a5cdef] [task:8567e598-6c93-445d-81de-dc19ff351629]
+## [2026-10-08] review | workbench | **Approve.** Yes—the change satisfies both requested outcomes: legacy badges use the filtered retrieved-item count, and numbered document lessons show `[file.md#N]`. [run:5fe345c3-a029-459d-9fed-c287919d704b] [task:17a433c4-c356-48ea-bfbf-6e465b21db5c]
+## [2026-10-08] execute | workbench | Push/PR capability was fixed at process startup, so long-lived agents could retain prior-turn authority. [run:d6b348d6-5beb-4e73-8720-7f5379c86bb8] [task:dfb49577-24ba-4659-a4a9-dae36abb7bad]
