@@ -223,6 +223,33 @@ describe('Workbench MCP', () => {
     expect(repository.get(first.id)).toEqual(expect.objectContaining({ archivedAt: null, completionStatus: 'incomplete' }));
   });
 
+  it('auto scope boosts the current project without hiding other projects', async () => {
+    setEmbedder(deterministicTestEmbedder);
+    try {
+      const target = repository.create({ title: 'Connector cache contract', description: 'Invalidate the profile cache before refetching.', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+      const other = repository.create({ title: 'Billing cache contract', description: 'Billing cache notes.', priority: 1, status: 'ready', projectName: 'Billing', workspacePath: null, dueDate: null });
+      repository.addActivity(target.id, 'codex', 'decision', 'Invalidate the profile cache before refetching connector profiles.');
+      repository.addActivity(other.id, 'claude', 'decision', 'Invalidate the profile cache before refetching connector profiles.');
+      repository.addActivity(other.id, 'claude', 'decision', 'Zebra quartz unique-marker invoice reconciliation rule.');
+
+      const recalled = await callData<{ scopeApplied: string; results: Array<{ body: string; workItemId: string | null }> }>('recall_context', {
+        query: 'profile cache invalidation before connector refetch',
+        scope: 'auto',
+        workItemId: target.id,
+        limit: 8,
+      });
+
+      expect(recalled.scopeApplied).toBe('all, project-boosted');
+      const targetIndex = recalled.results.findIndex((result) => result.workItemId === target.id);
+      const otherIndex = recalled.results.findIndex((result) => result.workItemId === other.id);
+      expect(targetIndex).toBeGreaterThanOrEqual(0);
+      expect(otherIndex).toBeGreaterThanOrEqual(0);
+      expect(targetIndex).toBeLessThan(otherIndex);
+    } finally {
+      setEmbedder(null);
+    }
+  });
+
   it('recalls deduplicated project context without leaking another project', async () => {
     setEmbedder(deterministicTestEmbedder);
     try {
@@ -235,7 +262,7 @@ describe('Workbench MCP', () => {
 
       const recalled = await callData<{ scopeApplied: string; results: Array<{ title: string; body: string; workItemId: string | null }> }>('recall_context', {
         query: 'profile cache invalidation before connector refetch',
-        scope: 'auto',
+        scope: 'project',
         workItemId: target.id,
         limit: 8,
       });

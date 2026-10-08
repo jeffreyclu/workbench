@@ -832,7 +832,7 @@ export class WorkItemRepository {
    * block the HTTP event loop. Prompt assembly may opt out when a refresh has
    * already been requested for the same dispatch.
    */
-  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; excludeConversationId?: string; excludeGeneratedConversationId?: string; projectKey?: string; conversationId?: string; workItemId?: string; sources?: string[]; importanceProfile?: 'default' | 'personal' } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null; retrievalPath: string[] }>> {
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; excludeConversationId?: string; excludeGeneratedConversationId?: string; projectKey?: string; boostProjectKey?: string; conversationId?: string; workItemId?: string; sources?: string[]; importanceProfile?: 'default' | 'personal' } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null; retrievalPath: string[] }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
       if (process.env.VITEST) {
@@ -848,6 +848,7 @@ export class WorkItemRepository {
     const results = await searchMemory(this.database, query, {
       limit: safeLimit,
       projectKey: options.projectKey,
+      boostProjectKey: options.boostProjectKey,
       conversationId: options.conversationId,
       workItemId: options.workItemId,
       sources: options.sources,

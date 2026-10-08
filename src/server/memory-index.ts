@@ -37,6 +37,8 @@ export type MemorySearchOptions = {
   limit?: number;
   sources?: string[];
   projectKey?: string;
+  /** Ranks this project's documents higher without excluding any other project. */
+  boostProjectKey?: string;
   conversationId?: string;
   workItemId?: string;
   excludeConversationId?: string;
@@ -565,6 +567,7 @@ const QUERY_STOP_WORDS = new Set([
   'were', 'what', 'when', 'where', 'which', 'with', 'work', 'would', 'your',
 ]);
 
+export const PROJECT_BOOST_MULTIPLIER = 1.25;
 const MIN_SEMANTIC_SIMILARITY = 0.35;
 const MIN_DIRECT_RELEVANCE = 0.12;
 const RELATIVE_RELEVANCE_FLOOR = 0.42;
@@ -874,6 +877,17 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
   }
 
   const corroboration = corroborationMultipliers(documents);
+  const boostedWorkItemIds = new Set<string>();
+  const boostProjectKey = options.boostProjectKey?.trim();
+  if (boostProjectKey) {
+    const workItemIds = [...new Set(documents.map((document) => document.work_item_id).filter(nonEmpty))];
+    for (let offset = 0; offset < workItemIds.length; offset += 500) {
+      const batch = workItemIds.slice(offset, offset + 500);
+      const rows = database.prepare(`SELECT id FROM work_items WHERE project_key = ? AND deleted_at IS NULL AND id IN (${batch.map(() => '?').join(',')})`)
+        .all(boostProjectKey, ...batch) as Array<{ id: string }>;
+      for (const row of rows) boostedWorkItemIds.add(row.id);
+    }
+  }
   const directResults: MemorySearchResult[] = [];
   const excludedBody = options.excludeExactBody ? normalizedMemoryBody(options.excludeExactBody) : '';
   for (const [documentId, best] of bestByDocument) {
@@ -890,7 +904,8 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
       * lexicalImportanceMultiplier(document, primary)
       * recencyMultiplier(document.created_at)
       * (corroboration.get(document.id) ?? 1)
-      * personalImportanceMultiplier(document, options.importanceProfile);
+      * personalImportanceMultiplier(document, options.importanceProfile)
+      * (document.work_item_id && boostedWorkItemIds.has(document.work_item_id) ? PROJECT_BOOST_MULTIPLIER : 1);
     directResults.push({
       source: document.source, sourceId: document.source_id, title: document.title, snippet: chunk.text,
       createdAt: document.created_at, conversationId: document.conversation_id, workItemId: document.work_item_id,
