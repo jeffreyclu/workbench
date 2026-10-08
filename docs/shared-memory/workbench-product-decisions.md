@@ -1762,3 +1762,21 @@ call, and follow it only with findings that raise or lower the cost of reviewing
 dropped declaration, a still-referenced removal, a risk flag, an untested new symbol. When nothing
 raises the cost, say that explicitly and name the checks that came back clean; "cheap to review" is
 itself a critical answer.
+
+## <a id="87"></a>87. Agents are persistent processes Workbench talks to, not a fresh CLI per message
+
+Jeffrey's direction on 2026-10-08, in his words: "currently every message is starting a fresh new
+claude or codex. i don't want that. i want a long running instance just like i'm talking to you
+here that doesn't start up fresh every single time. in fact what i want is for you and codex to be
+launched in terminals and then all workbench does is inject my messages to you and you and codex
+handle the memory search and whatnot. and the live terminal response is streamed back to workbench."
+
+What this rules out: the per-message `claude -p --resume` and Codex thread spawn in
+`src/server/agent-runner.ts`, the per-turn re-send of the system contract and persona, and
+Workbench prefetching memory bodies into the prompt. What it requires: one long-lived Claude
+process and one long-lived Codex process that Workbench feeds messages into, whose output streams
+into the conversation as it is produced, that call `recall_context` and `record_learning`
+themselves, and that survive a Workbench restart by reattaching. The design task is "Persistent
+agent sessions" (created 2026-10-08); its plan needs Jeffrey's approval before any build. Until
+that lands, do not add new per-run prompt injection; anything new goes behind a tool the agent
+calls.

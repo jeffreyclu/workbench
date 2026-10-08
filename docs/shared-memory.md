@@ -11,6 +11,6 @@ Read these rows first, then open only matching files. Entry counts are generated
 | `verification-and-debugging-method.md` | 26 | portable | core | root-cause validation; PR review | `workbench-operating-practices.md` |
 | `workbench-frontend-lessons.md` | 62 | workbench | context | buildId toast; virtualized row height | `workbench-product-decisions.md` |
 | `workbench-operating-practices.md` | 39 | workbench | core | task queue stack; artifact publishing | `verification-and-debugging-method.md` |
-| `workbench-product-decisions.md` | 86 | workbench | core | ProjectColorDot; /api/realtime | `workbench-frontend-lessons.md` |
+| `workbench-product-decisions.md` | 87 | workbench | core | ProjectColorDot; /api/realtime | `workbench-frontend-lessons.md` |
 | `working-with-jeffrey.md` | 40 | portable | core | Jeffrey voice; ownership confirmation | `engineering-standards.md` |
 | `writer-context.md` | 22 | writer | context | Writer connectors; PLUTO exclusion | — |
