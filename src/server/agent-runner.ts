@@ -2529,7 +2529,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         // A provider that cannot resume still sees the question with the answer it is about.
         `${CAPTURE_GATE_PROMPT}\n\nYour final answer for this task so far:\n${compactPromptSection(result.output, 6_000)}`, externalActionGuard);
         // The follow-up's own reply is not the deliverable: keep the original answer.
-        result = { ...result, usage: followUp.usage, costUsd: priorCost == null && followUp.costUsd == null ? null : (priorCost ?? 0) + (followUp.costUsd ?? 0) };
+        result = { ...result, usage: followUp.usage, costUsd: priorCost == null && followUp.costUsd == null ? null : (priorCost ?? 0) + (followUp.costUsd ?? 0) } as typeof result;
         gateReply = followUp.output;
       } catch (error) {
         console.error('[agent-runner] capture-gate follow-up failed; completing the run without it', error);
