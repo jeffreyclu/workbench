@@ -2,6 +2,7 @@ import { memo } from 'react';
 import type { AgentRunReviewHandoff } from '../../../shared/contracts.js';
 
 const VISIBLE_WORDS = 60;
+const LEFT_RUNNING = /^left a server running:/i;
 
 function clip(text: string): string {
   const words = text.split(/\s+/);
@@ -18,13 +19,17 @@ export const RunHandoffCard = memo(function RunHandoffCard({ handoff }: { handof
   const checks = handoff.verification.length === 0
     ? 'No checks observed'
     : `${handoff.verification.length - failed}/${handoff.verification.length} checks passed`;
-  const facts = [`${handoff.changes.length} ${handoff.changes.length === 1 ? 'file' : 'files'} changed`, checks, plural(handoff.blockers.length, 'blocker'), plural(handoff.learnings.filter((entry) => !entry.startsWith('Capture gate:')).length, 'lesson saved')];
+  const leftRunning = handoff.blockers.filter((blocker) => LEFT_RUNNING.test(blocker));
+  const blockers = handoff.blockers.filter((blocker) => !LEFT_RUNNING.test(blocker));
+  const facts = [`${handoff.changes.length} ${handoff.changes.length === 1 ? 'file' : 'files'} changed`, checks, plural(blockers.length, 'blocker'), plural(handoff.learnings.filter((entry) => !entry.startsWith('Capture gate:')).length, 'lesson saved')];
+
 
   return <section className="run-handoff-card" aria-label="Handoff">
     <span className="section-label">Handoff</span>
+    {leftRunning.map((badge) => <span key={badge} className="run-handoff-badge" role="status">{badge}</span>)}
     <p className="run-handoff-summary">{clip(handoff.summary)}</p>
     <small className="run-handoff-facts">{facts.join(' · ')}</small>
-    {handoff.blockers.length > 0 && <details><summary>Blockers ({handoff.blockers.length})</summary><ul>{handoff.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></details>}
+    {blockers.length > 0 && <details><summary>Blockers ({blockers.length})</summary><ul>{blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></details>}
     {handoff.verification.length > 0 && <details><summary>Checks that ran</summary><ul>{handoff.verification.map((entry, index) => <li key={`${entry.command}-${index}`}><code>{entry.command}</code> — {entry.result}{entry.exitCode !== null ? ` (exit ${entry.exitCode})` : ''}</li>)}</ul></details>}
     {handoff.changes.length > 0 && <details><summary>Files changed</summary><ul>{handoff.changes.map((change) => <li key={change.path}><code>{change.path}</code></li>)}</ul></details>}
     {handoff.learnings.length > 0 && <details><summary>Lessons saved</summary><ul>{handoff.learnings.map((id) => <li key={id}>{id.startsWith('Capture gate:') ? id : <code>{id}</code>}</li>)}</ul></details>}

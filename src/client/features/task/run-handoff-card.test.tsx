@@ -21,4 +21,12 @@ describe('RunHandoffCard', () => {
     expect(screen.getByText('a.md#1')).toBeTruthy();
     expect(screen.getByText('b.md#2')).toBeTruthy();
   });
+
+  it('badges a server the run left running and keeps it out of the blocker list', () => {
+    const badge = 'left a server running: vite on :5173';
+    const { container } = render(<RunHandoffCard handoff={{ ...handoff, blockers: [badge, 'Push was refused.'] }} />);
+
+    expect(container.querySelector('[role=status]')?.textContent).toBe(badge);
+    expect(container.querySelector('.run-handoff-facts')?.textContent).toContain('1 blocker');
+  });
 });
