@@ -1,3 +1,4 @@
+tier: portable
 ## <a id="20"></a>20. Verification and debugging method
 
 ### <a id="1"></a>1. Status questions never resume older work **(always)**

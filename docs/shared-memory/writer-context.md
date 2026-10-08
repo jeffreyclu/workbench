@@ -1,3 +1,4 @@
+tier: writer
 ## <a id="15"></a>15. Writer context
 
 ### <a id="1"></a>1. Never run a full test suite locally in a Writer repository **(always)**

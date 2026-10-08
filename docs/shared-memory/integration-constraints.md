@@ -1,4 +1,5 @@
-## <a id="7"></a>7. Integration constraints
+tier: workbench
+## <a id="8"></a>8. Integration constraints
 
 ### <a id="1"></a>1. One integration mechanism no tunnels
 

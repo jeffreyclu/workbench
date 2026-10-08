@@ -1,3 +1,4 @@
+tier: workbench
 ## <a id="62"></a>62. Workbench frontend lessons
 
 ### <a id="1"></a>1. Conversation freshness stays off the review toggle

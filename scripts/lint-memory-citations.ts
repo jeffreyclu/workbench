@@ -2,41 +2,44 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-type Metadata = { tier: 'core' | 'context' | 'archive'; keywords: string[]; refs: string[] };
+type Metadata = { load: 'core' | 'context' | 'archive'; keywords: string[]; refs: string[] };
 type Entry = { id: number; title: string };
+const tiers = ['portable', 'workbench', 'writer'];
+const tierHeader = /^(?:---\n)?tier: (\S+)\s*(?:\n|$)/;
+const fileTiers = new Map<string, string>();
 
 const sharedDirectory = join(process.cwd(), 'docs/shared-memory');
 const knowledgeDirectory = join(homedir(), 'Documents/Workbench/notes/knowledge');
 const metadata: Record<string, Metadata> = {
-  'engineering-standards.md': { tier: 'core', keywords: ['TypeScript conventions', 'feature flags'], refs: ['working-with-jeffrey.md'] },
-  'integration-constraints.md': { tier: 'core', keywords: ['Tailscale', 'Slack Workflow Builder'], refs: [] },
-  'migration-log.md': { tier: 'archive', keywords: ['2026-08-23 consolidation'], refs: [] },
-  'verification-and-debugging-method.md': { tier: 'core', keywords: ['root-cause validation', 'PR review'], refs: ['workbench-operating-practices.md'] },
-  'workbench-frontend-lessons.md': { tier: 'context', keywords: ['buildId toast', 'virtualized row height'], refs: ['workbench-product-decisions.md'] },
-  'workbench-operating-practices.md': { tier: 'core', keywords: ['task queue stack', 'artifact publishing'], refs: ['verification-and-debugging-method.md'] },
-  'workbench-product-decisions.md': { tier: 'core', keywords: ['ProjectColorDot', '/api/realtime'], refs: ['workbench-frontend-lessons.md'] },
-  'working-with-jeffrey.md': { tier: 'core', keywords: ['Jeffrey voice', 'ownership confirmation'], refs: ['engineering-standards.md'] },
-  'writer-context.md': { tier: 'context', keywords: ['Writer connectors', 'PLUTO exclusion'], refs: [] },
-  'ashley-connectors-rewrite-chat-prep.md': { tier: 'context', keywords: ['Ashley rewrite prep'], refs: [] },
-  'connector-e2e-test-coverage-plan.md': { tier: 'context', keywords: ['connector E2E coverage'], refs: [] },
-  'fe-web-app-stack-migration.md': { tier: 'context', keywords: ['fe.web-app migration'], refs: ['writer-frontend-stack.md'] },
-  'open-questions.md': { tier: 'context', keywords: ['onboarding unknowns'], refs: [] },
-  'writer-be-mcp-gateway-local-setup.md': { tier: 'context', keywords: ['bun 1.3.14', 'Baseten mock embedding'], refs: ['writer-repo-and-environment-map.md'] },
-  'writer-branching-and-deploy.md': { tier: 'core', keywords: ['GitHub merge queue', 'pinned promotion tag'], refs: ['writer-tooling-and-process.md'] },
-  'writer-connectors-action-catalog.md': { tier: 'core', keywords: ['nine connector writes', 'ConnectorsTab actions'], refs: ['writer-connectors-page-map.md'] },
-  'writer-connectors-page-map.md': { tier: 'core', keywords: ['query-key map', 'route component map'], refs: ['writer-connectors-action-catalog.md'] },
-  'writer-connectors-permission-model.md': { tier: 'core', keywords: ['org hard ceiling', 'Experian ROPC'], refs: ['writer-mcp-backend-design.md'] },
-  'writer-connectors-team.md': { tier: 'context', keywords: ['Kapil Duraphe', 'connectors roster'], refs: ['writer-onboarding-resource-map.md'] },
-  'writer-fe-web-app-local-setup.md': { tier: 'context', keywords: ['WRITER_AGENT_URL', 'Vite 5173'], refs: ['writer-repo-and-environment-map.md'] },
-  'writer-frontend-stack.md': { tier: 'core', keywords: ['WDS Storybook', 'TanStack Query'], refs: ['fe-web-app-stack-migration.md'] },
-  'writer-managed-mac-constraints.md': { tier: 'context', keywords: ['managed Mac'], refs: [] },
-  'writer-mcp-backend-design.md': { tier: 'core', keywords: ['MCP backend design'], refs: ['writer-connectors-permission-model.md'] },
-  'writer-monorepo-local-fullstack-worktrees.md': { tier: 'context', keywords: ['scripts/worktree.py', 'local-connector-stack'], refs: [] },
-  'writer-observability-tooling.md': { tier: 'context', keywords: ['Langfuse', 'OpenTelemetry emission'], refs: [] },
-  'writer-onboarding-resource-map.md': { tier: 'context', keywords: ['Writer onboarding map'], refs: ['writer-connectors-team.md'] },
-  'writer-product-surfaces.md': { tier: 'context', keywords: ['skynet deployments', 'Agent Studio'], refs: [] },
-  'writer-repo-and-environment-map.md': { tier: 'core', keywords: ['five connector repos', 'prod org 3002'], refs: ['writer-be-mcp-gateway-local-setup.md', 'writer-fe-web-app-local-setup.md'] },
-  'writer-tooling-and-process.md': { tier: 'core', keywords: ['CON-194 split', 'pre-push hook'], refs: ['writer-branching-and-deploy.md'] },
+  'engineering-standards.md': { load: 'core', keywords: ['TypeScript conventions', 'feature flags'], refs: ['working-with-jeffrey.md'] },
+  'integration-constraints.md': { load: 'core', keywords: ['Tailscale', 'Slack Workflow Builder'], refs: [] },
+  'migration-log.md': { load: 'archive', keywords: ['2026-08-23 consolidation'], refs: [] },
+  'verification-and-debugging-method.md': { load: 'core', keywords: ['root-cause validation', 'PR review'], refs: ['workbench-operating-practices.md'] },
+  'workbench-frontend-lessons.md': { load: 'context', keywords: ['buildId toast', 'virtualized row height'], refs: ['workbench-product-decisions.md'] },
+  'workbench-operating-practices.md': { load: 'core', keywords: ['task queue stack', 'artifact publishing'], refs: ['verification-and-debugging-method.md'] },
+  'workbench-product-decisions.md': { load: 'core', keywords: ['ProjectColorDot', '/api/realtime'], refs: ['workbench-frontend-lessons.md'] },
+  'working-with-jeffrey.md': { load: 'core', keywords: ['Jeffrey voice', 'ownership confirmation'], refs: ['engineering-standards.md'] },
+  'writer-context.md': { load: 'context', keywords: ['Writer connectors', 'PLUTO exclusion'], refs: [] },
+  'ashley-connectors-rewrite-chat-prep.md': { load: 'context', keywords: ['Ashley rewrite prep'], refs: [] },
+  'connector-e2e-test-coverage-plan.md': { load: 'context', keywords: ['connector E2E coverage'], refs: [] },
+  'fe-web-app-stack-migration.md': { load: 'context', keywords: ['fe.web-app migration'], refs: ['writer-frontend-stack.md'] },
+  'open-questions.md': { load: 'context', keywords: ['onboarding unknowns'], refs: [] },
+  'writer-be-mcp-gateway-local-setup.md': { load: 'context', keywords: ['bun 1.3.14', 'Baseten mock embedding'], refs: ['writer-repo-and-environment-map.md'] },
+  'writer-branching-and-deploy.md': { load: 'core', keywords: ['GitHub merge queue', 'pinned promotion tag'], refs: ['writer-tooling-and-process.md'] },
+  'writer-connectors-action-catalog.md': { load: 'core', keywords: ['nine connector writes', 'ConnectorsTab actions'], refs: ['writer-connectors-page-map.md'] },
+  'writer-connectors-page-map.md': { load: 'core', keywords: ['query-key map', 'route component map'], refs: ['writer-connectors-action-catalog.md'] },
+  'writer-connectors-permission-model.md': { load: 'core', keywords: ['org hard ceiling', 'Experian ROPC'], refs: ['writer-mcp-backend-design.md'] },
+  'writer-connectors-team.md': { load: 'context', keywords: ['Kapil Duraphe', 'connectors roster'], refs: ['writer-onboarding-resource-map.md'] },
+  'writer-fe-web-app-local-setup.md': { load: 'context', keywords: ['WRITER_AGENT_URL', 'Vite 5173'], refs: ['writer-repo-and-environment-map.md'] },
+  'writer-frontend-stack.md': { load: 'core', keywords: ['WDS Storybook', 'TanStack Query'], refs: ['fe-web-app-stack-migration.md'] },
+  'writer-managed-mac-constraints.md': { load: 'context', keywords: ['managed Mac'], refs: [] },
+  'writer-mcp-backend-design.md': { load: 'core', keywords: ['MCP backend design'], refs: ['writer-connectors-permission-model.md'] },
+  'writer-monorepo-local-fullstack-worktrees.md': { load: 'context', keywords: ['scripts/worktree.py', 'local-connector-stack'], refs: [] },
+  'writer-observability-tooling.md': { load: 'context', keywords: ['Langfuse', 'OpenTelemetry emission'], refs: [] },
+  'writer-onboarding-resource-map.md': { load: 'context', keywords: ['Writer onboarding map'], refs: ['writer-connectors-team.md'] },
+  'writer-product-surfaces.md': { load: 'context', keywords: ['skynet deployments', 'Agent Studio'], refs: [] },
+  'writer-repo-and-environment-map.md': { load: 'core', keywords: ['five connector repos', 'prod org 3002'], refs: ['writer-be-mcp-gateway-local-setup.md', 'writer-fe-web-app-local-setup.md'] },
+  'writer-tooling-and-process.md': { load: 'core', keywords: ['CON-194 split', 'pre-push hook'], refs: ['writer-branching-and-deploy.md'] },
 };
 const numberedHeading = /^#{2,3} <a id="(\d+)"><\/a>\1\. (.*)$/gm;
 const unnumberedHeading = /^#{2,3} (?!<a id="\d+"><\/a>\d+\. ).+$/gm;
@@ -49,6 +52,9 @@ async function collect(directory: string) {
   for (const file of (await readdir(directory)).filter((name) => name.endsWith('.md') && name !== 'index.md').sort()) {
     const source = await readFile(join(directory, file), 'utf8');
     sources.set(file, source);
+    const tier = source.match(tierHeader)?.[1];
+    if (!tier || !tiers.includes(tier)) errors.push(`${file} needs a first-line header "tier: ${tiers.join(' | ')}"${tier ? ` (found "${tier}")` : ''}.`);
+    else fileTiers.set(file, tier);
     const numbered = [...source.matchAll(numberedHeading)].map((match) => ({ id: Number(match[1]), title: match[2] }));
     if (source.match(unnumberedHeading)) errors.push(`${file} has an unnumbered entry heading.`);
     if (new Set(numbered.map(({ id }) => id)).size !== numbered.length) errors.push(`${file} has duplicate entry IDs.`);
@@ -62,9 +68,9 @@ function render(title: string, entries: Map<string, Entry[]>) {
     const item = metadata[file];
     if (!item) { errors.push(`${file} has no catalogue metadata.`); return ''; }
     const refs = item.refs.length ? item.refs.map((ref) => `\`${ref}\``).join(', ') : '—';
-    return `| \`${file}\` | ${entries.get(file)?.length ?? 0} | ${item.tier} | ${item.keywords.join('; ')} | ${refs} |`;
+    return `| \`${file}\` | ${entries.get(file)?.length ?? 0} | ${fileTiers.get(file) ?? ''} | ${item.load} | ${item.keywords.join('; ')} | ${refs} |`;
   });
-  return `# ${title} catalogue\n\nRead these rows first, then open only matching files. Entry counts are generated from numbered headings by \`npm run memory:catalogue\`; never edit them by hand.\n\n| Path | Entries | Tier | Keywords (owned here) | Cross-refs |\n| --- | ---: | --- | --- | --- |\n${rows.join('\n')}\n`;
+  return `# ${title} catalogue\n\nRead these rows first, then open only matching files. Entry counts are generated from numbered headings by \`npm run memory:catalogue\`; never edit them by hand.\n\n| Path | Entries | Tier | Load | Keywords (owned here) | Cross-refs |\n| --- | ---: | --- | --- | --- | --- |\n${rows.join('\n')}\n`;
 }
 
 const [shared, knowledge] = await Promise.all([collect(sharedDirectory), collect(knowledgeDirectory)]);

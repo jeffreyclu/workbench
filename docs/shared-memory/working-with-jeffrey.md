@@ -1,3 +1,4 @@
+tier: portable
 ## <a id="25"></a>25. Working with Jeffrey
 
 ### <a id="1"></a>1. Background and preferences (self-reported, from a separate Claude surface's memory export)

@@ -1,3 +1,4 @@
+tier: workbench
 ## <a id="83"></a>83. Workbench product decisions
 
 ### <a id="1"></a>1. Application data uses WebSockets only

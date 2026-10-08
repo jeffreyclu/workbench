@@ -1,3 +1,4 @@
+tier: workbench
 ## <a id="33"></a>33. Workbench operating practices
 
 ### <a id="1"></a>1. Code changes always use worktrees under ~/dev **(always)**

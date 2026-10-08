@@ -22,6 +22,7 @@ This voice is stable, not frozen. Learn from Jeffrey's accepted edits and sample
 - `docs/shared-memory.md` is the single durable memory catalogue for every agent. Read its index rows before acting on anything non-trivial, then open only matching topic files.
 - Never keep private per-agent memory. Claude's `~/.claude/**/memory/` directory, Codex's own notes, or any equivalent per-tool store are not acceptable homes for a durable lesson. Jeffrey stated this directly on 2026-08-23: memory is shared or it does not exist.
 - When Jeffrey teaches or corrects something durable, append it to the right topic file in `docs/shared-memory/` in the same reply, updating the existing subsection rather than adding a near-duplicate; then run `npm run memory:catalogue`.
+- Every topic file starts with a `tier: portable | workbench | writer` line (inside the frontmatter when present): portable = how to work with Jeffrey and agent method, true anywhere; workbench = facts about this product; writer = Writer estate facts. Any "X does not exist / is never set" claim is writer-tier. `npm run lint:memory` fails without a valid tier.
 - Writer product facts still also belong in `~/Documents/Workbench/notes/knowledge/` so both Claude and Codex can read them without this repo.
 
 ## Operating rules
