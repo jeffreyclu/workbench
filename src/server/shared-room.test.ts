@@ -1671,6 +1671,95 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     }, 60_000);
   });
 
+  describe('dispatched turns', () => {
+    let dispatchDirectory: string;
+    let savedSessions: string | undefined;
+    // Each provider turn records the text it received and the capability file as it stood during the turn.
+    // The turn-grounding classifier runs the same binary; its MODE: GROUND calls are not reply turns.
+    const providerTurns = () => (existsSync(join(root, 'dispatch-turns.jsonl')) ? readFileSync(join(root, 'dispatch-turns.jsonl'), 'utf8') : '').split('\n').filter(Boolean)
+      .map((line) => JSON.parse(line) as { text: string; capability: string[] })
+      .filter((turn) => !turn.text.startsWith('MODE: GROUND'));
+    beforeEach(() => {
+      const recording = join(root, 'dispatch-claude.mjs');
+      writeFileSync(recording, `
+import { appendFileSync, existsSync, readFileSync, writeSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+if (!process.argv.includes('--input-format')) { console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '{}' })); process.exit(0); }
+const args = process.argv.slice(2);
+const flag = (name) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
+const sessionId = flag('--session-id') ?? flag('--resume') ?? 'per-run-session';
+const emit = (event) => writeSync(1, JSON.stringify({ ...event, session_id: sessionId }) + '\\n');
+const capabilityFile = process.env.WORKBENCH_EXTERNAL_CAPABILITY_FILE;
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') { emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } }); return; }
+  const capability = capabilityFile && existsSync(capabilityFile) ? Object.keys(JSON.parse(readFileSync(capabilityFile, 'utf8'))).filter((key) => key !== '__turnId') : [];
+  appendFileSync(${JSON.stringify(join(root, 'dispatch-turns.jsonl'))}, JSON.stringify({ text: message.message.content, capability }) + '\\n');
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'dispatched reply' }] } });
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'dispatched reply' });
+});
+`);
+      dispatchDirectory = fakeAgentDirectory('exit 1', `exec "${process.execPath}" "${recording}" "$@"`).directory;
+      // The push grant's preflight needs the real git; the fake agents still come first.
+      process.env.PATH = `${dispatchDirectory}:${originalPath}`;
+      process.env.CLAUDE_BIN = join(dispatchDirectory, 'claude');
+      savedSessions = process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    });
+    afterEach(() => {
+      rmSync(dispatchDirectory, { recursive: true, force: true });
+      if (savedSessions === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      else process.env.WORKBENCH_PERSISTENT_SESSIONS = savedSessions;
+    });
+
+    const dispatchAndReply = async (conversationId: string, author: 'jeffrey' | 'claude', body: string) => {
+      const dispatching = repository.createSharedMessage(author, body, 'completed', conversationId, [], 'claude');
+      const reply = repository.createSharedMessage('claude', '', 'running', conversationId, [], 'none', null, null, dispatching.id);
+      await replyInSharedRoom(repository, 'claude', reply.id);
+      return repository.getSharedMessageById(reply.id)!;
+    };
+
+    it('grants the capability when Jeffrey dispatches "push it"', async () => {
+      const conversation = repository.createConversation('Room');
+      const reply = await dispatchAndReply(conversation.id, 'jeffrey', 'push it');
+      expect({ status: reply.status, error: reply.error, body: reply.body }).toMatchObject({ status: 'completed' });
+      expect(providerTurns()[0].capability).toEqual(['push']);
+      expect(providerTurns()[0].text).toContain('Supervisor-issued external-action capability');
+    }, 60_000);
+
+    it('answers the request Claude dispatched after Jeffrey\'s "push it" and grants no capability', async () => {
+      const conversation = repository.createConversation('Room');
+      // Jeffrey's own turn ran first, so his push grant is also live as a conversation lease.
+      await dispatchAndReply(conversation.id, 'jeffrey', 'push it');
+      expect(providerTurns()[0].capability).toEqual(['push']);
+      const reply = await dispatchAndReply(conversation.id, 'claude', 'review X');
+      expect(reply.status).toBe('completed');
+      const dispatchedTurn = providerTurns()[1];
+      expect(dispatchedTurn.text).toContain('Message dispatched by claude:\nreview X');
+      expect(dispatchedTurn.text).not.toContain('push it');
+      expect(dispatchedTurn.text).toContain('Permission this turn: no external actions (dispatched by an assistant).');
+      expect(dispatchedTurn.capability).toEqual([]);
+      expect(repository.listAgentStreamEvents(conversation.id).filter((event) => event.messageId === reply.id).map((event) => event.detail)).toContainEqual(expect.stringContaining('Permission this turn: no external actions (dispatched by an assistant).'));
+    }, 60_000);
+
+    it('builds a fresh prompt from the dispatched message and keeps Jeffrey\'s messages as context only', async () => {
+      process.env.WORKBENCH_PERSISTENT_SESSIONS = '0';
+      const conversation = repository.createConversation('Room');
+      repository.createSharedMessage('jeffrey', 'push it', 'completed', conversation.id, [], 'none');
+      const reply = await dispatchAndReply(conversation.id, 'claude', 'review X');
+      expect(reply.status).toBe('completed');
+      const [turn] = providerTurns();
+      const [request, transcript] = turn.text.split('Reference-only conversation transcript:');
+      expect(request).toContain('Current request dispatched by claude');
+      expect(request).toContain('review X');
+      expect(request).not.toContain('push it');
+      expect(request).not.toContain('Current request from Jeffrey');
+      expect(request).toContain('Permission this turn: no external actions (dispatched by an assistant).');
+      expect(transcript).toContain('jeffrey: push it');
+      expect(turn.capability).toEqual([]);
+    }, 60_000);
+  });
+
   it('does not continue with Codex when Claude hits its usage limit after the turn started', async () => {
     const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
     delete process.env.WORKBENCH_PERSISTENT_SESSIONS;

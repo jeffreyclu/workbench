@@ -802,7 +802,20 @@ export type TurnGrounding = {
   exclusions: string[];
   continuation: boolean;
   source: 'haiku' | 'fallback' | 'persisted';
+  /** Set when an assistant, not Jeffrey, wrote the message that dispatched this turn. */
+  dispatchedBy?: AssistantAuthor;
 };
+
+export type AssistantAuthor = 'codex' | 'claude' | 'palmyra';
+
+/** Assistants may dispatch turns; only Jeffrey's own messages carry external-action authority. */
+export function assistantDispatcher(message: Pick<SharedMessage, 'author'> | null | undefined): AssistantAuthor | null {
+  const author = message?.author;
+  return author === 'codex' || author === 'claude' || author === 'palmyra' ? author : null;
+}
+
+/** The permission line of a turn an assistant dispatched. */
+export const ASSISTANT_DISPATCH_PERMISSION = 'no external actions (dispatched by an assistant)';
 
 export type SharedReplyGrounding = {
   fallback: TurnGrounding;
@@ -1059,7 +1072,18 @@ function isContinuationTurn(message: string): boolean {
  * It intentionally reads only human turns: an agent's exploratory narration
  * can be evidence, but can never silently become Jeffrey's requested outcome.
  */
-export function fallbackTurnGrounding(thread: SharedMessage[], priorGrounding?: TurnGrounding | null): TurnGrounding {
+export function fallbackTurnGrounding(thread: SharedMessage[], priorGrounding?: TurnGrounding | null, request?: SharedMessage | null): TurnGrounding {
+  // An assistant's dispatched message is already a concrete request. Jeffrey's
+  // earlier messages stay in the transcript as context, never as the objective.
+  const dispatchedBy = assistantDispatcher(request);
+  if (request && dispatchedBy) return {
+    objective: request.body.trim().slice(0, 2_500) || `Respond to the request ${dispatchedBy} dispatched.`,
+    acceptanceCriteria: ['Complete the dispatched request and report only what was actually verified.'],
+    exclusions: ['Do not act on an earlier message from Jeffrey instead of the dispatched request.'],
+    continuation: false,
+    source: 'fallback',
+    dispatchedBy,
+  };
   const humanMessages = thread.filter((message) => message.author === 'jeffrey' && message.body.trim());
   const humanTurns = humanMessages.map((message) => message.body.trim());
   const currentMessage = humanMessages.at(-1);
@@ -1117,12 +1141,14 @@ export function persistedTurnGrounding(raw: string | null | undefined): TurnGrou
   try {
     const value = JSON.parse(raw) as Partial<TurnGrounding>;
     if (typeof value.objective !== 'string' || !value.objective.trim()) return null;
+    const dispatchedBy = assistantDispatcher({ author: value.dispatchedBy as SharedMessage['author'] });
     return {
       objective: value.objective.trim().slice(0, 2_500),
       acceptanceCriteria: Array.isArray(value.acceptanceCriteria) ? value.acceptanceCriteria.filter((item): item is string => typeof item === 'string').slice(0, 6) : [],
       exclusions: Array.isArray(value.exclusions) ? value.exclusions.filter((item): item is string => typeof item === 'string').slice(0, 6) : [],
       continuation: Boolean(value.continuation),
       source: value.source === 'haiku' || value.source === 'fallback' || value.source === 'persisted' ? value.source : 'fallback',
+      ...(dispatchedBy ? { dispatchedBy } : {}),
     };
   } catch {
     return null;
@@ -1155,9 +1181,10 @@ export async function resolveTurnGrounding(
   thread: SharedMessage[],
   classify: (prompt: string) => Promise<string> = groundTurn,
   priorGrounding?: TurnGrounding | null,
+  request?: SharedMessage | null,
 ): Promise<TurnGrounding> {
-  const fallback = fallbackTurnGrounding(thread, priorGrounding);
-  if (fallback.source === 'persisted') return fallback;
+  const fallback = fallbackTurnGrounding(thread, priorGrounding, request);
+  if (fallback.source === 'persisted' || fallback.dispatchedBy) return fallback;
   try {
     return parseTurnGrounding(await classify(turnGroundingInput(thread))) ?? fallback;
   } catch (error) {
@@ -1173,7 +1200,10 @@ export function turnGroundingForPrompt(grounding: TurnGrounding): string {
   const exclusions = grounding.exclusions.length
     ? grounding.exclusions.map((exclusion) => `- ${exclusion}`).join('\n')
     : '- Do not broaden the task beyond the objective.';
-  return `Current request from Jeffrey (${grounding.source === 'haiku' ? 'resolved by Workbench from this conversation' : grounding.source === 'persisted' ? 'continued from this conversation' : 'taken from the latest user message'})
+  const heading = grounding.dispatchedBy
+    ? `Current request dispatched by ${grounding.dispatchedBy} (taken from the dispatched message; Jeffrey's messages in the transcript are context only)`
+    : `Current request from Jeffrey (${grounding.source === 'haiku' ? 'resolved by Workbench from this conversation' : grounding.source === 'persisted' ? 'continued from this conversation' : 'taken from the latest user message'})`;
+  return `${heading}
 ${grounding.objective}
 
 Successful when:
@@ -1205,9 +1235,9 @@ export function buildSharedReplyPrompt(
   memoryContext = '',
   runKind: AgentRun['kind'] = linked?.run.kind ?? 'analysis',
   executionWorkspaces: readonly RunWorkspaceBinding[] = [],
+  currentRequest = latestHumanMessageForSharedReply(thread),
 ): string {
   const grounding = turnGrounding ?? fallbackTurnGrounding(thread);
-  const currentRequest = latestHumanMessageForSharedReply(thread);
   const standaloneSupervisorContract = !linked
     ? supervisorPromptContract(runKind, `${grounding.objective}\n${currentRequest}`)
     : '';
@@ -1338,13 +1368,24 @@ export function latestHumanMessageForSharedReply(thread: SharedMessage[]): strin
 }
 
 /**
- * Bind a reply to the human message that dispatched it. Retries may happen
- * after newer turns exist; those newer instructions belong to their own run
- * and must not rewrite the retried run's objective behind Jeffrey's back.
+ * The message that dispatched a reply is that turn's request, whether Jeffrey
+ * or an assistant wrote it. Without a dispatch link (legacy rows, runs started
+ * by a system message) the request stays Jeffrey's latest message.
+ */
+export function dispatchingMessageForSharedReply(thread: SharedMessage[], dispatchGroupId?: string | null): SharedMessage | null {
+  const dispatched = dispatchGroupId ? thread.find((message) => message.id === dispatchGroupId) : undefined;
+  if (dispatched && (dispatched.author === 'jeffrey' || assistantDispatcher(dispatched))) return dispatched;
+  return thread.filter((message) => message.author === 'jeffrey').at(-1) ?? null;
+}
+
+/**
+ * Bind a reply to the message that dispatched it. Retries may happen after
+ * newer turns exist; those newer instructions belong to their own run and must
+ * not rewrite the retried run's objective behind Jeffrey's back.
  */
 export function threadForSharedReply(thread: SharedMessage[], dispatchGroupId?: string | null): SharedMessage[] {
   if (!dispatchGroupId) return thread;
-  const dispatchIndex = thread.findIndex((message) => message.id === dispatchGroupId && message.author === 'jeffrey');
+  const dispatchIndex = thread.findIndex((message) => message.id === dispatchGroupId && (message.author === 'jeffrey' || assistantDispatcher(message)));
   return dispatchIndex >= 0 ? thread.slice(0, dispatchIndex + 1) : thread;
 }
 
@@ -1391,11 +1432,11 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
   const linkedItem = conversation?.workItemId ? repository.get(conversation.workItemId) : null;
   const retrievalThread = threadForSharedReply(repository.listSharedMessages(100, null, conversationId).messages, queued.message.id);
   const priorGrounding = persistedTurnGrounding(repository.latestSharedTurnGrounding(conversationId, queued.message.id));
-  const fallbackGrounding = fallbackTurnGrounding(retrievalThread, priorGrounding);
+  const fallbackGrounding = fallbackTurnGrounding(retrievalThread, priorGrounding, queued.message);
   repository.setSharedTurnGrounding(queued.message.id, conversationId, JSON.stringify(fallbackGrounding));
   const resolvedGrounding = process.env.VITEST
     ? Promise.resolve(fallbackGrounding)
-    : resolveTurnGrounding(retrievalThread, (prompt) => groundTurn(prompt, undefined, conversation?.preferredAiProvider ?? null, conversation?.preferredAccountProfile ?? undefined), priorGrounding).then((resolved) => {
+    : resolveTurnGrounding(retrievalThread, (prompt) => groundTurn(prompt, undefined, conversation?.preferredAiProvider ?? null, conversation?.preferredAccountProfile ?? undefined), priorGrounding, queued.message).then((resolved) => {
       repository.setSharedTurnGrounding(queued.message.id, conversationId, JSON.stringify(resolved));
       return resolved;
     });
@@ -1403,13 +1444,15 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     fallback: fallbackGrounding,
     resolved: resolvedGrounding,
   };
-  // One human message grants (or denies) one capability. Resolve it once and
-  // share the exact decision with both providers; separate model calls could
-  // disagree or make the second agent time out behind the first.
-  const currentMessage = latestHumanMessageForSharedReply(retrievalThread);
+  // The dispatched message is the turn's request, whoever wrote it. One
+  // message from Jeffrey grants (or denies) one capability; a message an
+  // assistant dispatched never does. Resolve it once and share the exact
+  // decision with both providers; separate model calls could disagree or make
+  // the second agent time out behind the first.
+  const currentMessage = queued.message.body;
   const precedingHumanMessage = precedingHumanMessageForSharedReply(retrievalThread);
   const precedingAgentMessage = [...retrievalThread].reverse().find((message) => message.author === 'claude' || message.author === 'codex' || message.author === 'palmyra')?.body ?? '';
-  const authorization = process.env.VITEST
+  const authorization = process.env.VITEST || assistantDispatcher(queued.message)
     ? Promise.resolve<ExternalActionAuthorization>({ granted: false, operation: null })
     : classifyExternalActionAuthorization({ currentMessage, precedingHumanMessage, precedingAgentMessage });
   // A linked task may predate classification. Use its deterministic routing
@@ -1611,7 +1654,8 @@ export function sessionSystemPrompt(agent: SessionAgent): string {
 }
 
 /** The turn's permission as one line; the capability file enforces it. */
-export function sessionPermissionLine(authorization: ExternalActionAuthorization): string {
+export function sessionPermissionLine(authorization: ExternalActionAuthorization, dispatchedBy?: AssistantAuthor | null): string {
+  if (dispatchedBy) return `${ASSISTANT_DISPATCH_PERMISSION}.`;
   return authorization.granted
     ? `Granted for this turn only: ${authorization.capability.actionIds.join(', ')}. Every other external mutation is refused.`
     : 'None. External mutations (GitHub, Slack, Linear, deploys) are refused; read-only research is allowed.';
@@ -1627,6 +1671,8 @@ export function sessionTurnMessage(input: {
   workspaceBindings: readonly RunWorkspaceBinding[];
   permission: string;
   userMessage: string;
+  /** The assistant that dispatched this turn; absent when Jeffrey did. */
+  dispatchedBy?: AssistantAuthor | null;
 }): string {
   const workspace = input.workspaceBindings.length
     ? input.workspaceBindings.slice(0, 3).map((binding) => `${binding.sourceWorkspace} (worktree ${binding.worktree})`).join('; ')
@@ -1640,7 +1686,7 @@ export function sessionTurnMessage(input: {
     `Workspace: ${workspace.slice(0, 400)}`,
     `Permission this turn: ${input.permission}`,
     '',
-    `Jeffrey's message:\n${input.userMessage}`,
+    `${input.dispatchedBy ? `Message dispatched by ${input.dispatchedBy}` : "Jeffrey's message"}:\n${input.userMessage}`,
   ].join('\n');
 }
 
@@ -2157,7 +2203,12 @@ export async function replyInSharedRoom(
     const allThreadMessages = repository.listSharedMessages(100, null, target.conversationId).messages.filter((message) => message.id !== messageId);
     const thread = threadForSharedReply(allThreadMessages, target.dispatchGroupId);
     const isPairedReply = Boolean(target.dispatchGroupId && thread.some((message) => message.dispatchGroupId === target.dispatchGroupId && (message.author === 'codex' || message.author === 'claude')));
-    const latestUserMessage = latestHumanMessageForSharedReply(thread);
+    // The dispatching message is this turn's request. Jeffrey's earlier
+    // messages stay in `thread` as context, but only a message he wrote
+    // himself can carry an external-action capability.
+    const dispatchingMessage = dispatchingMessageForSharedReply(thread, target.dispatchGroupId);
+    const currentRequest = dispatchingMessage?.body ?? '';
+    const dispatchedBy = assistantDispatcher(dispatchingMessage);
     const precedingUserMessage = precedingHumanMessageForSharedReply(thread);
     const precedingAgentResponse = [...thread].reverse().find((message) => message.author === 'claude' || message.author === 'codex' || message.author === 'palmyra')?.body ?? '';
     const linkedRun = runId ? repository.getRun(runId) : null;
@@ -2203,7 +2254,7 @@ export async function replyInSharedRoom(
     const externalEvidence = await (evidenceSnapshot ?? (process.env.VITEST ? Promise.resolve([]) : prepareSharedExternalEvidence(repository, {
       conversationId: target.conversationId,
       dispatchGroupId: target.dispatchGroupId ?? messageId,
-      message: latestUserMessage,
+      message: currentRequest,
       recentReferences: recentSourceReferences,
       runKind,
       workspacePath: sourceCwd,
@@ -2212,7 +2263,7 @@ export async function replyInSharedRoom(
     // snapshot the agent was handed, never a second GitHub fetch.
     const reviewHarnessScopes = { workItemId: linkedItem?.id ?? null, conversationId: target.conversationId };
     const reviewHarness = runKind === 'review'
-      ? await resolveReviewHarness(repository, { scopes: reviewHarnessScopes, cwd, requestText: [latestUserMessage, ...recentSourceReferences].join('\n') })
+      ? await resolveReviewHarness(repository, { scopes: reviewHarnessScopes, cwd, requestText: [currentRequest, ...recentSourceReferences].join('\n') })
       : null;
     if (reviewHarness) {
       const detail = describeReviewHarness(reviewHarness);
@@ -2230,7 +2281,7 @@ export async function replyInSharedRoom(
       ? 'standard' as const
       : target.executionProfile && target.executionProfile !== 'routing' && target.executionProfile !== 'palmyra-x5' && target.executionProfile !== 'palmyra-x6'
         ? target.executionProfile
-        : await judgeExecutionProfile(latestUserMessage || 'analysis', cwd, controller.signal);
+        : await judgeExecutionProfile(currentRequest || 'analysis', cwd, controller.signal);
     // Palmyra's tier is a model choice, not an effort profile: it never feeds
     // effortFor/autocompactCeilingFor, which stay codex/claude-only concerns.
     // Writer's API currently exposes X5, not X6. Persist the model that is
@@ -2249,18 +2300,20 @@ export async function replyInSharedRoom(
       if (agent === 'codex') warmSharedRoomCodex(cwd, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE);
       else if (agent === 'claude') warmAgentCommand(agent, cwd, profile, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, runKind);
     }
-    const externalAuthorizationPromise = authorizationSnapshot ?? classifyExternalActionAuthorization({
-      currentMessage: latestUserMessage,
+    const externalAuthorizationPromise = dispatchedBy
+      ? Promise.resolve<ExternalActionAuthorization>({ granted: false, operation: null })
+      : authorizationSnapshot ?? classifyExternalActionAuthorization({
+      currentMessage: currentRequest,
       precedingHumanMessage: precedingUserMessage,
       precedingAgentMessage: precedingAgentResponse,
     });
     const storedGrounding = target.dispatchGroupId ? persistedTurnGrounding(repository.getSharedTurnGrounding(target.dispatchGroupId)) : null;
     const groundingPromise = groundingSnapshot?.resolved
-      ?? (storedGrounding ? Promise.resolve(storedGrounding) : resolveTurnGrounding(thread).then((resolved) => {
+      ?? (storedGrounding ? Promise.resolve(storedGrounding) : resolveTurnGrounding(thread, undefined, undefined, dispatchingMessage).then((resolved) => {
         if (target.dispatchGroupId) repository.setSharedTurnGrounding(target.dispatchGroupId, target.conversationId, JSON.stringify(resolved));
         return resolved;
       }));
-    const automaticMemoryQuery = durableMemoryQuery(latestUserMessage, {
+    const automaticMemoryQuery = durableMemoryQuery(currentRequest, {
       conversationTitle: linkedConversation?.title,
       taskTitle: linkedItem?.title,
       projectName: linkedItem?.projectName,
@@ -2270,20 +2323,20 @@ export async function replyInSharedRoom(
     let sessionMode = usesPersistentSession(agent, runKind, isPairedReply || isFanOutReply(repository, messageId));
     const usableMemorySnapshot = memorySnapshot?.deferredToSession ? undefined : memorySnapshot;
     const memoryQuery = usableMemorySnapshot?.query ?? automaticMemoryQuery;
-    const memoryPlan = durableMemoryRetrievalPlan(latestUserMessage);
-    const memoryAttempted = !sessionMode && (usableMemorySnapshot?.attempted ?? shouldPrefetchDurableMemory(runKind, latestUserMessage));
+    const memoryPlan = durableMemoryRetrievalPlan(currentRequest);
+    const memoryAttempted = !sessionMode && (usableMemorySnapshot?.attempted ?? shouldPrefetchDurableMemory(runKind, currentRequest));
     const memoryPromise = usableMemorySnapshot?.resolved ?? (memoryAttempted
       ? repository.searchActivityMemory(memoryQuery, memoryPlan.candidateLimit, {
         refresh: false,
-        projectKey: !isExplicitMemoryRequest(latestUserMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
+        projectKey: !isExplicitMemoryRequest(currentRequest) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
         excludeConversationId: target.conversationId,
-        excludeExactBody: latestUserMessage,
+        excludeExactBody: currentRequest,
         sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
-        importanceProfile: isPersonalLongTermMemoryRequest(latestUserMessage) ? 'personal' : 'default',
+        importanceProfile: isPersonalLongTermMemoryRequest(currentRequest) ? 'personal' : 'default',
       }).then((candidates) => selectDurableMemoryEvidence(candidates, target.conversationId, {
         maxItems: memoryPlan.evidenceLimit,
         ...(memoryPlan.inlineBodies ? { promptBudget: memoryPlan.promptBudget } : {}),
-        excludeBody: latestUserMessage,
+        excludeBody: currentRequest,
         excludeCurrentConversation: true,
       })).catch((error) => {
         console.error('[shared-room] automatic durable-memory retrieval failed; continuing without it', error);
@@ -2294,13 +2347,17 @@ export async function replyInSharedRoom(
     repository.recordMemoryRetrievals('prefetch', memoryRetrievalEntries(memoryEvidence), {
       runId, messageId, conversationId: target.conversationId, workItemId: linkedItem?.id,
     });
-    const externalAuthorization = await superviseExternalAction({
+    // An assistant-dispatched turn skips the conversation lease too: a grant
+    // Jeffrey gave minutes ago must not reach a turn he did not dispatch.
+    const externalAuthorization = dispatchedBy ? freshExternalAuthorization : await superviseExternalAction({
       conversationId: target.conversationId,
       freshAuthorization: freshExternalAuthorization,
       resolveConversationAuthorization: (conversationId, fresh) => repository.resolveConversationExternalActionAuthorization(conversationId, fresh),
       preflightWorkbenchTools,
     });
-    const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
+    const externalActionContract = dispatchedBy
+      ? `${EXTERNAL_ACTION_CONTRACT}\n\nPermission this turn: ${sessionPermissionLine(externalAuthorization, dispatchedBy)}`
+      : externalActionContractForAuthorization(externalAuthorization);
     const onExternalActionRefusal = (refusal: ExternalActionRefusal) => {
       if (runId) recordExternalActionRefusal(repository, { id: runId, messageId, agent }, refusal);
       else repository.addAgentStreamEvents(messageId, null, [{ kind: 'tool', detail: refusal.detail }]);
@@ -2318,6 +2375,10 @@ export async function replyInSharedRoom(
       ? await verifyAuthoritativeMutationLineage(repository, linkedItem, externalAuthorization, sourceCwd, linkedRun)
       : null;
     if (lineageDecision) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{ kind: 'decision', detail: lineageDecision }]);
+    if (dispatchedBy) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{
+      kind: 'decision',
+      detail: `Permission this turn: ${sessionPermissionLine(externalAuthorization, dispatchedBy)} ${dispatchedBy} wrote the dispatching message; only Jeffrey's own messages grant external actions.`,
+    }]);
     if (externalAuthorization.granted) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
@@ -2325,7 +2386,7 @@ export async function replyInSharedRoom(
     const memoryContext = sessionMode ? '' : durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget, memoryPlan.inlineBodies);
     const shortTermMemory = sessionMode
       ? { text: '', items: [] }
-      : repository.getSharedContextWithItems(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });
+      : repository.getSharedContextWithItems(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: currentRequest });
     const shortTermContext = shortTermMemory.text;
     const retrievedMemory = sessionMode
       ? { count: null, detail: { query: memoryQuery, items: [], shortTermItems: [], agentDriven: true } }
@@ -2347,18 +2408,19 @@ export async function replyInSharedRoom(
       memoryContext,
       runKind,
       workspaceBindings,
+      currentRequest,
     ));
     const palmyraContext = agent === 'palmyra' ? parsePalmyraContext(repository.getConversationPalmyraContext(target.conversationId)) : undefined;
     const storedProviderId = agent === 'codex'
       ? linkedConversation?.codexThreadId
       : agent === 'claude' ? linkedConversation?.claudeSessionId : palmyraContext?.length ? 'palmyra-context' : null;
-    const resumeProviderId = providerSessionForAuthorization(storedProviderId, externalAuthorization, latestUserMessage);
-    if (storedProviderId && !resumeProviderId && isStatusOnlyTurn(latestUserMessage)) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{
+    const resumeProviderId = providerSessionForAuthorization(storedProviderId, externalAuthorization, currentRequest);
+    if (storedProviderId && !resumeProviderId && isStatusOnlyTurn(currentRequest)) addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{
       kind: 'decision',
       detail: 'Supervisor started a fresh provider session for this status-only turn so earlier execution authority cannot be replayed.',
     }]);
     const prompt = resumeProviderId
-      ? withReviewHarness(`${buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, latestUserMessage)}\n\n${linkedItem ? repositoryRoutingPrompt(linkedItem, listCandidateWorkspaces(), workspaceBindings) : ''}`.trim())
+      ? withReviewHarness(`${buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, currentRequest)}\n\n${linkedItem ? repositoryRoutingPrompt(linkedItem, listCandidateWorkspaces(), workspaceBindings) : ''}`.trim())
       : freshPrompt;
     const linkedRunKind = runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis';
     // The exact text a session turn sends: the short turn message once the provider holds context, the full prompt otherwise.
@@ -2370,8 +2432,9 @@ export async function replyInSharedRoom(
         persona: personaNameFor(linkedItem ?? undefined, runKind),
         objective: turnGrounding.objective,
         workspaceBindings,
-        permission: sessionPermissionLine(externalAuthorization),
-        userMessage: latestUserMessage,
+        permission: sessionPermissionLine(externalAuthorization, dispatchedBy),
+        userMessage: currentRequest,
+        dispatchedBy,
       }) + (followUp ? `\n\n${followUp}` : '')
       : `${freshPrompt}${followUp ? `\n\n${followUp}` : ''}`;
     // A session turn is measured on what it actually sends. Once the provider
@@ -2404,7 +2467,7 @@ export async function replyInSharedRoom(
       groundingSource: turnGrounding.source,
       groundingContinuation: turnGrounding.continuation,
       providerSessionResetReason: storedProviderId && !resumeProviderId
-        ? externalAuthorization.granted ? 'external_action_authorization' : isStatusOnlyTurn(latestUserMessage) ? 'status_only_turn' : null
+        ? externalAuthorization.granted ? 'external_action_authorization' : isStatusOnlyTurn(currentRequest) ? 'status_only_turn' : null
         : null,
       externalAuthorizationGranted: externalAuthorization.granted,
       externalAuthorizationOperation: externalAuthorization.operation,
@@ -2697,7 +2760,7 @@ export async function replyInSharedRoom(
       investigated: externalEvidence.length > 0 || turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_read'),
       executed: turnEvents().some((event) => event.kind === 'tool' || event.kind === 'file_write'),
     });
-    const verbose = verboseResponseRequested(latestUserMessage);
+    const verbose = verboseResponseRequested(currentRequest);
     const decision = superviseDraft(runKind, result.output, evidence(), { verbose, reviewHarness });
     if (!decision.accepted) {
       repository.updateSharedMessage(messageId, { body: decision.code === 'response_style' ? '● Tightening the final response…' : `● ${decision.reason} Re-running this turn under the supervisor requirement…` });
@@ -2874,12 +2937,14 @@ export async function interjectQueuedSharedMessage(
   const thread = repository.listAllSharedMessages(message.conversationId);
   const messageIndex = thread.findIndex((candidate) => candidate.id === message.id);
   const precedingThread = messageIndex >= 0 ? thread.slice(0, messageIndex) : thread;
-  const freshAuthorization = await classifyAuthorization({
+  // Only Jeffrey's own interjection can carry a capability into a live turn.
+  const dispatchedBy = assistantDispatcher(message);
+  const freshAuthorization: ExternalActionAuthorization = dispatchedBy ? { granted: false, operation: null } : await classifyAuthorization({
     currentMessage: message.body,
     precedingHumanMessage: [...precedingThread].reverse().find((candidate) => candidate.author === 'jeffrey')?.body,
     precedingAgentMessage: [...precedingThread].reverse().find((candidate) => candidate.author === 'codex' || candidate.author === 'claude' || candidate.author === 'palmyra')?.body,
   });
-  const authorization = await superviseExternalAction({
+  const authorization = dispatchedBy ? freshAuthorization : await superviseExternalAction({
     conversationId: message.conversationId,
     freshAuthorization,
     resolveConversationAuthorization: (conversationId, fresh) => repository.resolveConversationExternalActionAuthorization(conversationId, fresh),
