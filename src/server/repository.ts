@@ -1941,7 +1941,26 @@ export class WorkItemRepository {
         throw new WorkItemDependencyError(`Cannot complete this task while open prerequisites remain: ${blockers.map((blocker) => blocker.title).join(', ')}.`);
       }
     }
-    return this.workItemLifecycle.archive(id, completed, withinTransaction, context);
+    const archived = this.workItemLifecycle.archive(id, completed, withinTransaction, context);
+    if (archived && completed) this.releaseUnblockedWork(archived, withinTransaction);
+    return archived;
+  }
+
+  /** Offers, never runs: moves blocked dependents whose last open prerequisite
+   * just closed to ready, logs each, and posts one room message for the event.
+   * Queue order is left alone; the daily proposal may promote them later. */
+  private releaseUnblockedWork(closed: WorkItem, withinTransaction: boolean): void {
+    const verb = closed.status === 'canceled' ? 'canceled' : 'completed';
+    const released: WorkItem[] = [];
+    for (const dependent of this.listBlockedWork(closed.id)) {
+      if (dependent.status !== 'blocked' || this.listOpenDependencies(dependent.id).length) continue;
+      const moved = this.update(dependent.id, { status: 'ready' }, withinTransaction, { actor: 'system', source: 'prerequisite_closed', reason: `${closed.title} ${verb}` });
+      if (!moved) continue;
+      this.addActivity(moved.id, 'system', 'unblocked', `unblocked: ${closed.title} ${verb}`);
+      released.push(moved);
+    }
+    if (!released.length) return;
+    this.createSharedMessage('system', `${closed.title} ${verb}. Unblocked and ready to offer:\n${released.map((item) => `- ${item.title}`).join('\n')}`);
   }
 
   restore(id: string, withinTransaction = false, context: LifecycleContext = {}): WorkItem | null {
@@ -2142,7 +2161,9 @@ export class WorkItemRepository {
       if (managesTransaction) this.database.exec('ROLLBACK');
       throw error;
     }
-    return this.get(id);
+    const updated = this.get(id);
+    if (updated && statusChanged && (resolved.status === 'done' || resolved.status === 'canceled')) this.releaseUnblockedWork(updated, withinTransaction);
+    return updated;
   }
 
   getClassification(workItemId: string): TaskClassification | null {

@@ -3253,6 +3253,29 @@ describe('task dependencies', () => {
         .toEqual(expect.objectContaining({ completionStatus: 'completed' }));
     });
 
+    it('unblocks every dependent whose last prerequisite closes, with activity and one room message', () => {
+      const a = make('Schema first');
+      const other = make('Still open');
+      const b = make('API second');
+      const c = make('UI third');
+      const d = make('Waits on two');
+      for (const item of [b, c, d]) repository.update(item.id, { status: 'blocked' });
+      repository.replaceDependencies(b.id, [a.id]);
+      repository.replaceDependencies(c.id, [a.id]);
+      repository.replaceDependencies(d.id, [a.id, other.id]);
+      const roomCount = () => (repository.database.prepare("SELECT COUNT(*) AS n FROM shared_messages WHERE author = 'system' AND body LIKE '%Unblocked%'").get() as { n: number }).n;
+
+      repository.archive(a.id, true, false, { actor: 'jeffrey' });
+
+      expect(repository.get(b.id)?.status).toBe('ready');
+      expect(repository.get(c.id)?.status).toBe('ready');
+      expect(repository.get(d.id)?.status).toBe('blocked');
+      for (const item of [b, c]) {
+        expect(repository.listActivity(item.id).some((entry) => entry.kind === 'unblocked' && entry.body === 'unblocked: Schema first completed')).toBe(true);
+      }
+      expect(roomCount()).toBe(1);
+    });
+
     it('treats terminal and tombstoned prerequisites as absent from active blockers', () => {
       const canceled = make('Dropped approach');
       const archived = make('Parked work');
