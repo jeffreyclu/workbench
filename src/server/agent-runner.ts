@@ -18,6 +18,7 @@ import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-hand
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { appendWorkLog } from './work-log.js';
+import { publishRunMarkdown } from './run-artifact-publish.js';
 import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
 import { evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
 import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
@@ -2567,6 +2568,14 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       });
     } catch (error) {
       console.error('Work log append failed:', error instanceof Error ? error.message : error);
+    }
+    // Markdown the run wrote goes to the artifact library without anyone
+    // pressing Share. It deploys, so it runs behind the completion path.
+    if (!process.env.VITEST) {
+      void publishRunMarkdown(
+        { events: observedRunEvents, workspaces: [...workspaceBindings.map((binding) => binding.worktree), workspace ?? ''], workItemId: item.id, conversationId: run.conversationId ?? null },
+        (message) => repository.addActivity(item.id, 'system', 'progress', message),
+      ).catch((error) => console.error('Run markdown publish failed:', error instanceof Error ? error.message : error));
     }
     publishRealtimeEvent('work-items', 'shared', 'insights');
     publishRealtimeNotification(executionPlan

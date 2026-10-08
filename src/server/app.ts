@@ -27,6 +27,7 @@ import { createSourceConnectionRouter } from './routes/source-connection-router.
 import { createExecutionRouter } from './routes/execution-router.js';
 import { createLinearRouter } from './routes/linear-router.js';
 import { createMcpRouter } from './routes/mcp-router.js';
+import { setRunArtifactPublisher } from './run-artifact-publish.js';
 import { createAgentAccountRouter } from './routes/agent-account-router.js';
 import { createGitHubRouter } from './routes/github-router.js';
 
@@ -38,6 +39,11 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   const repository = new WorkItemRepository(database);
   const artifacts = new ArtifactLibrary(database);
   const artifactService = new ArtifactService(repository, artifacts);
+  setRunArtifactPublisher(async (input) => {
+    const result = await artifactService.publishFromInput({ ...input, conversationId: input.conversationId ?? undefined });
+    if ('status' in result) throw new Error(String((result.body as { error?: string }).error ?? 'Publish failed.'));
+    return { published: result.published, title: result.artifact.title };
+  });
   const admin = new WorkbenchAdminService(repository, capabilities, artifactService);
   const context: RouteContext = {
     database,

@@ -97,21 +97,15 @@ The pattern worth reusing — backend already has the data/logic fully built, on
 missing — is a good class of finding for this kind of request, distinct from proposing new backend
 capability from scratch. Cost metrics are explicitly excluded; Workbench tracks token usage instead.
 
-### <a id="7"></a>7. Publish every md file as artifact
+### <a id="7"></a>7. Markdown written by runs is published automatically
 
-*Every markdown file written in Workbench must also be published to the artifact library, not just written to disk*
+*Markdown a run writes under `docs/` or `~/Documents/Workbench/` lands in the artifact library on its own*
 
-Jeffrey expects every `.md` file created during a Workbench session to end up in the artifact
-library, so he can hand it off or share it without a separate step. There is no automatic
-mechanism in the code that does this: `Write`-ing a file never triggers publishing on its own —
-publishing only happens through an explicit `POST /api/artifacts/publish` call, fired either by
-the agent calling the separate `Artifact` tool or by a human clicking "Share" in the artifact
-preview page (confirmed by reading `app.ts`, `artifact-publisher.ts`, and `agent-runner.ts`).
-
-Because of that gap, whenever I `Write` a markdown file, I should immediately follow it with an
-`Artifact` publish call for that same file. Don't rely on it happening implicitly or assume a
-prior session's behavior (e.g. one file getting published) means it will happen again — it won't
-unless I do it explicitly each time.
+When a run completes, Workbench publishes every `.md` file the run wrote under `docs/` of its
+worktree, or anywhere under `~/Documents/Workbench/`, and links it to the run's task. Files in
+`node_modules` or test fixtures are skipped. Unchanged content is a no-op, and each new version
+adds an activity entry on the task (`src/server/run-artifact-publish.ts`). Nothing needs to be
+published by hand; `POST /api/artifacts/publish` and the Share button remain for other files.
 
 ### <a id="8"></a>8. Pluto timesheets always total 10 hours
 
