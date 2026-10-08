@@ -4,6 +4,6 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'eslint-rules/**/*.test.js'],
-    setupFiles: ['src/client/test/socket-request-adapter.ts'],
+    setupFiles: ['src/test/persistent-sessions-default.ts', 'src/client/test/socket-request-adapter.ts'],
   },
 });
