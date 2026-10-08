@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { authoritativeTaskWorkspace, cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, isolatedRunWorkspaces, provisionRunWorktreeDependencies, shouldIsolateRunWorkspace, WORKBENCH_RUN_WORKTREE_ROOT } from './run-worktree.js';
+import { authoritativeTaskWorkspace, cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, installRunWorktreeHooks, isolatedRunWorkspaces, provisionRunWorktreeDependencies, shouldIsolateRunWorkspace, WORKBENCH_RUN_WORKTREE_ROOT } from './run-worktree.js';
 
 const directories: string[] = [];
 
@@ -506,4 +506,32 @@ describe('isolatedRunWorkspace', () => {
       else process.env.VITEST = previous;
     }
   }, 30_000);
+});
+
+describe('installRunWorktreeHooks', () => {
+  it('rejects Co-Authored-By trailers in a provisioned worktree and chains native hooks', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-hooks-'));
+    directories.push(directory);
+    const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    run(directory, 'init', '-q');
+    run(directory, 'config', 'user.email', 'workbench@example.test');
+    run(directory, 'config', 'user.name', 'Workbench Test');
+    mkdirSync(join(directory, '.githooks'));
+    writeFileSync(join(directory, '.githooks', 'pre-commit'), '#!/bin/sh\ntouch "$(git rev-parse --show-toplevel)/native-ran"\n', { mode: 0o755 });
+    writeFileSync(join(directory, 'seed.txt'), 'seed\n');
+    run(directory, 'config', 'core.hooksPath', '.githooks');
+    run(directory, 'add', '.');
+    run(directory, 'commit', '-qm', 'seed');
+    const worktree = join(directory, 'wt');
+    run(directory, 'worktree', 'add', '--detach', worktree, 'HEAD');
+    installRunWorktreeHooks(worktree);
+
+    expect(run(worktree, 'config', '--get', 'core.hooksPath').trim()).toContain('workbench-hooks');
+    expect(run(directory, 'config', '--get', 'core.hooksPath').trim()).toBe('.githooks');
+    writeFileSync(join(worktree, 'a.txt'), 'a\n');
+    run(worktree, 'add', 'a.txt');
+    expect(() => run(worktree, 'commit', '-m', 'x\n\nco-authored-by: Bot <bot@example.test>')).toThrow(/Co-Authored-By/);
+    run(worktree, 'commit', '-qm', 'clean message');
+    expect(existsSync(join(worktree, 'native-ran'))).toBe(true);
+  });
 });

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Workbench commit-msg hook, installed into every provisioned run worktree.
+#
+# Why it exists: Jeffrey's authorship rule (~/AGENTS.md) says commits carry no
+# Co-Authored-By trailer. Claude has a settings toggle for that; Codex does not,
+# so the rule is enforced here for every agent that commits in a run worktree.
+#
+# Repo-native hooks are preserved: run-worktree.ts records the native hooks
+# directory in `workbench.nativeHooksPath` and this hook chains to its
+# commit-msg after the check passes.
+if grep -qiE '^[[:space:]]*co-authored-by[[:space:]]*:' "$1"; then
+  echo "Workbench: commit rejected - remove the Co-Authored-By trailer (authorship rule in ~/AGENTS.md)." >&2
+  exit 1
+fi
+native="$(git config --get workbench.nativeHooksPath 2>/dev/null)"
+if [ -n "$native" ] && [ -x "$native/commit-msg" ]; then
+  exec "$native/commit-msg" "$@"
+fi
+exit 0

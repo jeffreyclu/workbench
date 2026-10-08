@@ -1,6 +1,6 @@
 import { execFile as execFileCallback, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -104,6 +104,7 @@ export async function authoritativeTaskWorkspace(sourceWorkspace: string, taskKe
     if (branchExists) await execFile('git', ['worktree', 'add', destination, branch], { cwd: repository, timeout: 60_000, maxBuffer: 131_072 });
     else await execFile('git', ['worktree', 'add', '-b', branch, destination, await repositoryDefaultRef(repository)], { cwd: repository, timeout: 60_000, maxBuffer: 131_072 });
     provisionRunWorktreeDependencies(repository, destination);
+    installRunWorktreeHooks(destination);
     return destination;
   })();
   taskWorkspaceInFlight.set(destination, creation);
@@ -248,6 +249,36 @@ export function provisionRunWorktreeDependencies(repository: string, worktree: s
     mkdirSync(dirname(destination), { recursive: true });
     symlinkSync(source, destination, 'dir');
   }
+}
+
+/**
+ * Points the worktree at a Workbench-owned hooks directory whose commit-msg
+ * rejects Co-Authored-By trailers. Native hooks (for example writer-monorepo's
+ * .githooks) are re-exposed by symlink and the native commit-msg is chained
+ * from ours, so nothing the repository relies on is shadowed. The setting is
+ * per-worktree (extensions.worktreeConfig), leaving the source checkout alone.
+ */
+export function installRunWorktreeHooks(worktree: string): void {
+  const git = (args: string[]) => execFileSync('git', args, { cwd: worktree, encoding: 'utf8', timeout: 5_000 }).trim();
+  const optional = (args: string[]) => { try { return git(args); } catch { return ''; } };
+  try {
+    const ours = join(process.cwd(), 'scripts', 'git-hooks');
+    if (!existsSync(join(ours, 'commit-msg'))) return;
+    if (optional(['config', '--worktree', '--get', 'workbench.nativeHooksPath'])) return;
+    const configured = optional(['config', '--get', 'core.hooksPath']);
+    const native = configured ? resolve(worktree, configured) : join(resolve(worktree, git(['rev-parse', '--git-common-dir'])), 'hooks');
+    if (native === resolve(ours)) return;
+    const generated = join(resolve(worktree, git(['rev-parse', '--git-dir'])), 'workbench-hooks');
+    mkdirSync(generated, { recursive: true });
+    for (const name of existsSync(native) ? readdirSync(native) : []) {
+      if (name === 'commit-msg' || name.endsWith('.sample') || !statSync(join(native, name)).isFile()) continue;
+      try { lstatSync(join(generated, name)); } catch { symlinkSync(join(native, name), join(generated, name)); }
+    }
+    try { lstatSync(join(generated, 'commit-msg')); } catch { symlinkSync(join(ours, 'commit-msg'), join(generated, 'commit-msg')); }
+    git(['config', 'extensions.worktreeConfig', 'true']);
+    git(['config', '--worktree', 'workbench.nativeHooksPath', native]);
+    git(['config', '--worktree', 'core.hooksPath', generated]);
+  } catch { /* Hook installation must never block a run. */ }
 }
 
 /**
