@@ -775,3 +775,41 @@ Recovered session turns join the per-(conversation, agent) queue in shared-room.
 Review of commit ba6714c (restart recovery joins per-session turn queue) found two gaps a unit test with a fake agent will not show. (1) src/server/index.ts starts the scheduler before recoverSharedSessionTurns runs (after an async step), so a task run can take the session slot first; slot claiming for recovered turns must happen before the scheduler starts. (2) In recoverSharedSessionTurns the message lease is claimed, but the renewal timer starts only after the wait for the previous turn, so a long run in front lets the reply's lease lapse. Any code that waits in a queue while owning a lease must renew the lease during the wait.
 
 *Provenance: 0af4537e-1cbb-4426-bfef-4f43e06be833*
+
+### <a id="60"></a>60. Session-turn "first event" includes an error result; real expired sessions fail on stderr
+
+In src/server/shared-room.ts, SessionTurnStartedError is raised once ANY provider-sourced event is read, including a stream-json `result` error event. A fake CLI that emits an error result therefore counts as "started"; to model a real expired session (no events) write to stderr and exit(1). The session host then fails the turn as `provider_exited` without the provider text, so the turn falls back to a per-run process, and that process reaches the "Claude session expired" retry. The host already respawns the CLI with --resume (and resets the provider id when stderr says "no conversation found"), so shared-room must not stop the host after a mid-turn expiry. Test traps: the grounding classifier also spawns the fake CLI (identify it by `--no-session-persistence`); recovery replays from agent_sessions.last_event_offset, which a live holder turn advances, so reset it to 0 when simulating a restart; `agent_runs.failure_kind` has a CHECK allowing only 'provider_refusal', so a new kind needs a table-rebuild migration.
+
+*Provenance: 74aa9c48-29df-4b90-879f-9698734015a9*
+
+## <a id="61"></a>61. A runtime promotion kills runs that start during its build window; start runs only after the switch
+
+Observed 2026-10-08 22:40: `npm run runtime:promote` waits for `promotionBlockingWorkActive` to clear, then builds and preflights for several minutes and switches without re-checking. Run cbf5c929 started inside that window and died with "Workbench runtime promoted while this agent was running", losing its written code to a manual retry. Until work item f022c937 lands (re-queue interrupted runs, re-check before the switch), do not start a Workbench run while a promotion is in flight; start it after `/api/health` reports the new buildId. Related: `dispatch_conversation_turn` posted by an assistant actor is never scheduled because the queue only picks `author = jeffrey` (work item 679a9d62); use `POST /api/shared/messages` with the bearer token for a live turn until that is fixed.
+
+### <a id="62"></a>62. Queued shared turns are gated by author in three places, not one
+
+Assistant-posted dispatch_conversation_turn messages stayed queued because the author = 'jeffrey' assumption lives in repository.nextQueuedSharedTurn AND in ExecutionService.claimQueuedTurn (src/server/services/execution-service.ts); fixing only the picker still returns no reply. Agent replies waiting for a session slot are also queued rows (author codex/claude/palmyra, dispatch_target 'none'), so any 'queued' scan must treat 'none' as a reply, not an unroutable turn. Open gap: threadForSharedReply and latestHumanMessageForSharedReply in shared-room.ts still key on author 'jeffrey', so an assistant-posted turn is grounded on Jeffrey's last message instead of the assistant's body.
+
+*Provenance: 679a9d62-e645-4c55-b1df-ab9f986c9df1*
+
+### <a id="63"></a>63. An assistant-dispatched turn inherits Jeffrey's last message as its request and its external-action authorization
+
+Reviewed 2026-10-08 (commit 2ebecea): once nextQueuedSharedTurn and claimQueuedTurn accept codex/claude/palmyra authors, dispatchNextSharedTurn in src/server/shared-room.ts still derives currentMessage from latestHumanMessageForSharedReply (author 'jeffrey' only), and threadForSharedReply cannot find a non-jeffrey dispatchGroupId. So the turn's objective, its "Current request from Jeffrey" prompt section, and classifyExternalActionAuthorization all read Jeffrey's latest message, not the assistant's body. If Jeffrey last wrote "commit and push", any assistant-dispatched turn gets a fresh push capability. Any change that lets non-human authors dispatch must ground the turn on the dispatching message and deny external-action authorization unless Jeffrey wrote that message. Extends [workbench-operating-practices.md#62].
+
+*Provenance: 679a9d62-e645-4c55-b1df-ab9f986c9df1*
+
+### <a id="64"></a>64. Widening a SQLite CHECK needs defensive mode off; promotion-interrupted runs re-queue with a delay
+
+node:sqlite (Node 26) opens with defensive mode on, so `UPDATE sqlite_master` fails with "table sqlite_master may not be modified" even after `PRAGMA writable_schema = ON`. To change only a CHECK constraint (migration 098, failure_kind gains 'runtime_promoted') call `database.enableDefensive(false)`, replace the constraint text in sqlite_master, bump `PRAGMA schema_version`, then `enableDefensive(true)` in a finally. This avoids rebuilding agent_runs. Runs interrupted by a promotion (interruptOwnedWork) are re-queued with waiting_reason 'runtime promoted; resuming' and next_attempt_at ~15s ahead, and shutdown stops the scheduler first; otherwise the retiring runtime's own scheduler tick can re-claim the run before it exits. syncWaitingReasons must exempt that reason or the first tick clears it. Runs linked to a chat message still fail on promotion; that recovery belongs to shared-room.ts recoverSharedSessionTurns.
+
+*Provenance: f022c937-05c9-466f-bd02-fa4549d36fb3*
+
+### <a id="65"></a>65. Re-queuing a promotion-interrupted session-turn task run collides with the surviving host turn
+
+Reviewed 2026-10-08 (commit cbdd159). Agent session hosts are detached and survive a runtime promotion, so an execute/bugfix/research run that was a persistent-session turn is still running on the host when the new runtime restarts it. The host rejects the new turn with 'busy' (src/server/agent-session-host.mjs: "Turn ... is still running") before any provider event, canFallBackToPerRun returns true, executeAgentRun calls endSharedSession (killing the in-flight turn), and a per-run process redoes the task. Any promotion-resume design for session-backed runs must reattach to the host's in-flight turn, or wait for it to finish, instead of submitting a fresh turn. Extends [workbench-operating-practices.md#64].
+
+*Provenance: f022c937-05c9-466f-bd02-fa4549d36fb3*
+
+## <a id="66"></a>66. Production code must run on the live runtime's Node (22.19), not the newer Node a run happens to use
+
+Observed 2026-10-08: run a9b1a134 wrote migration 098 using `DatabaseSync.enableDefensive`, which exists in the Node under `~/.hermes/node` that Workbench runs spawn with but not in Node 22.19, which the live gateway and releases run on. Its tests passed in the run and failed in the verify worktree; unguarded, the next promotion's preflight would have crashed on migration. Rule: before landing, run `npm run typecheck` and the touched tests with the live runtime's Node (`/Users/jeffrey.lu/.nvm/versions/node/v22.19.0/bin/node`, what `ps` shows for the :5180 gateway), and apply any new migration to a `.backup` copy of `data/workbench.db` on that Node. Guard optional sqlite APIs with `typeof x === "function"`. Related: [workbench-operating-practices.md#36] on migrations.

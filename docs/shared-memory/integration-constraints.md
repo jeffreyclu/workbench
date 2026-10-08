@@ -204,3 +204,21 @@ Session transcripts on disk mix sessions Jeffrey ran in a terminal with sessions
 When Jeffrey replies from Workbench to a conversation that started in a terminal, Workbench resumes that same Claude session (`shared-room.ts` ~2183, `agent-runner.ts` ~999). The resumed run fires the same terminal hooks, but its entrypoint is `sdk-cli`. If the importer checks the marker only when it creates the session row, Workbench's own orchestration prompt gets posted as a Jeffrey message and the reply is posted twice. Any hook or transcript sync must drop sdk-entrypoint (Claude) or `originator: workbench` (Codex) events one by one, even when the session already exists. This extends [integration-constraints.md#9]. Source: review of run 9e9aa9c4, commit 3ed0f0f (`src/server/terminal-session-sync.ts:580-587`), 2026-10-08. Found by reading source; not reproduced at runtime.
 
 *Provenance: 9e9aa9c4-3eaa-461e-b960-2954f6d17fea*
+
+### <a id="12"></a>12. External-action authority follows the dispatching message's author, and the conversation lease must be bypassed too
+
+A shared-room turn's request is the message that dispatched it (reply.dispatchGroupId), whoever wrote it; only a jeffrey-authored dispatch may carry an external-action capability. Denying the fresh classification is not enough: superviseExternalAction merges the conversation's five-minute lease (resolveConversationExternalActionAuthorization), so Jeffrey's "push it" from minutes earlier would still reach an assistant-dispatched turn. Assistant-dispatched turns must skip superviseExternalAction entirely (shared-room.ts replyInSharedRoom and interjectQueuedSharedMessage). System-authored dispatches (admin dual-dispatch "Execute: ..." messages) still fall back to Jeffrey's latest message — an open gap, not yet decided. Test note: fake claude binaries must echo the host's --session-id/--resume as session_id or the session never counts as established, and the turn-grounding classifier also invokes the binary with --input-format (prompt starts with "MODE: GROUND").
+
+*Provenance: 1671c6cc-6ab7-4bf6-8911-29d418dfb44c*
+
+### <a id="13"></a>13. Per-turn flags on TurnGrounding leak into continuation turns through the persisted-grounding spread
+
+fallbackTurnGrounding in src/server/shared-room.ts answers a continuation ("continue", "go") with `{ ...priorGrounding, continuation: true, source: 'persisted' }`, and priorGrounding is the previous turn's stored grounding (repository.latestSharedTurnGrounding). Any per-turn field added to TurnGrounding, such as `dispatchedBy`, is copied into the next turn unless the spread strips it. Found in review of commit 318a26d: Jeffrey's "continue" after a Claude-dispatched turn keeps the heading "Current request dispatched by claude ... Jeffrey's messages are context only". Permission is unaffected because replyInSharedRoom derives dispatchedBy from the dispatching message, not from grounding. When adding a per-turn field to TurnGrounding, drop it in the continuation branch.
+
+*Provenance: 1671c6cc-6ab7-4bf6-8911-29d418dfb44c*
+
+### <a id="14"></a>14. Assistant-dispatch detection in replyInSharedRoom depends on a 100-message window
+
+Adversarial review of 318a26d (2026-10-08). replyInSharedRoom recomputes dispatchedBy from dispatchingMessageForSharedReply(thread, dispatchGroupId), where thread comes from listSharedMessages(100). If the assistant's dispatching message has fallen out of the newest 100 messages, the helper silently falls back to Jeffrey's latest message. That happens on a plain retry from conversation-router.ts:551, which passes no authorization snapshot, or when a turn stays queued behind more than 100 newer messages. The turn then classifies Jeffrey's "push it" and merges the five-minute lease. Persisted grounding still says the turn was dispatched by an assistant, so the prompt and the permission disagree. Fix direction: load the dispatching message by id (getSharedMessageById), not from the windowed thread, and treat any non-jeffrey author, including system, as no-grant. Found by reading source; not reproduced at runtime. Extends [integration-constraints.md#12].
+
+*Provenance: 1671c6cc-6ab7-4bf6-8911-29d418dfb44c*
