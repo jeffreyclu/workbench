@@ -360,18 +360,24 @@ function isDocumentWork(item: WorkItem): boolean {
   return /(?:\.md\b|\b(document|documentation|knowledge|memory|copy|prose|readme|claude\.md|agents\.md)\b)/.test(text);
 }
 
+/** The persona a run uses, by name; null for review, which carries its own harness. */
+export function personaNameFor(item: WorkItem | undefined, kind: AgentRun['kind']): string | null {
+  return kind === 'review'
+    ? null
+    : kind === 'bugfix'
+      ? 'bug-investigator'
+      : kind === 'execute'
+        ? item && isDocumentWork(item) ? 'doc-writer' : item && isBackendImplementation(item) ? 'backend-engineer' : 'frontend-engineer'
+        : kind === 'research'
+          ? 'researcher'
+          : kind === 'analysis'
+            ? 'codebase-analyst'
+            : 'implementation-planner';
+}
+
 function personaFor(item: WorkItem, run: AgentRun): string {
-  return run.kind === 'review'
-    ? ''
-    : run.kind === 'bugfix'
-      ? personaPrompt('bug-investigator')
-      : run.kind === 'execute'
-        ? isDocumentWork(item) ? personaPrompt('doc-writer', 'document-writer') : isBackendImplementation(item) ? personaPrompt('backend-engineer') : personaPrompt('frontend-engineer')
-        : run.kind === 'research'
-          ? personaPrompt('researcher')
-          : run.kind === 'analysis'
-            ? personaPrompt('codebase-analyst')
-            : personaPrompt('implementation-planner');
+  const name = personaNameFor(item, run.kind);
+  return name === null ? '' : personaPrompt(name, name === 'doc-writer' ? 'document-writer' : name);
 }
 
 type PromptContentSize = Omit<AgentRunPromptSize, 'totalChars' | 'systemContractChars'>;

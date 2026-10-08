@@ -13,6 +13,7 @@ import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
 import { createApplicationSocketHandler } from './socket-application.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
 import { reattachAll as reattachAgentSessions } from './agent-session.js';
+import { recoverSharedSessionTurns } from './shared-room.js';
 import { shutdownTurnGroundingClassifier, warmTurnGroundingClassifier } from './turn-grounding-ai.js';
 import { configureRuntimeRetirement } from './runtime-retirement.js';
 import { shutdownMemorySemanticWorker } from './memory-semantic-worker.js';
@@ -46,9 +47,13 @@ const terminalSessionSync = liveRuntimeCapabilities.ownScheduler ? startTerminal
 // Session hosts are detached and outlive the previous runtime. Adopt the live
 // ones and mark the rest stopped; their provider sessions resume on next use.
 if (liveRuntimeCapabilities.ownScheduler) {
-  reattachAgentSessions(database).catch((error: unknown) => {
-    console.error('Agent session reattach failed:', error instanceof Error ? error.message : error);
-  });
+  // A reply that was streaming when the last runtime stopped finishes into its
+  // own message once its host is adopted.
+  reattachAgentSessions(database)
+    .then(() => recoverSharedSessionTurns(repository))
+    .catch((error: unknown) => {
+      console.error('Agent session reattach failed:', error instanceof Error ? error.message : error);
+    });
 }
 configureRuntimeRetirement(() => {
   scheduler?.stop();

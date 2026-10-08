@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GitHubPullRequestDiff, SharedMessage } from '../shared/contracts.js';
@@ -10,7 +10,9 @@ import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasDeferredExecutionRe
 import { resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
 import { reviewHarnessPrompt } from '../shared/review-harness.js';
 import { personaBody } from './personas.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, repeatedUserDirectives, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { ensureSession, readAgentSessionStatus, sessionExternalActionGuard, submitTurn } from './agent-session.js';
+import { fakeAgentDirectory } from './test-fake-agent.js';
+import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -1240,4 +1242,185 @@ describe('codexUsageFromAppServerEvent', () => {
       params: { threadId: 't1', turn: { id: 'turn1', items: [], status: 'completed' } },
     })).toBeNull();
   });
+});
+
+describe('persistent room sessions', () => {
+  const ENV = ['PATH', 'CLAUDE_BIN', 'WORKBENCH_AGENT_SESSIONS_DIR'] as const;
+  const saved: Partial<Record<(typeof ENV)[number], string | undefined>> = {};
+  let root: string;
+  let fakeDirectory: string;
+  let spawnsPath: string;
+  let database: ReturnType<typeof openDatabase>;
+  let repository: WorkItemRepository;
+
+  const spawns = (): Array<{ pid: number; args: string[] }> => existsSync(spawnsPath)
+    ? readFileSync(spawnsPath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    : [];
+  const sink = (events: unknown[] = [], bodies: string[] = []) => ({
+    onProgress: (body: string) => { bodies.push(body); },
+    onEvents: (batch: unknown[]) => { events.push(...batch); },
+    onUsage: () => undefined,
+  });
+  const turn = (conversationId: string, messageId: string, message: string, extra: Partial<Parameters<typeof runSharedSessionTurn>[0]> = {}) => runSharedSessionTurn({
+    repository,
+    agent: 'claude',
+    conversationId,
+    messageId,
+    cwd: root,
+    accountProfile: 'default',
+    profile: 'standard',
+    model: 'claude-sonnet-5-5',
+    message,
+    authorization: { granted: false, operation: null },
+    signal: new AbortController().signal,
+    sink: sink(),
+    onRefusal: () => undefined,
+    onSteeringReady: () => undefined,
+    ...extra,
+  });
+  const waitFor = async (condition: () => boolean, timeoutMs = 8_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error('Timed out waiting for condition.');
+      await new Promise((wait) => setTimeout(wait, 25));
+    }
+  };
+
+  beforeEach(() => {
+    for (const key of ENV) saved[key] = process.env[key];
+    root = mkdtempSync(join(tmpdir(), 'workbench-room-session-'));
+    spawnsPath = join(root, 'spawns.jsonl');
+    const fakeClaude = join(root, 'fake-claude.mjs');
+    writeFileSync(fakeClaude, `
+import { appendFileSync, writeSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(spawnsPath)}, JSON.stringify({ pid: process.pid, args }) + '\\n');
+const flag = (name) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
+const sessionId = flag('--session-id') ?? flag('--resume');
+const emit = (event) => writeSync(1, JSON.stringify({ ...event, session_id: sessionId }) + '\\n');
+let turn = 0;
+const reply = (text) => {
+  const content = [];
+  if (text.includes('tool')) content.push({ type: 'tool_use', id: 'tool-' + turn, name: 'Read', input: { file_path: '/tmp/example.txt' } });
+  content.push({ type: 'text', text: 'reply ' + turn + ' from ' + process.pid });
+  emit({ type: 'assistant', message: { content } });
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'reply ' + turn + ' from ' + process.pid });
+};
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') {
+    emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
+    return;
+  }
+  const text = message.message.content;
+  turn += 1;
+  if (text.includes('slow')) setTimeout(() => reply(text), 600);
+  else reply(text);
+});
+`);
+    fakeDirectory = fakeAgentDirectory('exit 1', `exec "${process.execPath}" "${fakeClaude}" "$@"`).directory;
+    process.env.CLAUDE_BIN = join(fakeDirectory, 'claude');
+    process.env.WORKBENCH_AGENT_SESSIONS_DIR = join(root, 'agent-sessions');
+    database = openDatabase(join(root, 'workbench.db'));
+    repository = new WorkItemRepository(database);
+  });
+
+  afterEach(() => {
+    const sessionsDirectory = join(root, 'agent-sessions');
+    for (const conversationId of existsSync(sessionsDirectory) ? readdirSync(sessionsDirectory) : []) {
+      const status = readAgentSessionStatus({ conversationId, agent: 'claude' });
+      if (status?.hostPid) { try { process.kill(-status.hostPid, 'SIGKILL'); } catch { /* already gone */ } }
+    }
+    database.close();
+    for (const key of ENV) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    rmSync(root, { recursive: true, force: true });
+    rmSync(fakeDirectory, { recursive: true, force: true });
+  });
+
+  it('keeps the per-turn message short and carries the permission line', () => {
+    const message = sessionTurnMessage({
+      conversationId: 'c'.repeat(36),
+      messageId: 'm'.repeat(36),
+      runKind: 'analysis',
+      persona: 'codebase-analyst',
+      objective: 'x'.repeat(2_000),
+      workspaceBindings: [{ sourceWorkspace: '/a'.repeat(300), worktree: '/b'.repeat(300) }] as never,
+      permission: sessionPermissionLine({ granted: false, operation: null }),
+      userMessage: 'hello',
+    });
+    expect(message.length - "Jeffrey's message:\nhello".length).toBeLessThan(1_500);
+    expect(message).toContain('Permission this turn: None.');
+    expect(message).toContain('persona: codebase-analyst');
+  });
+
+  it('answers three room messages from one claude process and streams tool events', async () => {
+    const conversation = repository.createConversation('Room');
+    const events: Array<{ kind: string; detail: string }> = [];
+    const bodies: string[] = [];
+    const first = await turn(conversation.id, 'message-1', 'first tool', { sink: sink(events, bodies) as never });
+    const second = await turn(conversation.id, 'message-2', 'second');
+    const third = await turn(conversation.id, 'message-3', 'third');
+
+    expect(spawns()).toHaveLength(1);
+    const [{ pid, args }] = spawns();
+    expect(args).toContain('--append-system-prompt');
+    expect(args.join(' ')).toContain('long-lived Workbench room session');
+    expect([first.output, second.output, third.output]).toEqual([`reply 1 from ${pid}`, `reply 2 from ${pid}`, `reply 3 from ${pid}`]);
+    expect([first.pid, second.pid, third.pid]).toEqual([pid, pid, pid]);
+    expect([first.reused, second.reused, third.reused]).toEqual([false, true, true]);
+    expect(first.sessionId).toBeTruthy();
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(events.some((event) => event.kind === 'file_read' || event.kind === 'tool')).toBe(true);
+    expect(bodies.at(-1)).toContain(`reply 1 from ${pid}`);
+    expect(sharedSessionHasContext(conversation.id, 'claude')).toBe(true);
+  }, 30_000);
+
+  it('writes the turn permission at start and clears it at the end on a stable path', async () => {
+    const conversation = repository.createConversation('Room');
+    const key = { conversationId: conversation.id, agent: 'claude' as const };
+    const authorization = { granted: true, operation: 'github', capability: { actionIds: ['github.pr.comment'], command: 'x', requiredExecutables: [], requiredWorkbenchTools: [], source: 'direct_command' } } as never;
+    let during: Record<string, string> | null = null;
+    await turn(conversation.id, 'message-1', 'slow grant', {
+      authorization,
+      onSteeringReady: () => {
+        const guard = sessionExternalActionGuard(key);
+        during = JSON.parse(readFileSync(guard.capabilityFile, 'utf8'));
+      },
+    });
+    expect(Object.keys(during!)).toEqual(['github.pr.comment']);
+    const guard = sessionExternalActionGuard(key);
+    expect(JSON.parse(readFileSync(guard.capabilityFile, 'utf8'))).toEqual({});
+    expect(sessionExternalActionGuard(key).capabilityFile).toBe(guard.capabilityFile);
+  }, 30_000);
+
+  it('delivers an interjection to the same process', async () => {
+    const conversation = repository.createConversation('Room');
+    let steering: ((body: string) => Promise<boolean>) | undefined;
+    const running = turn(conversation.id, 'message-1', 'slow one', { onSteeringReady: (steer) => { steering = steer; } });
+    await waitFor(() => Boolean(steering));
+    expect(await steering!('also check the logs')).toBe(true);
+    const result = await running;
+    expect(spawns()).toHaveLength(1);
+    expect(result.pid).toBe(spawns()[0].pid);
+    const events = readFileSync(join(root, 'agent-sessions', conversation.id, 'claude', 'events.jsonl'), 'utf8');
+    expect(events).toContain('steer_sent');
+  }, 30_000);
+
+  it('finishes an in-flight turn into its message after a restart', async () => {
+    const conversation = repository.createConversation('Room');
+    const message = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+    const session = await ensureSession(database, { conversationId: conversation.id, agent: 'claude', cwd: root });
+    // The previous runtime submitted the turn and died before reading the reply.
+    await submitTurn(database, session, { prompt: 'slow recover', turnId: `${message.id}#1` });
+    const recovered = await recoverSharedSessionTurns(repository, { claimRetryMs: 0 });
+    expect(recovered).toEqual([message.id]);
+    const finished = repository.getSharedMessageById(message.id)!;
+    expect(finished.status).toBe('completed');
+    expect(finished.body).toMatch(/^reply 1 from \d+$/);
+    expect(spawns()).toHaveLength(1);
+  }, 30_000);
 });

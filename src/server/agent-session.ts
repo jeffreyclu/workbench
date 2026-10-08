@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_ACCOUNT_PROFILE } from '../shared/contracts.js';
 import { agentEnvironmentForWorkspace, commandFor, type CliAgent, type ExecutionProfile } from './agent-runner.js';
+import type { ExternalActionProcessGuard } from './external-action-command-guard.js';
 import type { WorkbenchDatabase } from './database.js';
 import { providerTurnTimeouts } from './provider-turn-watchdog.js';
 import { codexAppServerInitialRequest, codexAppServerLaunch, codexThreadBootstrapRequest, codexTurnStartParams } from './shared-room.js';
@@ -63,6 +64,8 @@ export interface EnsureAgentSessionInput extends AgentSessionKey {
   accountProfile?: string;
   profile?: ExecutionProfile;
   model?: string | null;
+  /** Persona and runner contract, sent once at session start (Claude --append-system-prompt, Codex developerInstructions). */
+  systemPrompt?: string;
 }
 
 export interface AgentSessionHandle extends AgentSessionKey {
@@ -130,8 +133,23 @@ function pathsFor(key: AgentSessionKey) {
     stderrPath: join(directory, 'stderr.log'),
     // Unix socket paths are capped near 104 bytes, which a worktree data
     // directory already exceeds, so the socket lives under the temp directory.
+    capabilityPath: join(directory, 'capability.json'),
+    refusalsPath: join(directory, 'refusals.jsonl'),
     socketPath: join(tmpdir(), `wb-session-${createHash('sha256').update(directory).digest('hex').slice(0, 16)}.sock`),
   };
+}
+
+/**
+ * The session's external-action guard. The provider keeps one environment for
+ * its whole life, so the capability file lives at a path that never changes;
+ * each turn rewrites its contents (writeTurnCapability) and clears them after.
+ */
+export function sessionExternalActionGuard(key: AgentSessionKey): ExternalActionProcessGuard {
+  const paths = pathsFor(key);
+  mkdirSync(paths.directory, { recursive: true });
+  if (!existsSync(paths.capabilityPath)) writeFileSync(paths.capabilityPath, '{}', { mode: 0o600 });
+  if (!existsSync(paths.refusalsPath)) writeFileSync(paths.refusalsPath, '', { mode: 0o600 });
+  return { capability: {}, capabilityFile: paths.capabilityPath, eventFile: paths.refusalsPath };
 }
 
 export function readAgentSessionStatus(key: AgentSessionKey): AgentSessionStatus | null {
@@ -245,25 +263,39 @@ function syncRow(database: WorkbenchDatabase, key: AgentSessionKey, status: Agen
 
 // ---- Host launch -----------------------------------------------------------
 
+/** Appends the persona after the runner contract Claude already receives. */
+function withSystemPrompt(args: string[], systemPrompt: string | undefined): string[] {
+  const flag = args.indexOf('--append-system-prompt');
+  if (!systemPrompt || flag < 0) return args;
+  const next = [...args];
+  next[flag + 1] = `${args[flag + 1]}\n\n${systemPrompt}`;
+  return next;
+}
+
 function launchFor(input: EnsureAgentSessionInput, accountProfile: string, profile: ExecutionProfile) {
+  const guard = sessionExternalActionGuard(input);
   if (input.agent === 'claude') {
     const { command, args } = commandFor('claude', input.cwd, profile, input.model ?? undefined);
     return {
-      env: agentEnvironmentForWorkspace('claude', accountProfile, input.cwd),
+      env: agentEnvironmentForWorkspace('claude', accountProfile, input.cwd, guard),
       // The host adds --session-id or --resume ahead of these.
-      launch: { command, args: ['--permission-prompts', 'none', ...args] },
+      launch: { command, args: ['--permission-prompts', 'none', ...withSystemPrompt(args, input.systemPrompt)] },
       codex: null,
     };
   }
-  const { command, args, env } = codexAppServerLaunch(input.cwd, accountProfile);
-  const { threadId: _threadId, ...threadResumeParams } = codexThreadBootstrapRequest(input.cwd, 'resume').params;
+  const { command, args, env } = codexAppServerLaunch(input.cwd, accountProfile, guard);
+  const developerInstructions = input.systemPrompt ? { developerInstructions: input.systemPrompt } : {};
+  const { threadId: _threadId, ...threadResumeParams } = { ...codexThreadBootstrapRequest(input.cwd, 'resume').params, ...developerInstructions } as Record<string, unknown>;
   const { threadId: _turnThreadId, input: _input, ...turnStartTemplate } = codexTurnStartParams('', input.cwd, '');
   return {
     env,
     launch: { command, args },
     codex: {
       initializeParams: codexAppServerInitialRequest(input.cwd, null, false).params,
-      threadStart: codexThreadBootstrapRequest(input.cwd),
+      threadStart: (() => {
+        const start = codexThreadBootstrapRequest(input.cwd);
+        return { ...start, params: { ...start.params, ...developerInstructions } };
+      })(),
       threadResumeParams,
       turnStartTemplate: { ...turnStartTemplate, ...(input.model ? { model: input.model } : {}) },
     },
@@ -298,6 +330,7 @@ async function startHost(database: WorkbenchDatabase, input: EnsureAgentSessionI
       ...providerTurnTimeouts(),
       idleStopMs: configuredMs('WORKBENCH_AGENT_SESSION_IDLE_MS', 30 * 60_000),
       interruptGraceMs: configuredMs('WORKBENCH_AGENT_SESSION_INTERRUPT_GRACE_MS', 10_000),
+      steerSettleMs: configuredMs('WORKBENCH_AGENT_SESSION_STEER_SETTLE_MS', 1_500),
       heartbeatMs: configuredMs('WORKBENCH_AGENT_SESSION_HEARTBEAT_MS', 5_000),
     },
   };
@@ -372,7 +405,11 @@ export async function ensureSession(database: WorkbenchDatabase, input: EnsureAg
   const previous = readAgentSessionStatus(input);
   try {
     const live = await liveStatus(previous);
-    if (live) {
+    // Claude's cwd is fixed at process start, so a changed workspace binding
+    // restarts the host; the provider session resumes in the new directory.
+    if (live && readRow(database, input)?.cwd !== input.cwd && live.state !== 'turn') {
+      await stopSession(database, { ...input, socketPath: live.socketPath });
+    } else if (live) {
       syncRow(database, input, live);
       return handleFor(input, live, true);
     }
@@ -447,6 +484,21 @@ export async function sendTurn(
 
 export async function interrupt(session: { socketPath: string }): Promise<{ interrupted: boolean }> {
   return hostRequest(session.socketPath, { type: 'interrupt' });
+}
+
+/** Adds a user message to the running turn (stdin line for Claude, turn/steer for Codex). */
+export async function steerTurn(session: { socketPath: string }, text: string): Promise<{ accepted: boolean; reason?: string }> {
+  return hostRequest(session.socketPath, { type: 'steer', text });
+}
+
+/**
+ * Ends the provider session so the next ensureSession starts a new one. Used
+ * when a turn must not inherit the earlier transcript.
+ */
+export async function resetSession(database: WorkbenchDatabase, session: AgentSessionKey & { socketPath: string }): Promise<void> {
+  await stopSession(database, session);
+  database.prepare('UPDATE agent_sessions SET provider_session_id = NULL WHERE conversation_id = ? AND agent = ?').run(session.conversationId, session.agent);
+  rmSync(pathsFor(session).statusPath, { force: true });
 }
 
 export async function stopSession(database: WorkbenchDatabase, session: AgentSessionKey & { socketPath: string }): Promise<void> {

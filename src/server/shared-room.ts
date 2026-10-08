@@ -3,13 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, SUPERVISOR_EVIDENCE_REASON_PREFIX, defaultAccountProfileForTask, type AgentRun, type AgentStreamEvent, type GitHubPullRequestDiff, type SharedMessage, type WorkItem, type WorkspaceDiff } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, agentEnvironmentForWorkspace, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, measurePromptSize, mcpTraceEventForProviderItem, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, taskPromptContentSize, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, agentEnvironmentForWorkspace, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, measurePromptSize, mcpTraceEventForProviderItem, modelFor, MUTATING_RUN_KINDS, personaNameFor, readableAgentEvent, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, taskPromptContentSize, warmAgentCommand, type AgentAuditCandidate, type AgentEventContext, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
-import { createExternalActionProcessGuard, observeExternalActionRefusals, recordExternalActionRefusal, type ExternalActionProcessGuard } from './external-action-command-guard.js';
+import { clearTurnCapability, createExternalActionProcessGuard, observeExternalActionRefusals, recordExternalActionRefusal, turnCapabilityFor, writeTurnCapability, type ExternalActionProcessGuard, type ExternalActionRefusal } from './external-action-command-guard.js';
+import { awaitTurn, ensureSession, interrupt, readAgentSessionStatus, resetSession, sessionExternalActionGuard, steerTurn, submitTurn, tail, type AgentSessionEvent, type AgentTurnResult } from './agent-session.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
 import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
 import { groundTurn } from './turn-grounding-ai.js';
@@ -1554,6 +1555,345 @@ export async function runSharedBackgroundJob(
   }
 }
 
+// ---- Persistent provider sessions ------------------------------------------
+// With WORKBENCH_PERSISTENT_SESSIONS=1 a Claude or Codex room reply is a turn on
+// one long-lived provider process per conversation (agent-session.ts) instead
+// of a new CLI per message. Unset, the per-run path below is untouched.
+
+/** True when Claude and Codex room replies go through the live session. */
+export function persistentSessionsEnabled(): boolean {
+  return process.env.WORKBENCH_PERSISTENT_SESSIONS === '1';
+}
+
+export type SessionAgent = 'claude' | 'codex';
+
+/** Sent once, when the provider session starts. Per-turn messages stay short because of it. */
+export function sessionSystemPrompt(agent: SessionAgent): string {
+  return `${agent === 'codex' ? `${RUNNER_SYSTEM_CONTRACT}\n\n` : ''}This is one long-lived Workbench room session. Each turn arrives as a short message with the conversation ID, current reply message ID, execution category, persona name, current objective, workspace binding, and that turn's permission line, followed by Jeffrey's message. Persona definitions are docs/personas/<name>.md in the Workbench repository; follow the persona the turn names. The turn's permission line is authoritative for external mutations and replaces every earlier turn's permission. Every local repository and Jeffrey's home directory are readable and writable; the starting workspace is never a boundary. For durable context outside this session call the Workbench MCP recall_context tool; for external reads use the supervisor-owned evidence tools with the IDs in the turn. Apply Jeffrey's newest instruction directly, preserve existing workspace edits, and finish with one concise result and focused verification.`;
+}
+
+/** The turn's permission as one line; the capability file enforces it. */
+export function sessionPermissionLine(authorization: ExternalActionAuthorization): string {
+  return authorization.granted
+    ? `Granted for this turn only: ${authorization.capability.actionIds.join(', ')}. Every other external mutation is refused.`
+    : 'None. External mutations (GitHub, Slack, Linear, deploys) are refused; read-only research is allowed.';
+}
+
+/** Everything a live session needs per turn: about 1.5k characters plus Jeffrey's message. */
+export function sessionTurnMessage(input: {
+  conversationId: string;
+  messageId: string;
+  runKind: AgentRun['kind'];
+  persona: string | null;
+  objective: string;
+  workspaceBindings: readonly RunWorkspaceBinding[];
+  permission: string;
+  userMessage: string;
+}): string {
+  const workspace = input.workspaceBindings.length
+    ? input.workspaceBindings.slice(0, 3).map((binding) => `${binding.sourceWorkspace} (worktree ${binding.worktree})`).join('; ')
+    : 'none bound; start from the session working directory';
+  return [
+    'Workbench turn',
+    `Conversation ID: ${input.conversationId}`,
+    `Current reply message ID: ${input.messageId}`,
+    `Category: ${input.runKind}; persona: ${input.persona ?? 'none'}`,
+    `Objective: ${input.objective.replace(/\s+/g, ' ').trim().slice(0, 400)}`,
+    `Workspace: ${workspace.slice(0, 400)}`,
+    `Permission this turn: ${input.permission}`,
+    '',
+    `Jeffrey's message:\n${input.userMessage}`,
+  ].join('\n');
+}
+
+interface SessionReplySink {
+  onProgress: (body: string) => void;
+  onEvents: (events: Array<Pick<AgentStreamEvent, 'kind' | 'detail' | 'trace'>>) => void;
+  onUsage: (usage: AgentUsage) => void;
+}
+
+export interface SessionTurnSnapshot {
+  output: string;
+  body: string;
+  usage: AgentUsage;
+  peakContextTokens: number;
+  costUsd: number | null;
+}
+
+function streamEventForAudit(entry: AgentAuditCandidate): Pick<AgentStreamEvent, 'kind' | 'detail' | 'trace'> {
+  return {
+    kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'),
+    detail: entry.detail,
+    trace: entry.trace,
+  };
+}
+
+function numberField(record: Record<string, unknown> | undefined, name: string): number | null {
+  const value = record?.[name];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Folds one turn's host events into reply text, tool activity and usage with
+ * the readers the per-run path uses, so a session turn renders the same way.
+ */
+export function createSessionTurnReader(agent: SessionAgent, sink: SessionReplySink) {
+  const context: AgentEventContext = { subagents: new Map(), pendingBash: new Map(), pendingMcp: new Map() };
+  let progress = '';
+  let lastProgressEvent = '';
+  let final = '';
+  let output = '';
+  let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
+  let peakContextTokens = 0;
+  let costUsd: number | null = null;
+  const itemText = new Map<string, string>();
+  const itemOrder: string[] = [];
+  const activity: string[] = [];
+
+  const readClaude = (record: Record<string, unknown>) => {
+    const readable = readableAgentEvent('claude', JSON.stringify(record), context);
+    if (readable.blockBreak && progress && !progress.endsWith('\n\n')) progress += '\n\n';
+    if (readable.delta) { progress += readable.delta; lastProgressEvent = ''; }
+    if (readable.progress && readable.progress !== lastProgressEvent && !progress.endsWith(readable.progress)) {
+      progress += `${progress ? '\n\n' : ''}${readable.progress}`;
+      lastProgressEvent = readable.progress;
+    }
+    if (readable.final) final = readable.final;
+    if (readable.audit.length) sink.onEvents(readable.audit.map(streamEventForAudit));
+    const message = record.message as { usage?: Record<string, unknown> } | undefined;
+    if (record.type === 'assistant' && message?.usage) {
+      peakContextTokens = Math.max(peakContextTokens, (numberField(message.usage, 'input_tokens') ?? 0) + (numberField(message.usage, 'cache_read_input_tokens') ?? 0) + (numberField(message.usage, 'cache_creation_input_tokens') ?? 0));
+    }
+    if (record.type === 'result') {
+      const reported = record.usage as Record<string, unknown> | undefined;
+      usage = {
+        inputTokens: numberField(reported, 'input_tokens'),
+        cacheCreationInputTokens: numberField(reported, 'cache_creation_input_tokens'),
+        cacheReadInputTokens: numberField(reported, 'cache_read_input_tokens'),
+        outputTokens: numberField(reported, 'output_tokens'),
+      };
+      costUsd = numberField(record, 'total_cost_usd');
+      if (!final && typeof record.result === 'string' && record.is_error !== true) final = record.result;
+      sink.onUsage(usage);
+    }
+    output = final || progress;
+  };
+
+  const readCodex = (record: Record<string, unknown>) => {
+    const params = (record.params && typeof record.params === 'object' ? record.params : {}) as Record<string, unknown>;
+    const method = typeof record.method === 'string' ? record.method : '';
+    const reported = codexUsageFromAppServerEvent(record);
+    if (reported) {
+      usage = reported;
+      peakContextTokens = Math.max(peakContextTokens, codexActiveContextTokensFromAppServerEvent(record) ?? 0);
+      sink.onUsage(usage);
+    }
+    if (method === 'item/agentMessage/delta' && typeof params.delta === 'string') {
+      const itemId = typeof params.itemId === 'string' ? params.itemId : '__unidentified-agent-message__';
+      if (!itemText.has(itemId)) itemOrder.push(itemId);
+      itemText.set(itemId, `${itemText.get(itemId) ?? ''}${params.delta}`);
+      output = codexFinalReply(itemOrder.map((id) => itemText.get(id) ?? ''));
+    }
+    const item = params.item as Record<string, unknown> | undefined;
+    const agentEvent = agentStreamEventForCodexAppServerItem(method, item);
+    if (agentEvent) {
+      sink.onEvents([agentEvent]);
+      if (String(item?.type ?? '') === 'reasoning' || (agentEvent.kind === 'tool' && agentEvent.trace?.phase !== 'response')) {
+        activity.push(agentEvent.kind === 'tool' ? `● ${agentEvent.detail}` : agentEvent.detail);
+      }
+    }
+  };
+
+  const body = () => (agent === 'codex' ? [...activity, output].filter(Boolean).join('\n\n') : progress).trim();
+  return {
+    /** Feeds one host event. Only provider output carries reply content. */
+    read(event: AgentSessionEvent): void {
+      if (event.source !== 'provider' || !event.event || typeof event.event !== 'object') return;
+      if (agent === 'claude') readClaude(event.event as Record<string, unknown>);
+      else readCodex(event.event as Record<string, unknown>);
+      sink.onProgress(body());
+    },
+    snapshot(): SessionTurnSnapshot {
+      return { output: output.trim(), body: body(), usage, peakContextTokens, costUsd };
+    },
+  };
+}
+
+export interface SharedSessionTurnInput {
+  repository: WorkItemRepository;
+  agent: SessionAgent;
+  conversationId: string;
+  messageId: string;
+  runId?: string;
+  cwd: string;
+  accountProfile: string;
+  profile: ExecutionProfile;
+  model: string;
+  /** The turn's full prompt when the provider has no context yet, otherwise the short turn message. */
+  message: string;
+  authorization: ExternalActionAuthorization;
+  signal: AbortSignal;
+  /** Ends the provider session first so this turn inherits no earlier transcript. */
+  fresh?: boolean;
+  sink: SessionReplySink;
+  onRefusal: (refusal: ExternalActionRefusal) => void;
+  onSteeringReady: (steer: ActiveReplySteering) => void;
+}
+
+export interface SharedSessionTurnResult extends SessionTurnSnapshot {
+  agent: SessionAgent;
+  sessionId: string | null;
+  turnId: string;
+  pid: number | null;
+  hostPid: number;
+  reused: boolean;
+}
+
+const sessionTurnAttempts = new Map<string, number>();
+
+/** True when the conversation's provider session already holds earlier turns. */
+export function sharedSessionHasContext(conversationId: string, agent: SessionAgent): boolean {
+  return Boolean(readAgentSessionStatus({ conversationId, agent })?.providerSessionEstablished);
+}
+
+/** Ends a conversation's provider session so its next turn starts with a fresh context. */
+export async function endSharedSession(repository: WorkItemRepository, conversationId: string, agent: SessionAgent): Promise<void> {
+  const status = readAgentSessionStatus({ conversationId, agent });
+  if (status && status.state !== 'stopped') await resetSession(repository.database, { conversationId, agent, socketPath: status.socketPath });
+}
+
+/** The reply message a session turn belongs to; attempts of one message share a prefix. */
+export function sessionTurnMessageId(turnId: string): string {
+  return turnId.split('#')[0];
+}
+
+/**
+ * Runs one reply as a turn on the conversation's live session. The turn's
+ * permission is written to the session's capability file at start and cleared
+ * at the end, so a long-lived provider never carries a grant between turns.
+ */
+export async function runSharedSessionTurn(input: SharedSessionTurnInput): Promise<SharedSessionTurnResult> {
+  const { repository, agent, conversationId } = input;
+  const key = { conversationId, agent };
+  if (input.fresh) {
+    const existing = readAgentSessionStatus(key);
+    if (existing && existing.state !== 'stopped') await resetSession(repository.database, { ...key, socketPath: existing.socketPath });
+  }
+  const session = await ensureSession(repository.database, {
+    ...key,
+    cwd: input.cwd,
+    accountProfile: input.accountProfile,
+    profile: input.profile,
+    model: input.model,
+    systemPrompt: sessionSystemPrompt(agent),
+  });
+  const guard = sessionExternalActionGuard(key);
+  const stopObserving = observeExternalActionRefusals(guard, input.onRefusal, { persistent: true });
+  writeTurnCapability(guard, turnCapabilityFor(input.authorization));
+  const attempt = (sessionTurnAttempts.get(input.messageId) ?? 0) + 1;
+  sessionTurnAttempts.set(input.messageId, attempt);
+  const reader = createSessionTurnReader(agent, input.sink);
+  const cancel = () => { void interrupt(session).catch(() => { /* the host may already be gone */ }); };
+  try {
+    if (input.signal.aborted) throw new Error('Agent run canceled.');
+    const accepted = await submitTurn(repository.database, session, {
+      prompt: input.message,
+      turnId: `${input.messageId}#${attempt}`,
+      model: input.model,
+      cwd: input.cwd,
+    });
+    input.signal.addEventListener('abort', cancel, { once: true });
+    const steer: ActiveReplySteering = async (body) => {
+      const sent = await steerTurn(session, agent === 'codex' ? interjectionSteeringPrompt(body) : body).catch(() => ({ accepted: false }));
+      return sent.accepted;
+    };
+    steer.cancel = cancel;
+    input.onSteeringReady(steer);
+    const turn = await awaitTurn(repository.database, session, { fromOffset: accepted.startOffset, turnId: accepted.turnId, onEvent: (event) => reader.read(event) });
+    const snapshot = reader.snapshot();
+    if (turn.status === 'interrupted') throw new Error(input.signal.aborted ? 'Agent run canceled.' : `Agent session turn was interrupted${turn.reason ? `: ${turn.reason}` : '.'}`);
+    if (turn.status === 'failed') throw new Error(`Agent session turn failed${turn.reason ? `: ${turn.reason}` : '.'}${snapshot.output ? ` ${snapshot.output.slice(0, 500)}` : ''}`);
+    const status = readAgentSessionStatus(key);
+    return {
+      ...snapshot,
+      agent,
+      sessionId: status?.providerSessionId ?? session.providerSessionId,
+      turnId: turn.turnId,
+      pid: status?.pid ?? session.pid,
+      hostPid: session.hostPid,
+      reused: session.reused,
+    };
+  } finally {
+    input.signal.removeEventListener('abort', cancel);
+    stopObserving();
+    try { clearTurnCapability(guard); } catch { /* the session directory is gone */ }
+  }
+}
+
+function sessionTerminalMessage(snapshot: SessionTurnSnapshot, turn: AgentTurnResult) {
+  const telemetry = { inputTokens: snapshot.usage.inputTokens, cacheCreationInputTokens: snapshot.usage.cacheCreationInputTokens, cacheReadInputTokens: snapshot.usage.cacheReadInputTokens, outputTokens: snapshot.usage.outputTokens };
+  return turn.status === 'completed' && snapshot.output
+    ? { status: 'completed' as const, body: snapshot.output, error: undefined as string | undefined, ...telemetry }
+    : { status: 'failed' as const, body: snapshot.body, error: turn.status === 'completed' ? 'The session turn ended without a reply.' : `Agent session turn ${turn.status}${turn.reason ? `: ${turn.reason}` : '.'}`, ...telemetry };
+}
+
+/**
+ * Boot recovery for session turns. A session host outlives the server, so a
+ * reply that was streaming when the server stopped is either still running in
+ * its host or already finished in events.jsonl. Either way, its events are
+ * replayed into the same message instead of leaving it to expire.
+ */
+export async function recoverSharedSessionTurns(repository: WorkItemRepository, options: { claimRetryMs?: number } = {}): Promise<string[]> {
+  const rows = repository.database.prepare("SELECT conversation_id, agent, last_event_offset FROM agent_sessions WHERE state != 'stopped'").all() as Array<{ conversation_id: string; agent: SessionAgent; last_event_offset: number }>;
+  const recovered: string[] = [];
+  for (const row of rows) {
+    const key = { conversationId: row.conversation_id, agent: row.agent };
+    const status = readAgentSessionStatus(key);
+    if (!status) continue;
+    const session = { ...key, socketPath: status.socketPath };
+    const { events } = await tail(session, row.last_event_offset, 0);
+    const starts = events.filter((event) => event.source === 'host' && event.type === 'turn_started' && event.turnId);
+    const last = starts.at(-1);
+    if (!last?.turnId) continue;
+    const messageId = sessionTurnMessageId(last.turnId);
+    const message = repository.getSharedMessageById(messageId);
+    if (!message || message.status !== 'running') continue;
+    // The previous runtime's lease must lapse before this one may own the reply.
+    const deadline = Date.now() + (options.claimRetryMs ?? LEASE_MS + 5_000);
+    while (!repository.claimSharedMessage(messageId, OWNER_ID, LEASE_MS)) {
+      if (Date.now() >= deadline) break;
+      await new Promise((wait) => setTimeout(wait, 1_000));
+    }
+    if (repository.getSharedMessageById(messageId)?.status !== 'running') continue;
+    const runId = repository.getRunByMessage(messageId)?.id;
+    if (runId) repository.claimRun(runId, OWNER_ID, LEASE_MS);
+    const lease = setInterval(() => {
+      try { repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS); if (runId) repository.renewRunLease(runId, OWNER_ID, LEASE_MS); } catch { /* retried next tick */ }
+    }, HEARTBEAT_MS);
+    lease.unref();
+    const guard = sessionExternalActionGuard(key);
+    try {
+      const reader = createSessionTurnReader(row.agent, {
+        onProgress: (body) => updateLiveSharedBody(repository, messageId, body, message.conversationId, runId),
+        onEvents: (streamEvents) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, message.conversationId, streamEvents)),
+        onUsage: () => { /* written with the terminal state */ },
+      });
+      const turn = await awaitTurn(repository.database, session, { fromOffset: last.offset, turnId: last.turnId, onEvent: (event) => reader.read(event) });
+      const terminal = sessionTerminalMessage(reader.snapshot(), turn);
+      repository.updateSharedMessage(messageId, terminal);
+      if (runId) repository.updateRun(runId, { status: terminal.status, output: terminal.body ?? '', ...(terminal.error ? { error: terminal.error } : {}), completedAt: new Date().toISOString() });
+      if (terminal.status === 'completed' && terminal.body) repository.recordAgentHandoff(message.conversationId, messageId, row.agent, terminal.body);
+      recovered.push(messageId);
+    } catch (error) {
+      repository.updateSharedMessage(messageId, { status: 'failed', error: error instanceof Error ? error.message : 'Session recovery failed.' });
+    } finally {
+      clearInterval(lease);
+      try { clearTurnCapability(guard); } catch { /* best effort */ }
+    }
+  }
+  return recovered;
+}
+
 export async function replyInSharedRoom(
   repository: WorkItemRepository,
   agent: AgentRun['agent'],
@@ -1782,12 +2122,19 @@ export async function replyInSharedRoom(
       preflightWorkbenchTools,
     });
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
-    externalActionGuard = createExternalActionProcessGuard(externalAuthorization);
-    stopExternalActionObserver = observeExternalActionRefusals(externalActionGuard, (refusal) => {
+    const onExternalActionRefusal = (refusal: ExternalActionRefusal) => {
       if (runId) recordExternalActionRefusal(repository, { id: runId, messageId, agent }, refusal);
       else repository.addAgentStreamEvents(messageId, null, [{ kind: 'tool', detail: refusal.detail }]);
       publishRealtimeMessagesEvent(target.conversationId);
-    });
+    };
+    // A session's provider keeps one environment for its whole life, so its
+    // guard is the session's own and runSharedSessionTurn writes each turn's
+    // capability into it. Only the per-run path gets a per-turn guard.
+    const sessionMode = persistentSessionsEnabled() && (agent === 'claude' || agent === 'codex');
+    if (!sessionMode) {
+      externalActionGuard = createExternalActionProcessGuard(externalAuthorization);
+      stopExternalActionObserver = observeExternalActionRefusals(externalActionGuard, onExternalActionRefusal);
+    }
     const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
     const lineageDecision = linkedItem && linkedRun
       ? await verifyAuthoritativeMutationLineage(repository, linkedItem, externalAuthorization, sourceCwd, linkedRun)
@@ -1863,7 +2210,64 @@ export async function replyInSharedRoom(
       providerSessionResetForExternalMutation: externalAuthorization.granted,
     });
     const guardedPrompt = prompt;
+    const linkedRunKind = runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis';
+    // A live session already holds the room prompt, so after the first turn it
+    // gets only the short turn message. A session without context, or one that
+    // was just reset, gets the full prompt once.
+    const sessionTurnFor = (turnAgent: SessionAgent, message: string, options: { fresh?: boolean } = {}) => runSharedSessionTurn({
+      repository,
+      agent: turnAgent,
+      conversationId: target.conversationId,
+      messageId,
+      runId,
+      cwd,
+      accountProfile: target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE,
+      profile,
+      model: modelFor(turnAgent, profile),
+      message,
+      authorization: externalAuthorization,
+      signal: controller.signal,
+      fresh: options.fresh,
+      onRefusal: onExternalActionRefusal,
+      sink: {
+        onProgress: (partial) => {
+          if (controller.signal.aborted) return;
+          updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
+        },
+        onEvents: (events) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, events)),
+        onUsage: (usage) => persistNonTerminalAgentUpdate(() => {
+          const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+          repository.updateSharedMessage(messageId, telemetry);
+          if (runId) repository.updateRun(runId, telemetry);
+        }),
+      },
+      onSteeringReady: (steer) => {
+        registerActiveReplySteering(messageId, steer);
+        void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
+      },
+    }).then((turn) => {
+      // The same provider session and PID across turns is the observable proof
+      // that no process was spawned for this message.
+      if (runId) repository.addAgentRunDiagnostic(runId, messageId, turnAgent, 'usage', { providerSessionId: turn.sessionId, providerPid: turn.pid, sessionHostPid: turn.hostPid, sessionReused: turn.reused, sessionTurnId: turn.turnId, inputTokens: turn.usage.inputTokens, cacheCreationInputTokens: turn.usage.cacheCreationInputTokens, cacheReadInputTokens: turn.usage.cacheReadInputTokens, outputTokens: turn.usage.outputTokens });
+      return { output: turn.output, agent: turnAgent, usage: turn.usage, peakContextTokens: turn.peakContextTokens, costUsd: turn.costUsd, sessionId: turn.sessionId, codexThreadId: turnAgent === 'codex' ? turn.sessionId ?? undefined : undefined, fallbackFrom: null, fallbackReason: null };
+    });
+    const sessionMessageFor = (turnAgent: SessionAgent, followUp = '', fresh = false) => !fresh && sharedSessionHasContext(target.conversationId, turnAgent)
+      ? sessionTurnMessage({
+        conversationId: target.conversationId,
+        messageId,
+        runKind: linkedRunKind === 'analysis' ? runKind : linkedRunKind,
+        persona: personaNameFor(linkedItem ?? undefined, runKind),
+        objective: turnGrounding.objective,
+        workspaceBindings,
+        permission: sessionPermissionLine(externalAuthorization),
+        userMessage: latestUserMessage,
+      }) + (followUp ? `\n\n${followUp}` : '')
+      : `${freshPrompt}${followUp ? `\n\n${followUp}` : ''}`;
+    // The status-only and external-grant resets stay: a reset session is a new
+    // provider session, started with the full prompt.
+    const sessionResetRequired = sessionMode && Boolean(storedProviderId && !resumeProviderId);
     const runCodexReply = async (codexPrompt: string, resumeThreadId?: string | null, expiredThreadPrompt?: string) =>
+      sessionMode ? sessionTurnFor('codex', sharedSessionHasContext(target.conversationId, 'codex') ? codexPrompt : `${freshPrompt}\n\n${codexPrompt}`) :
       runSteerableCodex(codexPrompt, cwd, controller.signal, (partial) => {
         if (controller.signal.aborted) return;
         updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
@@ -1911,7 +2315,9 @@ export async function replyInSharedRoom(
     });
     let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; costUsd?: number | null; sessionId?: string | null; codexThreadId?: string; peakContextTokens?: number; messages?: import('./providers/palmyra.js').PalmyraMessage[] };
     try {
-      result = agent === 'codex'
+      result = sessionMode
+      ? await sessionTurnFor(agent as SessionAgent, sessionMessageFor(agent as SessionAgent, '', sessionResetRequired), { fresh: sessionResetRequired })
+      : agent === 'codex'
       ? await runCodexReply(guardedPrompt, resumeProviderId, freshPrompt)
       : agent === 'palmyra' ? await runPalmyraReply(guardedPrompt)
       : await runAgentCommandWithFallback(agent, cwd, claudeScopeRecoveryPrompt(guardedPrompt, cwd), (partial) => {
@@ -1948,7 +2354,7 @@ export async function replyInSharedRoom(
         if (agent !== 'claude' || !linkedConversation?.claudeSessionId || !isMissingClaudeSessionError(error)) throw error;
       repository.setConversationClaudeSessionId(target.conversationId, null);
       repository.updateSharedMessage(messageId, { body: '● Claude session expired. Restarting this turn in a fresh session…' });
-      result = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {
+      result = sessionMode ? await sessionTurnFor('claude', freshPrompt, { fresh: true }) : await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {
         if (controller.signal.aborted) return;
         updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
       }, controller.signal, undefined, profile, (usage) => {
@@ -1974,6 +2380,7 @@ export async function replyInSharedRoom(
       if (result.agent === 'palmyra') {
         return runPalmyraReply(requirement, result.messages, []);
       }
+      if (result.agent === 'claude' && sessionMode) return sessionTurnFor('claude', requirement);
       if (result.agent === 'claude') {
         const full = claudeScopeRecoveryPrompt(`${freshPrompt}\n\n${requirement}`, cwd);
         return runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(requirement, cwd), (partial) => {
@@ -2014,7 +2421,7 @@ export async function replyInSharedRoom(
       const reason = 'Claude rejected Workbench orchestration metadata as a prompt-injection attempt.';
       repository.setConversationClaudeSessionId(target.conversationId, null);
       repository.updateSharedMessage(messageId, { body: `● ${reason} Restarting the same Claude turn in a clean session…` });
-      const recovered = await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {
+      const recovered = sessionMode ? await sessionTurnFor('claude', freshPrompt, { fresh: true }) : await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {
         if (controller.signal.aborted) return;
         updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
       }, controller.signal, undefined, profile, (usage) => {
@@ -2036,11 +2443,13 @@ export async function replyInSharedRoom(
     if (result.agent === 'codex') {
       const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);
       repository.setConversationCodexThreadId(target.conversationId, checkpoint ? null : result.codexThreadId ?? null);
+      if (checkpoint && sessionMode) await endSharedSession(repository, target.conversationId, 'codex');
       if (checkpoint && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile));
     }
     if (result.agent === 'claude') {
       const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile);
       repository.setConversationClaudeSessionId(target.conversationId, checkpoint ? null : result.sessionId ?? null);
+      if (checkpoint && sessionMode) await endSharedSession(repository, target.conversationId, 'claude');
       if (checkpoint && linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile));
     }
     if (result.agent === 'palmyra' && result.messages) {

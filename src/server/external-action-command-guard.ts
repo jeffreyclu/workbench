@@ -28,15 +28,20 @@ export function clearTurnCapability(guard: ExternalActionProcessGuard): void {
   writeTurnCapability(guard, {});
 }
 
+/** The capability file contents for one turn: each granted action with its expiry. */
+export function turnCapabilityFor(authorization: ExternalActionAuthorization): Record<string, string> {
+  const fallbackExpiry = new Date(Date.now() + 5 * 60_000).toISOString();
+  return authorization.granted
+    ? Object.fromEntries(authorization.capability.actionIds.map((id) => [id, authorization.capability.expiresAtByAction?.[id] ?? fallbackExpiry]))
+    : {};
+}
+
 export function createExternalActionProcessGuard(authorization: ExternalActionAuthorization): ExternalActionProcessGuard {
   const directory = mkdtempSync(join(tmpdir(), 'workbench-external-action-'));
   const capabilityFile = join(directory, 'capability.json');
   const eventFile = join(directory, 'refusals.jsonl');
   closeSync(openSync(eventFile, 'wx', 0o600));
-  const fallbackExpiry = new Date(Date.now() + 5 * 60_000).toISOString();
-  const capability = authorization.granted
-    ? Object.fromEntries(authorization.capability.actionIds.map((id) => [id, authorization.capability.expiresAtByAction?.[id] ?? fallbackExpiry]))
-    : {};
+  const capability = turnCapabilityFor(authorization);
   const guard = { capability, capabilityFile, eventFile };
   writeTurnCapability(guard, capability);
   return guard;
@@ -50,8 +55,13 @@ export function externalActionGuardEnvironment(guard?: ExternalActionProcessGuar
   };
 }
 
-export function observeExternalActionRefusals(guard: ExternalActionProcessGuard, onRefusal: (refusal: ExternalActionRefusal) => void): () => void {
-  let consumedLines = 0;
+/**
+ * `persistent` is for a guard whose directory outlives the turn (a session
+ * host's): only lines written after this call are reported, and the directory
+ * is left in place.
+ */
+export function observeExternalActionRefusals(guard: ExternalActionProcessGuard, onRefusal: (refusal: ExternalActionRefusal) => void, options: { persistent?: boolean } = {}): () => void {
+  let consumedLines = options.persistent ? readFileSync(guard.eventFile, 'utf8').split('\n').filter(Boolean).length : 0;
   const drain = () => {
     const lines = readFileSync(guard.eventFile, 'utf8').split('\n').filter(Boolean);
     for (const line of lines.slice(consumedLines)) {
@@ -64,7 +74,7 @@ export function observeExternalActionRefusals(guard: ExternalActionProcessGuard,
     watcher?.close();
     watcher = null;
     drain();
-    rmSync(dirname(guard.eventFile), { recursive: true, force: true });
+    if (!options.persistent) rmSync(dirname(guard.eventFile), { recursive: true, force: true });
   };
 }
 

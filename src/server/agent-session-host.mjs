@@ -244,7 +244,14 @@ function onClaudeEvent(event) {
     writeStatus();
   }
   if (event.type === 'result' && currentTurn) {
-    finishTurn(currentTurn.interruptRequested ? 'interrupted' : event.is_error ? 'failed' : 'completed', event.is_error ? (event.subtype ?? null) : null);
+    const turn = currentTurn;
+    turn.results += 1;
+    const settle = () => finishTurn(turn.interruptRequested ? 'interrupted' : event.is_error ? 'failed' : 'completed', event.is_error ? (event.subtype ?? null) : null);
+    // Each interjection can earn its own result. Finish on the last expected
+    // one, or after a quiet window when the CLI merged them into one reply.
+    clearTimeout(turn.settleTimer);
+    if (turn.steers < turn.results || turn.interruptRequested || event.is_error) settle();
+    else turn.settleTimer = setTimeout(() => { if (currentTurn === turn) settle(); }, timeouts.steerSettleMs ?? 1_500);
   }
 }
 
@@ -341,6 +348,9 @@ function sendTurn(request) {
     dispatched: false,
     interruptRequested: false,
     timeoutReason: null,
+    steers: 0,
+    results: 0,
+    settleTimer: null,
   };
   const startOffset = eventOffset;
   clearTimeout(idleStopTimer);
@@ -387,6 +397,7 @@ function finishTurn(turnStatus, reason) {
   const turn = currentTurn;
   if (!turn) return;
   currentTurn = null;
+  clearTimeout(turn.settleTimer);
   clearTimeout(watchdogTimer);
   clearTimeout(interruptTimer);
   watchdogTimer = null;
@@ -403,6 +414,29 @@ function finishTurn(turnStatus, reason) {
   status.currentTurnId = null;
   writeStatus();
   armIdleStop();
+}
+
+/** Adds a user message to the running turn: a stdin line for Claude, turn/steer for Codex. */
+function steer(request) {
+  const turn = currentTurn;
+  if (!turn || !turn.dispatched || turn.interruptRequested) return { accepted: false, reason: 'no_active_turn' };
+  if (typeof request.text !== 'string' || !request.text.trim()) throw hostError('bad_request', 'steer requires text.');
+  if (spec.provider === 'claude') {
+    if (!writeChild({ type: 'user', message: { role: 'user', content: request.text } })) return { accepted: false, reason: 'provider_stdin_closed' };
+    turn.steers += 1;
+    // A result already seen is no longer the last one.
+    clearTimeout(turn.settleTimer);
+    append({ source: 'host', type: 'steer_sent', turnId: turn.id, text: request.text });
+    return { accepted: true };
+  }
+  if (!turn.providerTurnId) return { accepted: false, reason: 'turn_not_started' };
+  return new Promise((resolveSteer) => {
+    rpc('turn/steer', { threadId: status.providerSessionId, expectedTurnId: turn.providerTurnId, clientUserMessageId: randomUUID(), input: [{ type: 'text', text: request.text, text_elements: [] }] }, (response) => {
+      if (response.error) return resolveSteer({ accepted: false, reason: response.error.message ?? 'turn/steer rejected' });
+      append({ source: 'host', type: 'steer_sent', turnId: turn.id, text: request.text });
+      resolveSteer({ accepted: true });
+    });
+  });
 }
 
 function interrupt(reason) {
@@ -490,6 +524,7 @@ async function handle(socket, line) {
     switch (message.type) {
       case 'status': result = { ...status, eventOffset }; break;
       case 'send-turn': result = sendTurn(message); break;
+      case 'steer': result = await steer(message); break;
       case 'interrupt': result = interrupt('requested'); break;
       case 'stop':
         respond(socket, message.id, { ok: true, result: { stopping: true } });
