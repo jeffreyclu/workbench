@@ -211,6 +211,17 @@ function splitLegacyMemoryDetail(detail: RetrievedMemoryDetail): RetrievedMemory
   return { ...detail, items: detail.items.filter((item) => item.source !== 'active_conversation'), shortTermItems: detail.items.filter((item) => item.source === 'active_conversation') };
 }
 
+/** A session turn stores no count; its detail says the agent searched memory itself. */
+function memoryAgentDrivenOf(row: Record<string, string | number | null>): boolean {
+  if (row.retrieved_memory_count !== null && row.retrieved_memory_count !== undefined) return false;
+  if (!row.retrieved_memory_detail_json) return false;
+  try {
+    return (JSON.parse(String(row.retrieved_memory_detail_json)) as RetrievedMemoryDetail).agentDriven === true;
+  } catch {
+    return false;
+  }
+}
+
 /** The badge counts what the dialog lists as retrieved, so a legacy merged row is recounted after the split. */
 function retrievedMemoryCountOf(row: Record<string, string | number | null>): number | null {
   const stored = row.retrieved_memory_count === null || row.retrieved_memory_count === undefined ? null : Number(row.retrieved_memory_count);
@@ -713,6 +724,7 @@ export class WorkItemRepository {
       queuePriority: Number(row.queue_priority ?? 0),
       interjectionStreamOffset: row.interjection_stream_offset === null || row.interjection_stream_offset === undefined ? null : Number(row.interjection_stream_offset),
       retrievedMemoryCount: retrievedMemoryCountOf(row),
+      ...(memoryAgentDrivenOf(row) ? { memoryAgentDriven: true } : {}),
       kind: row.kind ? (row.kind as SharedMessage['kind']) : null,
       ...(row.status === 'completed' && row.author !== 'jeffrey' && row.author !== 'system' && this.messageClaimsUnverified(String(row.id)) ? { unverifiedClaim: true } : {}),
     };

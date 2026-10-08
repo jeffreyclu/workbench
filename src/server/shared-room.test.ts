@@ -13,14 +13,22 @@ import { personaBody } from './personas.js';
 import { ensureSession, readAgentSessionStatus, sessionExternalActionGuard, submitTurn } from './agent-session.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
 import { captureGateState, CAPTURE_GATE_PROMPT } from './capture-gate.js';
-import { observedEventsFromSessionLog, accountProfileForSharedReply, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { observedEventsFromSessionLog, accountProfileForSharedReply, isFanOutReply, persistentSessionsEnabled, usesPersistentSession, usesTaskRunSession, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
 const originalDatabasePath = process.env.DATABASE_PATH;
+const originalPersistentSessions = process.env.WORKBENCH_PERSISTENT_SESSIONS;
 const temporaryDirectories: string[] = [];
 
+// Sessions are on by default; tests of the per-run path opt out explicitly.
+beforeEach(() => {
+  process.env.WORKBENCH_PERSISTENT_SESSIONS = '0';
+});
+
 afterEach(() => {
+  if (originalPersistentSessions === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+  else process.env.WORKBENCH_PERSISTENT_SESSIONS = originalPersistentSessions;
   resetPoolForTest();
   process.env.PATH = originalPath;
   if (originalProviderFirstActivityTimeout === undefined) delete process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -1444,6 +1452,89 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(finished.body).toMatch(/^reply 1 from \d+$/);
     expect(spawns()).toHaveLength(1);
   }, 30_000);
+
+  it('is on unless the flag is exactly 0', () => {
+    const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    try {
+      delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      expect(persistentSessionsEnabled()).toBe(true);
+      process.env.WORKBENCH_PERSISTENT_SESSIONS = '1';
+      expect(persistentSessionsEnabled()).toBe(true);
+      process.env.WORKBENCH_PERSISTENT_SESSIONS = '';
+      expect(persistentSessionsEnabled()).toBe(true);
+      process.env.WORKBENCH_PERSISTENT_SESSIONS = '0';
+      expect(persistentSessionsEnabled()).toBe(false);
+      expect(usesPersistentSession('claude', 'analysis')).toBe(false);
+      expect(usesTaskRunSession('claude', 'execute')).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      else process.env.WORKBENCH_PERSISTENT_SESSIONS = saved;
+    }
+  });
+
+  it('keeps fan-out replies on per-run processes while a single-agent reply uses the session', () => {
+    const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    try {
+      const conversation = repository.createConversation('Room');
+      const both = repository.createSharedMessage('jeffrey', 'compare', 'completed', conversation.id, [], 'both');
+      const claudeReply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'both', null, null, both.id);
+      const codexReply = repository.createSharedMessage('codex', '', 'running', conversation.id, [], 'both', null, null, both.id);
+      const single = repository.createSharedMessage('jeffrey', 'just claude', 'completed', conversation.id, [], 'claude');
+      const singleReply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude', null, null, single.id);
+      expect(isFanOutReply(repository, claudeReply.id)).toBe(true);
+      expect(isFanOutReply(repository, codexReply.id)).toBe(true);
+      expect(isFanOutReply(repository, singleReply.id)).toBe(false);
+      expect(usesPersistentSession('claude', 'analysis', isFanOutReply(repository, claudeReply.id))).toBe(false);
+      expect(usesTaskRunSession('codex', 'execute', isFanOutReply(repository, codexReply.id))).toBe(false);
+      expect(usesPersistentSession('claude', 'analysis', isFanOutReply(repository, singleReply.id))).toBe(true);
+      expect(usesTaskRunSession('claude', 'execute', isFanOutReply(repository, singleReply.id))).toBe(true);
+    } finally {
+      if (saved !== undefined) process.env.WORKBENCH_PERSISTENT_SESSIONS = saved;
+    }
+  });
+
+  it('falls back to a per-run process when the session turn cannot run', async () => {
+    const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    // The session host and its one restart die at once; the third spawn is the per-run process and answers.
+    const countFile = join(root, 'spawn-count');
+    const failFirst = join(root, 'fail-first-claude.mjs');
+    writeFileSync(failFirst, `
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+// The turn-grounding classifier also runs this binary without --input-format; only interactive spawns count.
+if (!process.argv.includes('--input-format')) { console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '{}' })); process.exit(0); }
+const count = existsSync(${JSON.stringify(countFile)}) ? Number(readFileSync(${JSON.stringify(countFile)}, 'utf8')) : 0;
+writeFileSync(${JSON.stringify(countFile)}, String(count + 1));
+if (count < 2) { console.error('simulated session host failure'); process.exit(1); }
+const emit = (event) => process.stdout.write(JSON.stringify({ ...event, session_id: 'per-run-session' }) + '\\n');
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') { emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } }); return; }
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'per-run reply' }] } });
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'per-run reply' });
+  process.exit(0);
+});
+`);
+    const dir = fakeAgentDirectory('exit 1', `exec "${process.execPath}" "${failFirst}" "$@"`).directory;
+    process.env.CLAUDE_BIN = join(dir, 'claude');
+    try {
+      const conversation = repository.createConversation('Room');
+      repository.createSharedMessage('jeffrey', 'say one', 'completed', conversation.id, [], 'claude');
+      const reply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+      await replyInSharedRoom(repository, 'claude', reply.id);
+      const finished = repository.getSharedMessageById(reply.id)!;
+      expect(finished.error + finished.body).toContain('per-run reply');
+      expect(finished.status).toBe('completed');
+      expect(Number(readFileSync(countFile, 'utf8'))).toBe(3);
+      expect(repository.listAgentStreamEvents(conversation.id).some((event) => event.detail.includes('continuing this turn on a per-run claude process'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      if (saved === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      else process.env.WORKBENCH_PERSISTENT_SESSIONS = saved;
+    }
+  }, 60_000);
 
   it('injects no memory bodies in a session turn and records the memory as agent-driven', async () => {
     const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;

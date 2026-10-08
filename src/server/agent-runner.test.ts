@@ -30,9 +30,17 @@ const originalProviderIdleActivityTimeout = process.env.WORKBENCH_PROVIDER_IDLE_
 const originalClaudeResponseSettle = process.env.WORKBENCH_CLAUDE_RESPONSE_SETTLE_MS;
 const originalCodexBin = process.env.CODEX_BIN;
 const originalClaudeBin = process.env.CLAUDE_BIN;
+const originalPersistentSessions = process.env.WORKBENCH_PERSISTENT_SESSIONS;
 const temporaryDirectories: string[] = [];
 
+// Sessions are on by default; tests of the per-run path opt out explicitly.
+beforeEach(() => {
+  process.env.WORKBENCH_PERSISTENT_SESSIONS = '0';
+});
+
 afterEach(() => {
+  if (originalPersistentSessions === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+  else process.env.WORKBENCH_PERSISTENT_SESSIONS = originalPersistentSessions;
   process.env.PATH = originalPath;
   if (originalProviderFirstActivityTimeout === undefined) delete process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
   else process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS = originalProviderFirstActivityTimeout;
@@ -1882,7 +1890,49 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(usesTaskRunSession('claude', 'review')).toBe(false);
     expect(usesTaskRunSession('claude', 'analysis')).toBe(false);
     expect(usesTaskRunSession('palmyra', 'execute')).toBe(false);
-    delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    expect(usesTaskRunSession('claude', 'execute', true)).toBe(false);
+    process.env.WORKBENCH_PERSISTENT_SESSIONS = '0';
     expect(usesTaskRunSession('claude', 'execute')).toBe(false);
+    delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    expect(usesTaskRunSession('claude', 'execute')).toBe(true);
   });
+
+  it('keeps a fan-out run on a per-run process', async () => {
+    const conversation = repository.createConversation('Task');
+    const request = repository.createSharedMessage('jeffrey', 'compare', 'completed', conversation.id, [], 'both');
+    const reply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'both', null, null, request.id);
+    const task = repository.create({ title: 'Fan-out', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: workspace('tree-fan'), dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Implement it.', conversation.id, reply.id);
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+    expect(repository.getRun(run.id)!.status).toBe('completed');
+    expect(existsSync(join(root, 'agent-sessions', conversation.id))).toBe(false);
+  }, 30_000);
+
+  it('falls back to a per-run process when the session cannot start', async () => {
+    const countFile = join(root, 'spawn-count');
+    const failFirst = join(root, 'fail-first-claude.mjs');
+    writeFileSync(failFirst, `
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const count = existsSync(${JSON.stringify(countFile)}) ? Number(readFileSync(${JSON.stringify(countFile)}, 'utf8')) : 0;
+writeFileSync(${JSON.stringify(countFile)}, String(count + 1));
+if (count < 1) { console.error('simulated session host failure'); process.exit(1); }
+const emit = (event) => process.stdout.write(JSON.stringify({ ...event, session_id: 'per-run-session' }) + '\\n');
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') { emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } }); return; }
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'per-run reply' }] } });
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'per-run reply' });
+  process.exit(0);
+});
+`);
+    const fakeDirectory = sharedFakeAgentDirectory('exit 1', `exec "${process.execPath}" "${failFirst}" "$@"`).directory;
+    temporaryDirectories.push(fakeDirectory);
+    process.env.CLAUDE_BIN = join(fakeDirectory, 'claude');
+    const conversation = repository.createConversation('Task');
+    const finished = await runIn(conversation.id, workspace('tree-fallback'), 'Implement it.');
+    expect(finished.output).toContain('per-run reply');
+    expect(finished.status).toBe('completed');
+    expect(Number(readFileSync(countFile, 'utf8'))).toBe(2);
+  }, 30_000);
 });

@@ -13,7 +13,7 @@ import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
 import { createApplicationSocketHandler } from './socket-application.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
 import { reattachAll as reattachAgentSessions } from './agent-session.js';
-import { recoverSharedSessionTurns } from './shared-room.js';
+import { persistentSessionsEnabled, recoverSharedSessionTurns } from './shared-room.js';
 import { shutdownTurnGroundingClassifier, warmTurnGroundingClassifier } from './turn-grounding-ai.js';
 import { configureRuntimeRetirement } from './runtime-retirement.js';
 import { shutdownMemorySemanticWorker } from './memory-semantic-worker.js';
@@ -72,6 +72,9 @@ const server = createServer(app);
 attachRealtimeServer(server, { handleRequest: createApplicationSocketHandler(app) });
 server.listen(port, () => {
   console.log(`Workbench API listening on http://localhost:${port}`);
+  console.log(persistentSessionsEnabled()
+    ? 'Persistent sessions: ON (Claude and Codex room replies run as turns on one live session per conversation; set WORKBENCH_PERSISTENT_SESSIONS=0 to opt out)'
+    : 'Persistent sessions: OFF (WORKBENCH_PERSISTENT_SESSIONS=0; every reply starts its own CLI process)');
   requestMemoryIndexRefresh();
 });
 

@@ -1312,6 +1312,8 @@ export interface SharedMessage {
   interjectionStreamOffset?: number | null;
   /** Number of memory matches retrieved through hybrid search and graph expansion, or null when retrieval did not run. */
   retrievedMemoryCount: number | null;
+  /** True when a persistent session searched memory itself, so Workbench injected none and the count is not a miss. */
+  memoryAgentDriven?: boolean;
   /** Execution type this reply was dispatched under (research/analysis/strategy/execute/review/bugfix), set for both linked and standalone conversations. Null for messages created before this field existed, or for non-agent messages (e.g. jeffrey's own turns, system notices). */
   kind?: z.infer<typeof runKindSchema> | null;
   /** This reply claimed completion but its run observed no verification command. */

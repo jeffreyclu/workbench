@@ -112,6 +112,10 @@ describe('memoryBadgePresentation', () => {
     });
   });
 
+  it('says the agent searched memory itself for a persistent-session reply', () => {
+    expect(memoryBadgePresentation(null, true)).toEqual({ label: '—', title: 'Agent searched memory itself', disabled: false });
+  });
+
   it('keeps long-term retrieval counts inspectable, including a zero-result query', () => {
     expect(memoryBadgePresentation(0)).toEqual(expect.objectContaining({ label: '0', disabled: false }));
     expect(memoryBadgePresentation(3)).toEqual(expect.objectContaining({ label: '3', disabled: false }));

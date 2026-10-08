@@ -205,7 +205,8 @@ export const RunElapsedTimer = memo(function RunElapsedTimer({ status, createdAt
   return <span className={`run-elapsed-timer${running ? ' running' : ''}`} title={running ? `Running for ${label}` : `Run took ${label}`} aria-label={running ? `Elapsed ${label}` : `Run took ${label}`}><Timer size={11} /> {label}</span>;
 });
 
-export function memoryBadgePresentation(retrievedMemoryCount: number | null): { label: string; title: string; disabled: boolean } {
+export function memoryBadgePresentation(retrievedMemoryCount: number | null, agentDriven = false): { label: string; title: string; disabled: boolean } {
+  if (agentDriven) return { label: '—', title: 'Agent searched memory itself', disabled: false };
   if (typeof retrievedMemoryCount === 'number') {
     return {
       label: String(retrievedMemoryCount),
@@ -1501,7 +1502,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                 ? splitBodyAtInterjections(message.body, liveInterjections)
                 : null;
               const splitIntoBubbles = (segments?.length ?? 0) > 1;
-              const memoryBadge = memoryBadgePresentation(message.retrievedMemoryCount);
+              const memoryBadge = memoryBadgePresentation(message.retrievedMemoryCount, message.memoryAgentDriven);
 
               const renderHeader = (showSummaryBadges: boolean) => (
                 <header><strong>{message.author === 'jeffrey' ? 'You' : message.author}</strong><time>{new Date(message.createdAt).toLocaleTimeString()}</time>

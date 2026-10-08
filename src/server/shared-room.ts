@@ -1568,30 +1568,39 @@ export async function runSharedBackgroundJob(
 }
 
 // ---- Persistent provider sessions ------------------------------------------
-// With WORKBENCH_PERSISTENT_SESSIONS=1 a Claude or Codex room reply is a turn on
-// one long-lived provider process per conversation (agent-session.ts) instead
-// of a new CLI per message. Unset, the per-run path below is untouched.
+// A Claude or Codex room reply is a turn on one long-lived provider process per
+// conversation (agent-session.ts) instead of a new CLI per message. On by
+// default; WORKBENCH_PERSISTENT_SESSIONS=0 is the explicit opt-out and keeps the
+// per-run path below as the rollback.
 
-/** True when Claude and Codex room replies go through the live session. */
+/** True unless WORKBENCH_PERSISTENT_SESSIONS is exactly '0'. The one reader of the flag. */
 export function persistentSessionsEnabled(): boolean {
-  return process.env.WORKBENCH_PERSISTENT_SESSIONS === '1';
+  return process.env.WORKBENCH_PERSISTENT_SESSIONS !== '0';
 }
 
 /**
  * Review turns stay on a fresh per-run process: a reviewer that shared the
  * writer's context would inherit the writer's assumptions
- * (workbench-operating-practices.md#5).
+ * (workbench-operating-practices.md#5). So do fan-out replies, where Claude and
+ * Codex answer one message side by side and each needs a process of its own.
  */
-export function usesPersistentSession(agent: AgentRun['agent'], kind: AgentRun['kind']): boolean {
-  return persistentSessionsEnabled() && (agent === 'claude' || agent === 'codex') && kind !== 'review';
+export function usesPersistentSession(agent: AgentRun['agent'], kind: AgentRun['kind'], fanOut = false): boolean {
+  return persistentSessionsEnabled() && !fanOut && (agent === 'claude' || agent === 'codex') && kind !== 'review';
+}
+
+/** True when the reply belongs to a message dispatched to both agents. */
+export function isFanOutReply(repository: WorkItemRepository, messageId: string | null | undefined): boolean {
+  const reply = messageId ? repository.getSharedMessageById(messageId) : null;
+  const request = reply?.dispatchGroupId ? repository.getSharedMessageById(reply.dispatchGroupId) : null;
+  return request?.dispatchTarget === 'both';
 }
 
 /**
  * Task runs (execute, bugfix, research) linked to a conversation reuse that
  * conversation's session. Review and fan-out kinds keep a process of their own.
  */
-export function usesTaskRunSession(agent: AgentRun['agent'], kind: AgentRun['kind']): boolean {
-  return usesPersistentSession(agent, kind) && (kind === 'execute' || kind === 'bugfix' || kind === 'research');
+export function usesTaskRunSession(agent: AgentRun['agent'], kind: AgentRun['kind'], fanOut = false): boolean {
+  return usesPersistentSession(agent, kind, fanOut) && (kind === 'execute' || kind === 'bugfix' || kind === 'research');
 }
 
 export type SessionAgent = 'claude' | 'codex';
@@ -2157,7 +2166,7 @@ export async function replyInSharedRoom(
     });
     // A persistent session calls recall_context itself, so Workbench injects no
     // memory bodies for it. A per-run agent still gets the prefetch.
-    const sessionMode = usesPersistentSession(agent, runKind);
+    let sessionMode = usesPersistentSession(agent, runKind, isPairedReply || isFanOutReply(repository, messageId));
     const usableMemorySnapshot = memorySnapshot?.deferredToSession ? undefined : memorySnapshot;
     const memoryQuery = usableMemorySnapshot?.query ?? automaticMemoryQuery;
     const memoryPlan = durableMemoryRetrievalPlan(latestUserMessage);
@@ -2402,10 +2411,9 @@ export async function replyInSharedRoom(
       },
     });
     let result: { output: string; agent: AgentRun['agent']; usage: AgentUsage; fallbackFrom: AgentRun['agent'] | null; fallbackReason: string | null; costUsd?: number | null; sessionId?: string | null; codexThreadId?: string; peakContextTokens?: number; messages?: import('./providers/palmyra.js').PalmyraMessage[] };
-    try {
-      result = sessionMode
-      ? await sessionTurnFor(agent as SessionAgent, sessionMessageFor(agent as SessionAgent, '', sessionResetRequired), { fresh: sessionResetRequired })
-      : agent === 'codex'
+    // The existing per-run path. A session turn that cannot run falls back to it
+    // so the Claude-to-Codex capacity rules below still apply.
+    const runPerRunReply = async (): Promise<typeof result> => agent === 'codex'
       ? await runCodexReply(guardedPrompt, resumeProviderId, freshPrompt)
       : agent === 'palmyra' ? await runPalmyraReply(guardedPrompt)
       : await runAgentCommandWithFallback(agent, cwd, claudeScopeRecoveryPrompt(guardedPrompt, cwd), (partial) => {
@@ -2431,6 +2439,29 @@ export async function replyInSharedRoom(
       void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
     } : undefined,
     resumeProviderId ?? undefined, true, false, undefined, claudeScopeRecoveryPrompt(freshPrompt, cwd), externalActionGuard);
+    try {
+      if (sessionMode) {
+        try {
+          result = await sessionTurnFor(agent as SessionAgent, sessionMessageFor(agent as SessionAgent, '', sessionResetRequired), { fresh: sessionResetRequired });
+        } catch (sessionError) {
+          // A cancel is not a failure. Anything else (host cannot start, usage
+          // limit, safeguard refusal) leaves the turn to the per-run path.
+          if (controller.signal.aborted) throw sessionError;
+          const sessionReason = sessionError instanceof Error ? sessionError.message : String(sessionError);
+          console.error('[shared-room] persistent session turn failed; falling back to a per-run process', sessionError);
+          await endSharedSession(repository, target.conversationId, agent as SessionAgent).catch(() => { /* The host may already be gone. */ });
+          sessionMode = false;
+          externalActionGuard = createExternalActionProcessGuard(externalAuthorization);
+          stopExternalActionObserver = observeExternalActionRefusals(externalActionGuard, onExternalActionRefusal);
+          if (runId && promptSize.sessionMode === 'persistent') {
+            promptSize.sessionMode = 'per_run';
+            promptSize.sessionStartup = false;
+            repository.updateRun(runId, { promptSize });
+          }
+          addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, [{ kind: 'decision', detail: `Persistent session turn failed (${sessionReason.slice(0, 300)}); continuing this turn on a per-run ${agent} process.` }]);
+          result = await runPerRunReply();
+        }
+      } else result = await runPerRunReply();
     } catch (error) {
       if (agent === 'claude' && !isPairedReply && isAgentCapacityError(error)) {
         const reason = error instanceof Error ? error.message : String(error);
