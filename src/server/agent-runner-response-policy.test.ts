@@ -124,7 +124,7 @@ describe('task-run final response supervision', () => {
       expect(completed?.output).not.toContain('review-ledger');
       expect(completed?.output).toContain('### Pass 5');
       const verdicts = repository.listDiffHunkReviews({ workItemId: task.id }, diff.revision);
-      expect(verdicts.find((row) => row.filePath === 'auth.ts')).toMatchObject({ state: 'needs_changes', note: expect.stringMatching(/^Agent review \(codex, run [0-9a-f-]{8}\):\nPass 5 Blocking: D\d+ lets a refused request through\.$/) });
+      expect(verdicts.find((row) => row.filePath === 'auth.ts')).toMatchObject({ state: 'needs_changes', note: expect.stringMatching(/^Agent review \(codex, run [0-9a-f-]{8}, \d{4}-\d{2}-\d{2}T[0-9:.]+Z\):\nPass 5 Blocking: D\d+ lets a refused request through\.$/) });
       expect(verdicts.find((row) => row.filePath === 'format.ts')).toMatchObject({ state: 'reviewed', note: null });
       const activity = repository.listActivity(task.id).map((entry) => entry.body);
       expect(activity).toContain('Review harness v1: 2 Review Director decision(s) × 5 passes required; 0 settled by proof.');
