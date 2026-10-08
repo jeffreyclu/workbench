@@ -4,6 +4,7 @@ import { MarkdownComposer } from '../../components/markdown/markdown-composer.js
 import { DiscoveryCardSkeleton } from '../../components/skeleton/skeleton';
 import { FreshnessControl } from '../../components/freshness-control';
 import { Tabs } from '../../components/tabs/tabs';
+import { ConsolidationProposalCard, ConsolidationProposalSkeleton } from './consolidation-card';
 import { useDiscoveryCard, useDiscoveryInbox, useDiscoveryNav } from './hooks';
 
 // b03c7866-da86-4a10-a5dd-c81ce12bcaa8 LEGACY-AFFECTING: Each reviewed card now derives restore pending state from its own mutation variables, so other restore controls remain available.
@@ -15,7 +16,7 @@ export function DiscoveryNav({ active, onClick }: { active: boolean; onClick: ()
 
 export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (id: string) => void; onOpenStack: () => void }) {
   // 81bb6f51-57d4-4778-aec4-8fb22e3ba617 LEGACY-AFFECTING: Discovery’s header now exposes inbox freshness and refetches the visible inbox and merge targets.
-  const { inboxView, setInboxView, selected, setSelected, inbox, activeTasks, scan, resolveCandidate, bulkResolve, restore, resolveMerge } = useDiscoveryInbox();
+  const { inboxView, setInboxView, selected, setSelected, inbox, activeTasks, scan, resolveCandidate, bulkResolve, restore, resolveMerge, resolveConsolidation } = useDiscoveryInbox();
   const pendingActionFor = (candidateId: string) => {
     if (resolveCandidate.isPending && resolveCandidate.variables?.candidate.id === candidateId) return resolveCandidate.variables.action;
     if (resolveMerge.isPending && resolveMerge.variables?.id === candidateId) return 'merge' as const;
@@ -42,6 +43,12 @@ export function DiscoveryInboxView({ onOpenTask, onOpenStack }: { onOpenTask: (i
       {lastRun?.errors.map((error) => <span className="error-message" key={error}>{error}</span>)}
     </div>
     {inbox.data?.queueProposal && <div className="morning-proposal"><span><Sparkles size={15} /><strong>Morning stack proposal ready</strong><small>{inbox.data.queueProposal.rationale}</small></span><button className="button primary compact" onClick={onOpenStack}>Review reorder</button></div>}
+    {inbox.isLoading && <ConsolidationProposalSkeleton />}
+    {inbox.data?.consolidationProposal && <ConsolidationProposalCard
+      proposal={inbox.data.consolidationProposal}
+      pendingResolution={resolveConsolidation.isPending ? resolveConsolidation.variables.resolution : null}
+      onResolve={(resolution) => resolveConsolidation.mutate({ id: inbox.data!.consolidationProposal!.id, resolution })}
+    />}
     <Tabs ariaLabel="Discovery view" className="discovery-tabs" selected={inboxView} onSelect={(view) => { setInboxView(view); setSelected(new Set()); }} items={[
       { value: 'pending', label: <>Pending <span>{inbox.data?.pendingCount ?? '…'}</span></> },
       { value: 'reviewed', label: <>Reviewed <span>{inbox.data?.reviewedCount ?? '…'}</span></> },

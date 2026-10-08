@@ -177,3 +177,36 @@ describe('DiscoveryInboxView restore', () => {
     expect(notifications).toHaveTextContent('Discovery restored to inbox.');
   });
 });
+
+describe('DiscoveryInboxView consolidation proposal', () => {
+  it('mounts the card with only actionable rows and resolves it through the inbox', async () => {
+    const consolidationProposal: NonNullable<DiscoveryInbox['consolidationProposal']> = {
+      id: 'p1', status: 'pending', createdAt: '2026-10-08T00:00:00.000Z', resolvedAt: null, applyResults: null,
+      items: [
+        ...Array.from({ length: 447 }, (_, index) => ({ provenanceId: `pinned_message:k${index}`, provenance: { source: 'pinned_message' as const, id: `k${index}` }, verdict: 'keep' as const, coveredBy: null })),
+        ...Array.from({ length: 15 }, (_, index) => ({ provenanceId: `run_learning:a${index}#0`, provenance: { source: 'run_learning' as const, id: `a${index}`, learningIndex: 0 }, verdict: 'archive_then_remove' as const, reason: 'Stale.' })),
+      ],
+    };
+    const resolutions: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/discovery?view=pending')) return new Response(JSON.stringify({ ...inbox, consolidationProposal }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [], nextCursor: null, totalCount: 0, proposal: null }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/consolidation/proposals/')) {
+        resolutions.push(url);
+        return new Response(JSON.stringify({ proposal: { ...consolidationProposal, status: 'accepted' } }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DiscoveryInboxView onOpenTask={vi.fn()} onOpenStack={vi.fn()} /></QueryClientProvider>);
+
+    const card = await screen.findByRole('region', { name: 'Consolidation proposal' });
+    expect(card).toHaveTextContent('462 entries reviewed: 15 to archive, 0 to promote, 447 unchanged');
+    expect(within(card).getAllByRole('listitem')).toHaveLength(15);
+    expect(within(card).getByText('447 unchanged (keep)')).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole('button', { name: 'Accept: archive 15, promote 0' }));
+    await waitFor(() => expect(resolutions).toEqual(['/api/consolidation/proposals/p1/accepted']));
+  });
+});
