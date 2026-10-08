@@ -150,11 +150,20 @@ export function memoryRetrievalEntries(evidence: DurableMemoryEvidence[]): Array
   return evidence.flatMap(({ entryId, source }) => entryId ? [{ entryId, source }] : []);
 }
 
+/**
+ * `[file.md#N]` for an entry whose source id ends in a numbered lesson, whatever its source:
+ * `memory_entry:lessons.md#4` and `doc:workbench-docs:shared-memory/working-with-jeffrey.md#12` both cite their file.
+ */
+export function memoryCitation(entryId: string | undefined): string | undefined {
+  const match = /([^/:]+#\d+)$/.exec(entryId ?? '');
+  return match ? `[${match[1]}]` : undefined;
+}
+
 export function durableMemoryPrompt(evidence: DurableMemoryEvidence[], budget = 4_000, inlineBodies = true): string {
   if (!evidence.length) return '';
   if (!inlineBodies) {
     const pointers = evidence.slice(0, 8).map((item) => {
-      const citationId = (item.entryId ?? `${item.source}:${item.createdAt}`).replace(/\s+/g, ' ').slice(0, 42);
+      const citationId = memoryCitation(item.entryId) ?? (item.entryId ?? `${item.source}:${item.createdAt}`).replace(/\s+/g, ' ').slice(0, 42);
       const title = item.title.replace(/\s+/g, ' ').trim().slice(0, 45);
       const score = Number.isFinite(item.score) ? item.score.toFixed(2) : '0.00';
       return `- ${citationId} | ${title} | ${score}`;
@@ -179,8 +188,8 @@ export function durableMemoryPrompt(evidence: DurableMemoryEvidence[], budget = 
 /** Splits a reply's memory into searched evidence (counted) and always-injected short-term items (listed separately). */
 export function retrievedMemoryDetailFor(query: string, evidence: DurableMemoryEvidence[], shortTermItems: Array<{ source: string; title: string; body: string; createdAt: string; retrievalPath?: string[] }>): { count: number; detail: RetrievedMemoryDetail } {
   const items = evidence.map(({ entryId, source, title, body, createdAt, retrievalPath }) => {
-    const citation = source === 'memory_entry' ? /^memory_entry:(.+#\d+)$/.exec(entryId ?? '')?.[1] : undefined;
-    return { source, title, body, createdAt, retrievalPath, ...(citation ? { citation: `[${citation}]` } : {}) };
+    const citation = memoryCitation(entryId);
+    return { source, title, body, createdAt, retrievalPath, ...(citation ? { citation } : {}) };
   });
   return { count: items.length, detail: { query, items, shortTermItems } };
 }

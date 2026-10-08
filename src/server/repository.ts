@@ -205,6 +205,24 @@ export class WorkItemVersionConflictError extends Error {
   }
 }
 
+/** Rows stored before the split merged open-conversation context into items. */
+function splitLegacyMemoryDetail(detail: RetrievedMemoryDetail): RetrievedMemoryDetail {
+  if (detail.shortTermItems) return detail;
+  return { ...detail, items: detail.items.filter((item) => item.source !== 'active_conversation'), shortTermItems: detail.items.filter((item) => item.source === 'active_conversation') };
+}
+
+/** The badge counts what the dialog lists as retrieved, so a legacy merged row is recounted after the split. */
+function retrievedMemoryCountOf(row: Record<string, string | number | null>): number | null {
+  const stored = row.retrieved_memory_count === null || row.retrieved_memory_count === undefined ? null : Number(row.retrieved_memory_count);
+  if (stored === null || !row.retrieved_memory_detail_json) return stored;
+  try {
+    const detail = JSON.parse(String(row.retrieved_memory_detail_json)) as RetrievedMemoryDetail;
+    return detail.shortTermItems ? stored : splitLegacyMemoryDetail(detail).items.length;
+  } catch {
+    return stored;
+  }
+}
+
 export class WorkItemRepository {
   private readonly unitOfWork: UnitOfWork;
   private readonly telemetry: TelemetryRepository;
@@ -694,7 +712,7 @@ export class WorkItemRepository {
       nextAttemptAt: row.next_attempt_at ? String(row.next_attempt_at) : null,
       queuePriority: Number(row.queue_priority ?? 0),
       interjectionStreamOffset: row.interjection_stream_offset === null || row.interjection_stream_offset === undefined ? null : Number(row.interjection_stream_offset),
-      retrievedMemoryCount: row.retrieved_memory_count === null || row.retrieved_memory_count === undefined ? null : Number(row.retrieved_memory_count),
+      retrievedMemoryCount: retrievedMemoryCountOf(row),
       kind: row.kind ? (row.kind as SharedMessage['kind']) : null,
       ...(row.status === 'completed' && row.author !== 'jeffrey' && row.author !== 'system' && this.messageClaimsUnverified(String(row.id)) ? { unverifiedClaim: true } : {}),
     };
@@ -1391,10 +1409,7 @@ export class WorkItemRepository {
   getRetrievedMemoryDetail(id: string): RetrievedMemoryDetail | null {
     const row = this.database.prepare('SELECT retrieved_memory_detail_json FROM shared_messages WHERE id = ?').get(id) as { retrieved_memory_detail_json: string | null } | undefined;
     if (!row?.retrieved_memory_detail_json) return null;
-    const detail = JSON.parse(row.retrieved_memory_detail_json) as RetrievedMemoryDetail;
-    if (detail.shortTermItems) return detail;
-    // Rows stored before the split merged open-conversation context into items.
-    return { ...detail, items: detail.items.filter((item) => item.source !== 'active_conversation'), shortTermItems: detail.items.filter((item) => item.source === 'active_conversation') };
+    return splitLegacyMemoryDetail(JSON.parse(row.retrieved_memory_detail_json) as RetrievedMemoryDetail);
   }
 
   /**

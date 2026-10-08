@@ -432,6 +432,25 @@ describe('WorkItemRepository', () => {
     expect(repository.getRunInsights('all').completedRuns).toBe(2);
   });
 
+  it('counts a legacy merged memory row by its retrieved items, not the stored merged total', () => {
+    const conversation = repository.createConversation('Legacy memory badge');
+    const reply = repository.createSharedMessage('claude', 'Answer.', 'completed', conversation.id);
+    const item = (source: string, title: string) => ({ source, title, body: title, createdAt: '2026-09-01T12:00:00.000Z' });
+    const items = [
+      ...Array.from({ length: 8 }, (_, index) => item('doc', `Lesson ${index}`)),
+      ...Array.from({ length: 5 }, (_, index) => item('active_conversation', `Open ${index}`)),
+    ];
+    repository.database.prepare('UPDATE shared_messages SET retrieved_memory_count = 13, retrieved_memory_detail_json = ? WHERE id = ?')
+      .run(JSON.stringify({ query: 'legacy', items }), reply.id);
+
+    expect(repository.getSharedMessageById(reply.id)?.retrievedMemoryCount).toBe(8);
+    expect(repository.listAllSharedMessages(conversation.id).find((message) => message.id === reply.id)?.retrievedMemoryCount).toBe(8);
+    expect(repository.getRetrievedMemoryDetail(reply.id)?.items).toHaveLength(8);
+    expect(repository.getRetrievedMemoryDetail(reply.id)?.shortTermItems).toHaveLength(5);
+    const stored = repository.database.prepare('SELECT retrieved_memory_count FROM shared_messages WHERE id = ?').get(reply.id) as { retrieved_memory_count: number };
+    expect(stored.retrieved_memory_count).toBe(13);
+  });
+
   it('omits legacy token rows without a cache split instead of inventing fresh input', () => {
     const item = repository.create({ title: 'Legacy telemetry', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const legacy = repository.createRun(item.id, 'analysis', 'codex', 'codex', 'Legacy run.');

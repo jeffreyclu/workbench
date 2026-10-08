@@ -119,6 +119,12 @@ describe('durable memory prefetch', () => {
     expect(prompt.length).toBeLessThan(1_000);
   });
 
+  it('cites numbered doc lessons by file and entry in the pointer list', () => {
+    const prompt = durableMemoryPrompt([evidence({ source: 'doc', entryId: 'doc:workbench-docs:shared-memory/working-with-jeffrey.md#12', title: 'Lesson' })], 1_000, false);
+
+    expect(prompt).toContain('- [working-with-jeffrey.md#12] | Lesson |');
+  });
+
   it('keeps personal-memory bodies inlined with explicit precedence and no repeat-recall loop', () => {
     const prompt = durableMemoryPrompt([evidence()], 32_000, true);
     expect(prompt).toContain('Retrieved durable context');
@@ -163,12 +169,16 @@ describe('retrievedMemoryDetailFor', () => {
     const { count, detail } = retrievedMemoryDetailFor('password grant', [
       evidence({ source: 'memory_entry', entryId: 'memory_entry:lessons.md#4' }),
       evidence({ entryId: 'doc:readme' }),
+      evidence({ source: 'doc', entryId: 'doc:workbench-docs:shared-memory/working-with-jeffrey.md#12' }),
+      evidence({ source: 'doc', entryId: 'doc:workbench-local-documents:knowledge/team.md#3' }),
     ], shortTerm);
 
-    expect(count).toBe(2);
-    expect(detail.items).toHaveLength(2);
+    expect(count).toBe(4);
+    expect(detail.items).toHaveLength(4);
     expect(detail.items[0]).toMatchObject({ citation: '[lessons.md#4]' });
     expect(detail.items[1]).not.toHaveProperty('citation');
+    expect(detail.items[2]).toMatchObject({ citation: '[working-with-jeffrey.md#12]' });
+    expect(detail.items[3]).toMatchObject({ citation: '[team.md#3]' });
     expect(detail.shortTermItems).toEqual(shortTerm);
     expect(detail.query).toBe('password grant');
   });
