@@ -60,6 +60,7 @@ export function CreateTask({ onClose, onCreated, onBackgroundError, initialState
       await queryClient.invalidateQueries({ queryKey: ['work-items'] });
       onCreated(item);
     },
+    onError: (error) => toastError('Could not add that task.', error),
   });
   const searchedSources: BrokerSourceId[] = ['linear', 'github', 'atlassian', 'grafana', 'slack'];
   const sourceSearches = useQueries({

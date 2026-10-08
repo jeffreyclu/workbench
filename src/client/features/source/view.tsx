@@ -108,6 +108,7 @@ function SourceConnectionCard({ connection }: { connection: BrokerConnection }) 
       if (provider === 'grafana') setOpen(false);
       if (authorizationUrl && usesManagedAuthorization(provider)) authorization.startAuthorization(authorizationUrl);
     },
+    onError: (error) => toastError(`Could not connect ${connection.name}.`, error),
   });
   useEffect(() => {
     const receiveOAuth = (event: MessageEvent) => {

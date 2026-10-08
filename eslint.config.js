@@ -2,6 +2,7 @@ import js from '@eslint/js';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
+import workbench from './eslint-rules/index.js';
 
 export default tseslint.config(
   { ignores: ['.workbench-runtime', 'dist', 'data'] },
@@ -25,11 +26,14 @@ export default tseslint.config(
   {
     files: ['src/client/**/*.{ts,tsx}'],
     plugins: {
+      workbench,
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      'workbench/mutation-needs-error-handling': 'error',
+      'workbench/no-spinner-in-loading-branch': 'warn',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
     },
   },

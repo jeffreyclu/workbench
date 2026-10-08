@@ -12,6 +12,7 @@ import { AiProviderSelect } from '../../components/ai-provider-select.js';
 import { useAiProvider } from '../../hooks/ai-provider.js';
 import type { ReviewAssistTier } from '../../../shared/contracts.js';
 import { MarkdownViewer } from '../../components/markdown/markdown-composer.js';
+import { toastError } from '../../state/toast-store';
 
 export type { ReviewAssistAction, ReviewAssistTaskIntent };
 
@@ -72,6 +73,7 @@ export const DiffReviewDecisionDetailCard = memo(function DiffReviewDecisionDeta
       setStreamedAnswer('');
       return sourceClient.streamReviewAssist({ action, decision: decisionPayload, taskIntent, tier, provider }, (text) => setStreamedAnswer((previous) => previous + text));
     },
+    onError: (error) => toastError('AI assist failed.', error),
   });
 
   // Warming lives in the review view, not here: this panel is closed most of

@@ -40,6 +40,7 @@ import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js
 import { WorkspaceContextSwitcher } from './context-switcher.js';
 import { AiProviderSelect } from '../../components/ai-provider-select.js';
 import { useAiProvider } from '../../hooks/ai-provider.js';
+import { toastError } from '../../state/toast-store';
 
 /** The parts of a diff this review surface reads, whichever source produced
  * it. A local workspace diff satisfies it directly; a pull request is adapted
@@ -112,6 +113,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
       for (const key of workspaceDiffScopeKeys(scope)) queryClient.removeQueries({ queryKey: key });
       await queryClient.invalidateQueries({ queryKey: explorerKey });
     },
+    onError: (error) => toastError('Could not switch workspace.', error),
   });
   const query = useWorkspaceDiff(scope);
   const snapshotsQuery = useWorkspaceDiffSnapshots(scope, query.data?.diff?.revision);
