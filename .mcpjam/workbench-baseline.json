@@ -1342,6 +1342,17 @@
           "tasks": {
             "items": {
               "properties": {
+                "dependsOn": {
+                  "default": [],
+                  "description": "Indexes (0-based, into this same tasks array) of the tasks that must finish before this one. Must be in range, not self-referencing, and acyclic.",
+                  "items": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 49,
+                  "type": "array"
+                },
                 "description": {
                   "maxLength": 20000,
                   "type": "string"

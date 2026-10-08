@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ExternalEvidenceSnapshot } from '../shared/contracts.js';
 
-import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TabCounts, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput, type DiffBlockReview, type UpsertDiffBlockReviewInput, type CreateStandaloneReviewInput, type StandaloneReview } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, isSelfAssigned, workItemFilterSchema, VERSION_CONFLICT_CODE, VERSION_CONFLICT_MESSAGE, type Activity, type ProjectSummary, type AgentRun, type AgentRunReviewHandoff, type AgentStreamEvent, type ArtifactSummary, type Assignee, type AuditLogEntry, type AuditLogPage, type BulkWorkItemAction, type BulkWorkItemResult, type ConversationPage, type DiagnosticEvent, type DiscoveryCandidate, type DiscoveryInbox, type DiscoveryRun, type ExecutionPlan, type InsightsTimeframe, type LinearProviderConfig, type PlannedTask, plannedTaskDependencyError, type ProviderSyncConflict, type ProviderSyncConflictResolution, type ProviderSyncField, type QueueItemExplanation, type QueueOrderChange, type QueueProposal, type QueueSignalKey, type RunInsights, type SavedWorkItemFilter, type SavedWorkItemFilterView, type SharedAttachment, type SharedConversation, type SharedMessage, type SharedMessagePage, type SharedSearchResult, type SourceConnection, type SourceProvider, type TabCounts, type TaskClassification, type WorkItem, type WorkItemDependency, type WorkItemFilter, type WorkItemLineage, type WorkItemPage, type WorkItemReference, type WorkItemReferenceType, type WorkspaceDiff, type WorkspaceDiffSnapshot, type DiffHunkReview, type DiffHunkReviewState, type UpsertDiffHunkReviewsInput, type DiffBlockReview, type UpsertDiffBlockReviewInput, type CreateStandaloneReviewInput, type StandaloneReview } from '../shared/contracts.js';
 import type { FeedbackWeight, QueueContext, QueuePlan } from './queue-intelligence.js';
 import { listProjects, resolveProjectName } from './project-registry.js';
 import type { WorkbenchDatabase } from './database.js';
@@ -1718,12 +1718,15 @@ export class WorkItemRepository {
   private mapExecutionPlan(row: Record<string, string | null>): ExecutionPlan {
     return {
       id: row.id!, workItemId: row.work_item_id!, status: row.status as ExecutionPlan['status'],
-      summary: row.summary!, tasks: JSON.parse(row.tasks_json!) as PlannedTask[],
+      summary: row.summary!, tasks: (JSON.parse(row.tasks_json!) as Array<Omit<PlannedTask, 'dependsOn'> & { dependsOn?: number[] }>).map((task) => ({ ...task, dependsOn: task.dependsOn ?? [] })),
       createdAt: row.created_at!, resolvedAt: row.resolved_at,
     };
   }
 
   createExecutionPlan(workItemId: string, summary: string, tasks: PlannedTask[]): ExecutionPlan {
+    tasks = tasks.map((task) => ({ ...task, dependsOn: task.dependsOn ?? [] }));
+    const dependencyError = plannedTaskDependencyError(tasks);
+    if (dependencyError) throw new WorkItemDependencyError(dependencyError);
     const id = randomUUID();
     const now = new Date().toISOString();
     this.database.prepare("UPDATE execution_plans SET status = 'rejected', resolved_at = ? WHERE work_item_id = ? AND status = 'pending'").run(now, workItemId);
@@ -1741,19 +1744,27 @@ export class WorkItemRepository {
     if (resolution === 'accepted') {
       const parent = this.get(plan.workItemId)!;
       if (parent.archivedAt) return null;
-      const selectedTasks = selectedTaskIndexes === undefined ? plan.tasks : plan.tasks.filter((_, index) => selectedTaskIndexes.includes(index));
+      const selectedIndexes = plan.tasks.flatMap((_, index) => selectedTaskIndexes === undefined || selectedTaskIndexes.includes(index) ? [index] : []);
+      const selectedTasks = selectedIndexes.map((index) => plan.tasks[index]!);
       if (!selectedTasks.length) return null;
       const children = selectedTasks.map((task) => this.create({
         title: task.title, description: task.description, priority: 2, status: 'ready',
         projectName: parent.projectName, stack: parent.stack, workspacePath: task.workspacePath ?? parent.workspacePath, dueDate: null,
         parentWorkItemId: parent.id,
       }));
+      const childByPlanIndex = new Map(selectedIndexes.map((planIndex, position) => [planIndex, children[position]!.id]));
+      let droppedEdges = 0;
+      selectedTasks.forEach((task, position) => {
+        const blockerIds = task.dependsOn.flatMap((blocker) => childByPlanIndex.has(blocker) ? [childByPlanIndex.get(blocker)!] : []);
+        droppedEdges += task.dependsOn.length - blockerIds.length;
+        if (blockerIds.length) this.replaceDependencyRows(children[position]!.id, blockerIds);
+      });
       const stack = parent.stack;
       const current = stack === 'workbench' ? this.listWorkbench() : this.list();
       const childIds = children.map((item) => item.id);
       const ordered = current.flatMap((item) => item.id === parent.id ? [item.id, ...childIds] : childIds.includes(item.id) ? [] : [item.id]);
       this.reorder(ordered, stack);
-      this.addActivity(parent.id, 'jeffrey', 'decomposed', `Approved plan created ${selectedTasks.length} of ${plan.tasks.length} proposed tasks.`);
+      this.addActivity(parent.id, 'jeffrey', 'decomposed', `Approved plan created ${selectedTasks.length} of ${plan.tasks.length} proposed tasks.${droppedEdges ? ` Dropped ${droppedEdges} dependency edge(s) pointing at tasks that were not selected.` : ''}`);
       if (archiveParent) this.archive(parent.id, false, true, { reason: 'the approved plan replaced it with follow-up tasks' });
     } else {
       // Rejecting a plan is as much a decision as approving one, and it used to

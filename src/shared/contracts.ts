@@ -1001,6 +1001,28 @@ export interface PlannedTask {
   title: string;
   description: string;
   workspacePath: string | null;
+  /** Indexes of tasks in the same plan that must finish before this one. */
+  dependsOn: number[];
+}
+
+/** Returns why a plan's dependsOn indexes are invalid, or null when they are in range, not self-referencing and acyclic. */
+export function plannedTaskDependencyError(tasks: Array<Pick<PlannedTask, 'dependsOn'>>): string | null {
+  for (const [index, task] of tasks.entries()) {
+    for (const blocker of task.dependsOn) {
+      if (!Number.isInteger(blocker) || blocker < 0 || blocker >= tasks.length) return `Task ${index} depends on ${blocker}, which is not a task in this plan.`;
+      if (blocker === index) return `Task ${index} cannot depend on itself.`;
+    }
+  }
+  const state = new Map<number, 'visiting' | 'done'>();
+  const visit = (index: number): boolean => {
+    if (state.get(index) === 'done') return false;
+    if (state.get(index) === 'visiting') return true;
+    state.set(index, 'visiting');
+    if (tasks[index]!.dependsOn.some(visit)) return true;
+    state.set(index, 'done');
+    return false;
+  };
+  return tasks.some((_, index) => visit(index)) ? 'Planned task dependencies cannot contain a cycle.' : null;
 }
 
 export interface ExecutionPlan {

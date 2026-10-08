@@ -37,6 +37,7 @@ const plannedTaskSchema = z.object({
   title: z.string().trim().min(1).max(300),
   description: z.string().max(20_000),
   workspacePath: z.string().trim().max(1_000).nullable().default(null),
+  dependsOn: z.array(z.number().int().nonnegative()).max(49).default([]).describe('Indexes (0-based, into this same tasks array) of the tasks that must finish before this one. Must be in range, not self-referencing, and acyclic.'),
 });
 const memorySourceSchema = z.enum(['conversation', 'message', 'activity', 'run_instructions', 'run_output', 'run_error', 'work_item', 'artifact', 'doc', 'audit']);
 

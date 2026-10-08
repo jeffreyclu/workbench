@@ -718,7 +718,7 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
           <span className="section-label">Approval required</span>
           <h3>{detail.data.executionPlan.summary}</h3>
           <ol>
-            {detail.data.executionPlan.tasks.map((task, index) => <li key={`${task.title}-${index}`}><label><input type="checkbox" checked={selectedExecutionTaskIndexes.has(index)} onChange={() => setSelectedExecutionTaskIndexes((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} /><span><strong>{task.title}</strong><p>{task.description}</p></span></label></li>)}
+            {detail.data.executionPlan.tasks.map((task, index) => <li key={`${task.title}-${index}`}><label><input type="checkbox" checked={selectedExecutionTaskIndexes.has(index)} onChange={() => setSelectedExecutionTaskIndexes((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} /><span><strong>{task.title}</strong>{task.dependsOn.length > 0 && <small className="plan-blocked-by">Blocked by: {task.dependsOn.map((blocker) => `${blocker + 1}. ${detail.data.executionPlan.tasks[blocker]?.title ?? 'unknown task'}`).join('; ')}</small>}<p>{task.description}</p></span></label></li>)}
           </ol>
           <div className="dialog-actions">
             <button className="button secondary" onClick={() => resolveExecutionPlan.mutate({ resolution: 'rejected' })}>Reject plan</button>

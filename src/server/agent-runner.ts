@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
-import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type AgentStreamEvent, type WorkItem } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, plannedTaskDependencyError, type AgentRun, type AgentStreamEvent, type WorkItem } from '../shared/contracts.js';
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
@@ -2420,16 +2420,19 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }
     const rawOutput = result.output;
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason, costUsd: result.costUsd ?? null };
-    let executionPlan: { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null }> } | null = null;
+    let executionPlan: { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null; dependsOn: number[] }> } | null = null;
     if (run.instructions.includes('WORKBENCH_DECOMPOSITION')) {
       const match = rawOutput.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/);
       if (!match) throw new Error('Strategy completed without a valid Workbench task decomposition.');
-      const parsed = JSON.parse(match[1]) as { summary?: unknown; tasks?: Array<{ title?: unknown; description?: unknown; workspacePath?: unknown }> };
+      const parsed = JSON.parse(match[1]) as { summary?: unknown; tasks?: Array<{ title?: unknown; description?: unknown; workspacePath?: unknown; dependsOn?: unknown }> };
       if (typeof parsed.summary !== 'string' || !Array.isArray(parsed.tasks) || parsed.tasks.length < 2) throw new Error('Complex work must be decomposed into at least two independently executable follow-up tasks.');
       executionPlan = { summary: parsed.summary, tasks: parsed.tasks.map((task) => {
         if (typeof task.title !== 'string' || typeof task.description !== 'string') throw new Error('Every planned task needs a title and description.');
-        return { title: task.title, description: task.description, workspacePath: typeof task.workspacePath === 'string' ? task.workspacePath : null };
+        if (task.dependsOn !== undefined && (!Array.isArray(task.dependsOn) || !task.dependsOn.every((value) => Number.isInteger(value) && value >= 0))) throw new Error('A planned task dependsOn must be a list of task indexes.');
+        return { title: task.title, description: task.description, workspacePath: typeof task.workspacePath === 'string' ? task.workspacePath : null, dependsOn: (task.dependsOn as number[] | undefined) ?? [] };
       }) };
+      const dependencyError = plannedTaskDependencyError(executionPlan.tasks);
+      if (dependencyError) throw new Error(dependencyError);
     }
     const output = await finalizeSupervisedOutput({
       kind: run.kind,
@@ -2605,7 +2608,7 @@ export function classifyExecution(item: WorkItem): { kind: AgentRun['kind']; age
     return {
       kind: 'strategy', agent: 'claude', complex: true,
       reason: 'keyword rules: the task spans multiple phases or systems, so it is decomposed first',
-      instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. Propose at least two independently executable follow-up tasks. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"first independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null},{"title":"second independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null}]}</workbench-plan>. Tasks must be self-contained and ordered by recommended attention.`,
+      instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. Propose at least two independently executable follow-up tasks. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"first independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null,"dependsOn":[]},{"title":"second independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null,"dependsOn":[0]}]}</workbench-plan>. dependsOn lists the 0-based indexes of tasks in this plan that must finish first (use [] when none; no cycles). Tasks must be self-contained and ordered by recommended attention.`,
     };
   }
   return {
@@ -2761,7 +2764,7 @@ SOURCE: ${item.sourceUrl ?? item.sourceIdentifier ?? item.source}`);
       return {
         kind: 'strategy', agent: 'claude', complex: true,
         reason: `AI classifier: ${explanation} It is complex enough to decompose first.`,
-        instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. Propose at least two independently executable follow-up tasks. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"first independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null},{"title":"second independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null}]}</workbench-plan>. Tasks must be self-contained and ordered by recommended attention.`,
+        instructions: `WORKBENCH_DECOMPOSITION: This appears complex. Research the relevant context, then produce an approval-ready strategy. Do not implement yet. Propose at least two independently executable follow-up tasks. End with exactly one machine-readable block in this form: <workbench-plan>{"summary":"approval-ready strategy","tasks":[{"title":"first independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null,"dependsOn":[]},{"title":"second independently executable task","description":"complete context, outcome, constraints, and verification","workspacePath":null,"dependsOn":[0]}]}</workbench-plan>. dependsOn lists the 0-based indexes of tasks in this plan that must finish first (use [] when none; no cycles). Tasks must be self-contained and ordered by recommended attention.`,
       };
     }
     let agent: AgentRun['agent'] = resolvedKind === 'execute' || resolvedKind === 'review' ? 'codex' : 'claude';

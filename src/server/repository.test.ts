@@ -1013,6 +1013,35 @@ describe('WorkItemRepository', () => {
     expect(repository.countUnreadConversations()).toBe(3);
   });
 
+  it('writes planned dependsOn edges between created children and drops edges to unselected tasks', () => {
+    const parent = repository.create({ title: 'Big job', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const task = (title: string, dependsOn: number[]) => ({ title, description: 'Do it.', workspacePath: null, dependsOn });
+    const plan = repository.createExecutionPlan(parent.id, 'Split.', [task('A', []), task('B', []), task('C', [0, 1])]);
+    repository.resolveExecutionPlan(plan.id, 'accepted');
+    const children = repository.listWorkbench().filter((item) => item.parentWorkItemId === parent.id);
+    const byTitle = new Map(children.map((item) => [item.title, item.id]));
+    expect(repository.listDependencies(byTitle.get('C')!).map((dep) => dep.id).sort()).toEqual([byTitle.get('A')!, byTitle.get('B')!].sort());
+    expect(repository.listDependencies(byTitle.get('A')!)).toEqual([]);
+
+    const partialParent = repository.create({ title: 'Partial job', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const partial = repository.createExecutionPlan(partialParent.id, 'Split.', [task('P0', []), task('P1', []), task('P2', [0, 1])]);
+    repository.resolveExecutionPlan(partial.id, 'accepted', [1, 2]);
+    const kept = repository.listWorkbench().filter((item) => item.parentWorkItemId === partialParent.id);
+    const p1 = kept.find((item) => item.title === 'P1')!;
+    const p2 = kept.find((item) => item.title === 'P2')!;
+    expect(repository.listDependencies(p2.id).map((dep) => dep.id)).toEqual([p1.id]);
+    expect(repository.listActivity(partialParent.id).map((entry) => entry.body).join('\n')).toContain('Dropped 1 dependency edge');
+  });
+
+  it('rejects cyclic, self-referencing and out-of-range planned dependencies at propose time', () => {
+    const parent = repository.create({ title: 'Cyclic job', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const task = (dependsOn: number[]) => ({ title: 'T', description: 'Do it.', workspacePath: null, dependsOn });
+    expect(() => repository.createExecutionPlan(parent.id, 'x', [task([1]), task([0])])).toThrow(/cycle/);
+    expect(() => repository.createExecutionPlan(parent.id, 'x', [task([0]), task([])])).toThrow(/itself/);
+    expect(() => repository.createExecutionPlan(parent.id, 'x', [task([5]), task([])])).toThrow(/not a task in this plan/);
+    expect(repository.getPendingExecutionPlan(parent.id)).toBeNull();
+  });
+
   it('turns only selected execution-plan items into ordered queue tasks', () => {
     const parent = repository.create({ title: 'Large migration', description: '', priority: 2, status: 'ready', projectName: 'Workbench', workspacePath: '/tmp/project', dueDate: null });
     const plan = repository.createExecutionPlan(parent.id, 'Split the migration safely.', [
