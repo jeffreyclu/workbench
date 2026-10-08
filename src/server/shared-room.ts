@@ -1631,6 +1631,8 @@ interface SessionReplySink {
   onProgress: (body: string) => void;
   onEvents: (events: Array<Pick<AgentStreamEvent, 'kind' | 'detail' | 'trace'>>) => void;
   onUsage: (usage: AgentUsage) => void;
+  /** Fires once, on the first provider event of the turn, so time to first activity is measurable. */
+  onFirstEvent?: () => void;
 }
 
 export interface SessionTurnSnapshot {
@@ -1670,6 +1672,7 @@ export function createSessionTurnReader(agent: SessionAgent, sink: SessionReplyS
   const itemText = new Map<string, string>();
   const itemOrder: string[] = [];
   const activity: string[] = [];
+  let sawFirstEvent = false;
 
   const readClaude = (record: Record<string, unknown>) => {
     const readable = readableAgentEvent('claude', JSON.stringify(record), context);
@@ -1730,6 +1733,7 @@ export function createSessionTurnReader(agent: SessionAgent, sink: SessionReplyS
     /** Feeds one host event. Only provider output carries reply content. */
     read(event: AgentSessionEvent): void {
       if (event.source !== 'provider' || !event.event || typeof event.event !== 'object') return;
+      if (!sawFirstEvent) { sawFirstEvent = true; sink.onFirstEvent?.(); }
       if (agent === 'claude') readClaude(event.event as Record<string, unknown>);
       else readCodex(event.event as Record<string, unknown>);
       sink.onProgress(body());
@@ -2315,6 +2319,8 @@ export async function replyInSharedRoom(
           updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
         },
         onEvents: (events) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, events)),
+        // A session turn writes its only usage diagnostic when it ends, so the first streamed event is recorded on its own.
+        onFirstEvent: () => options.followUp || !runId ? undefined : persistNonTerminalAgentUpdate(() => repository.addAgentRunDiagnostic(runId, messageId, turnAgent, 'tool', { category: 'session_first_event' })),
         onUsage: (usage) => options.followUp ? undefined : persistNonTerminalAgentUpdate(() => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
           repository.updateSharedMessage(messageId, telemetry);

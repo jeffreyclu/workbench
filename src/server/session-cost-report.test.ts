@@ -50,4 +50,31 @@ describe('session cost report', () => {
     expect(text).toContain('per_run: 1 turn(s), 0 that spawned the process');
     expect(text).toContain('cache-read ratio             49.3%');
   });
+
+  it('measures session and per-run time to first activity from the earliest diagnostic', () => {
+    root = mkdtempSync(join(tmpdir(), 'workbench-cost-report-'));
+    const path = join(root, 'workbench.db');
+    const database = openDatabase(path);
+    const repository = new WorkItemRepository(database);
+    const item = repository.create({ title: 'Cost', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const startedAt = '2026-10-01T00:00:00.000Z';
+    const diagnostic = (runId: string, kind: 'tool' | 'usage', at: string) => {
+      repository.addAgentRunDiagnostic(runId, null, 'claude', kind, {});
+      database.prepare('UPDATE agent_run_diagnostics SET created_at = ? WHERE run_id = ? AND kind = ? AND created_at = (SELECT MAX(created_at) FROM agent_run_diagnostics WHERE run_id = ? AND kind = ?)').run(at, runId, kind, runId, kind);
+    };
+    const session = repository.createRun(item.id, 'analysis', 'claude', 'claude', '');
+    repository.updateRun(session.id, { promptSize: size({ sessionMode: 'persistent' }), startedAt });
+    diagnostic(session.id, 'tool', '2026-10-01T00:00:00.400Z');
+    diagnostic(session.id, 'usage', '2026-10-01T00:00:09.000Z');
+    const perRun = repository.createRun(item.id, 'analysis', 'claude', 'claude', '');
+    repository.updateRun(perRun.id, { promptSize: size({}), startedAt });
+    diagnostic(perRun.id, 'usage', '2026-10-01T00:00:00.500Z');
+    database.close();
+
+    const readOnly = new DatabaseSync(path, { readOnly: true });
+    const groups = buildSessionCostReport(readOnly);
+    readOnly.close();
+    expect(groups.find((group) => group.sessionMode === 'persistent')!.avgSecondsToFirstActivity).toBeCloseTo(0.4);
+    expect(groups.find((group) => group.sessionMode === 'per_run')!.avgSecondsToFirstActivity).toBeCloseTo(0.5);
+  });
 });

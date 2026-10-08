@@ -56,8 +56,10 @@ function promptSizeOf(json: string | null): { totalChars: number | null; envelop
 }
 
 export function buildSessionCostReport(database: DatabaseSync): SessionCostGroup[] {
-  // The first tool or usage diagnostic is the first sign the provider did
-  // anything; the 'prompt' diagnostic is Workbench's own and does not count.
+  // The earliest non-prompt diagnostic is the first sign the provider did
+  // anything (session turns write a first-event 'tool' diagnostic because
+  // their usage diagnostic only lands when the turn ends); the 'prompt'
+  // diagnostic is Workbench's own and does not count.
   const rows = database.prepare(`
     SELECT r.id, r.started_at, r.created_at, r.prompt_size_json,
            r.input_tokens, r.cache_creation_input_tokens, r.cache_read_input_tokens, r.output_tokens,
