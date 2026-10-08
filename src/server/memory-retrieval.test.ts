@@ -61,8 +61,8 @@ describe('durable memory prefetch', () => {
     expect(query).toContain('Jeffrey Lu personal profile');
     expect(query).toContain('previous company');
     expect(durableMemoryQuery('Help me write my Staff promotion case.')).toContain('accomplishments impact projects leadership');
-    expect(durableMemoryRetrievalPlan('Help me write my Staff promotion case.')).toEqual({ candidateLimit: 100, evidenceLimit: 100, promptBudget: 32_000 });
-    expect(durableMemoryRetrievalPlan('Fix this recurring bug.')).toEqual({ candidateLimit: 100, evidenceLimit: 100, promptBudget: 12_000 });
+    expect(durableMemoryRetrievalPlan('Help me write my Staff promotion case.')).toEqual({ candidateLimit: 100, evidenceLimit: 100, promptBudget: 32_000, inlineBodies: true });
+    expect(durableMemoryRetrievalPlan('Fix this recurring bug.')).toEqual({ candidateLimit: 100, evidenceLimit: 8, promptBudget: 1_000, inlineBodies: false });
   });
 
   it('deduplicates repeated task context and does not pollute ordinary queries with a generic hint', () => {
@@ -93,8 +93,23 @@ describe('durable memory prefetch', () => {
     expect(results.map(({ title }) => title)).toEqual(['Prototype decision']);
   });
 
-  it('formats bounded evidence with explicit precedence and no repeat-recall loop', () => {
-    const prompt = durableMemoryPrompt([evidence()]);
+  it('renders ordinary prefetch as compact pointers instead of inlined bodies', () => {
+    const prompt = durableMemoryPrompt(Array.from({ length: 10 }, (_, index) => evidence({
+      entryId: `doc:memory-${index}`,
+      title: `Prior decision ${index}`,
+      body: `Sensitive body ${index} ${'x'.repeat(2_000)}`,
+      score: 1 - index * 0.01,
+    })), 1_000, false);
+
+    expect(prompt).toContain('Durable memory pointers');
+    expect(prompt).toContain('doc:memory-0 | Prior decision 0 | 1.00');
+    expect(prompt).not.toContain('Sensitive body');
+    expect(prompt.match(/^-/gm)).toHaveLength(8);
+    expect(prompt.length).toBeLessThan(1_000);
+  });
+
+  it('keeps personal-memory bodies inlined with explicit precedence and no repeat-recall loop', () => {
+    const prompt = durableMemoryPrompt([evidence()], 32_000, true);
     expect(prompt).toContain('Retrieved durable context');
     expect(prompt).toContain('Jeffrey is a senior frontend engineer at Writer.');
     expect(prompt).toContain("Jeffrey's newest statement wins");

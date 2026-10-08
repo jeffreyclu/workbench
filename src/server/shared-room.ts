@@ -1415,7 +1415,7 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
         sources: [...DEFAULT_DURABLE_MEMORY_SOURCES],
       }).then((candidates) => selectDurableMemoryEvidence(candidates, conversationId, {
         maxItems: memoryPlan.evidenceLimit,
-        promptBudget: memoryPlan.promptBudget,
+        ...(memoryPlan.inlineBodies ? { promptBudget: memoryPlan.promptBudget } : {}),
         excludeBody: currentMessage,
         excludeCurrentConversation: true,
       })).catch((error) => {
@@ -1752,7 +1752,7 @@ export async function replyInSharedRoom(
         importanceProfile: isPersonalLongTermMemoryRequest(latestUserMessage) ? 'personal' : 'default',
       }).then((candidates) => selectDurableMemoryEvidence(candidates, target.conversationId, {
         maxItems: memoryPlan.evidenceLimit,
-        promptBudget: memoryPlan.promptBudget,
+        ...(memoryPlan.inlineBodies ? { promptBudget: memoryPlan.promptBudget } : {}),
         excludeBody: latestUserMessage,
         excludeCurrentConversation: true,
       })).catch((error) => {
@@ -1786,7 +1786,7 @@ export async function replyInSharedRoom(
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);
-    const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
+    const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget, memoryPlan.inlineBodies);
     const shortTermMemory = repository.getSharedContextWithItems(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });
     const shortTermContext = shortTermMemory.text;
     const retrievedMemoryItems = [

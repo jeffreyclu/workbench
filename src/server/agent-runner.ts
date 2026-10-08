@@ -2196,7 +2196,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         importanceProfile: isPersonalLongTermMemoryRequest(run.instructions) ? 'personal' : 'default',
       }).then((candidates) => selectDurableMemoryEvidence(candidates, run.conversationId, {
         maxItems: memoryPlan.evidenceLimit,
-        promptBudget: memoryPlan.promptBudget,
+        ...(memoryPlan.inlineBodies ? { promptBudget: memoryPlan.promptBudget } : {}),
         excludeBody: run.instructions,
         excludeCurrentConversation: true,
       })).catch((error) => {
@@ -2253,7 +2253,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);
-    const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget);
+    const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget, memoryPlan.inlineBodies);
     const retrievedMemoryItems = [
       ...shortTermMemory.items,
       ...memoryEvidence.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
