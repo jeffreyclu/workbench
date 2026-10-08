@@ -34,6 +34,21 @@ const app = createApp(database, liveRuntimeCapabilities);
 // and keep retrying/dispatching queued work going forward. Must start before the
 // server accepts traffic so nothing queued while the process was down sits idle.
 const repository = new WorkItemRepository(database);
+// Session hosts are detached and outlive the previous runtime. Adopt the live
+// ones and mark the rest stopped; their provider sessions resume on next use.
+// A reply that was streaming when the last runtime stopped finishes into its
+// own message once its host is adopted. Recovery claims every live session's
+// turn slot synchronously, so it must run before the scheduler can dispatch a
+// task run onto a session whose unfinished reply is still being recovered.
+if (liveRuntimeCapabilities.ownScheduler) {
+  const reattached = reattachAgentSessions(database).catch((error: unknown) => {
+    console.error('Agent session reattach failed:', error instanceof Error ? error.message : error);
+  });
+  recoverSharedSessionTurns(repository, { ready: reattached })
+    .catch((error: unknown) => {
+      console.error('Agent session reattach failed:', error instanceof Error ? error.message : error);
+    });
+}
 const scheduler = liveRuntimeCapabilities.ownScheduler ? startScheduler(repository) : null;
 const promotionWorker = liveRuntimeCapabilities.promoteRuntime ? startRuntimePromotionWorker(repository) : null;
 const mcpQualityMonitor = liveRuntimeCapabilities.ownScheduler ? startMcpQualityMonitor(repository, {
@@ -44,17 +59,6 @@ const consolidationMonitor = liveRuntimeCapabilities.ownScheduler ? startConsoli
 // Claude Code and Codex sessions Jeffrey starts in a terminal appear as
 // conversations; only the scheduler-owning runtime imports them.
 const terminalSessionSync = liveRuntimeCapabilities.ownScheduler ? startTerminalSessionSync(database) : null;
-// Session hosts are detached and outlive the previous runtime. Adopt the live
-// ones and mark the rest stopped; their provider sessions resume on next use.
-if (liveRuntimeCapabilities.ownScheduler) {
-  // A reply that was streaming when the last runtime stopped finishes into its
-  // own message once its host is adopted.
-  reattachAgentSessions(database)
-    .then(() => recoverSharedSessionTurns(repository))
-    .catch((error: unknown) => {
-      console.error('Agent session reattach failed:', error instanceof Error ? error.message : error);
-    });
-}
 configureRuntimeRetirement(() => {
   scheduler?.stop();
   promotionWorker?.stop();

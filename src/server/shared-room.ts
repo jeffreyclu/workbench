@@ -1995,16 +1995,20 @@ function sessionTerminalMessage(snapshot: SessionTurnSnapshot, turn: AgentTurnRe
  * its host or already finished in events.jsonl. Either way, its events are
  * replayed into the same message instead of leaving it to expire.
  */
-export async function recoverSharedSessionTurns(repository: WorkItemRepository, options: { claimRetryMs?: number } = {}): Promise<string[]> {
+export async function recoverSharedSessionTurns(repository: WorkItemRepository, options: { claimRetryMs?: number; ready?: Promise<unknown> } = {}): Promise<string[]> {
   const rows = repository.database.prepare("SELECT conversation_id, agent, last_event_offset FROM agent_sessions WHERE state != 'stopped'").all() as Array<{ conversation_id: string; agent: SessionAgent; last_event_offset: number }>;
   const recovered: string[] = [];
   // Every live session takes its queue slot before any await, so no task run
   // can start on a session whose unfinished reply is still being recovered.
+  // At boot the caller runs this before the scheduler starts and passes the
+  // host reattach as `ready`; sessions that reattach found dead are skipped.
   const slots = rows.map((row) => enqueueSessionTurn(`${row.conversation_id}:${row.agent}`));
   await Promise.all(rows.map(async (row, index) => {
     const { previous, release } = slots[index];
     try {
-      await recoverSessionRow(row, previous);
+      await options.ready;
+      const stopped = repository.database.prepare('SELECT state FROM agent_sessions WHERE conversation_id = ? AND agent = ?').get(row.conversation_id, row.agent) as { state: string } | undefined;
+      if (stopped?.state !== 'stopped') await recoverSessionRow(row, previous);
     } finally {
       release();
     }
@@ -2031,18 +2035,20 @@ export async function recoverSharedSessionTurns(repository: WorkItemRepository, 
     }
     if (repository.getSharedMessageById(messageId)?.status !== 'running') return;
     const runId = repository.getRunByMessage(messageId)?.id;
-    if (previous) {
-      if (runId) repository.updateRun(runId, { waitingReason: SESSION_TURN_WAITING_REASON });
-      await awaitPreviousSessionTurn(previous, new AbortController().signal);
-      if (runId) repository.updateRun(runId, { waitingReason: null });
-    }
-    if (runId) repository.claimRun(runId, OWNER_ID, LEASE_MS);
+    // The lease renews from the moment the reply is claimed, including while it
+    // waits for its slot, or a long turn ahead of it would let the lease lapse.
     const lease = setInterval(() => {
       try { repository.renewSharedMessageLease(messageId, OWNER_ID, LEASE_MS); if (runId) repository.renewRunLease(runId, OWNER_ID, LEASE_MS); } catch { /* retried next tick */ }
     }, HEARTBEAT_MS);
     lease.unref();
     const guard = sessionExternalActionGuard(key);
     try {
+      if (previous) {
+        if (runId) repository.updateRun(runId, { waitingReason: SESSION_TURN_WAITING_REASON });
+        await awaitPreviousSessionTurn(previous, new AbortController().signal);
+        if (runId) repository.updateRun(runId, { waitingReason: null });
+      }
+      if (runId) repository.claimRun(runId, OWNER_ID, LEASE_MS);
       const reader = createSessionTurnReader(row.agent, {
         onProgress: (body) => updateLiveSharedBody(repository, messageId, body, message.conversationId, runId),
         onEvents: (streamEvents) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, message.conversationId, streamEvents)),
@@ -2566,6 +2572,13 @@ export async function replyInSharedRoom(
         result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason.slice(0, 500) };
       } else {
         if (agent !== 'claude' || !linkedConversation?.claudeSessionId || !isMissingClaudeSessionError(error)) throw error;
+        if (!canFallBackToPerRun(error)) {
+          // The turn already streamed events and may have acted: never resend it.
+          // The session host respawns the CLI itself, so later turns keep the
+          // conversation's context; this turn fails with the provider's error.
+          repository.updateSharedMessage(messageId, { body: `● Claude session expired mid-reply; this turn was not re-run. ${error instanceof Error ? error.message : String(error)}` });
+          throw error;
+        }
       repository.setConversationClaudeSessionId(target.conversationId, null);
       repository.updateSharedMessage(messageId, { body: '● Claude session expired. Restarting this turn in a fresh session…' });
       result = sessionMode ? await sessionTurnFor('claude', freshPrompt, { fresh: true }) : await runAgentCommandWithFallback('claude', cwd, claudeScopeRecoveryPrompt(freshPrompt, cwd), (partial) => {

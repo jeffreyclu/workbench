@@ -13,6 +13,7 @@ import { personaBody } from './personas.js';
 import { clearTurnCapability, writeTurnCapability } from './external-action-command-guard.js';
 import { ensureSession, readAgentSessionStatus, sessionExternalActionGuard, submitTurn } from './agent-session.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
+import { HEARTBEAT_MS, LEASE_MS, OWNER_ID } from './scheduler.js';
 import { captureGateState, CAPTURE_GATE_PROMPT } from './capture-gate.js';
 import { observedEventsFromSessionLog, accountProfileForSharedReply, isFanOutReply, persistentSessionsEnabled, usesPersistentSession, usesTaskRunSession, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, SESSION_TURN_WAITING_REASON, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
@@ -1540,6 +1541,135 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(Date.now() - started).toBeLessThan(1_100);
     for (const conversation of conversations) expect(hostLifecycle(conversation.id)).toHaveLength(2);
   }, 30_000);
+
+  it('keeps the lease of a recovered reply renewing while it waits for its slot', async () => {
+    const conversation = repository.createConversation('Room');
+    const message = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+    // A long turn on the same session holds the slot; it is the session's latest turn, so recovery targets its message.
+    const holder = turn(conversation.id, message.id, 'slow hold the slot');
+    await waitFor(() => existsSync(join(root, 'agent-sessions', conversation.id, 'claude', 'events.jsonl')) && hostLifecycle(conversation.id).includes(`turn_started:${message.id}#1`));
+    const renew = vi.spyOn(repository, 'renewSharedMessageLease');
+    // The holder's own reads advanced the stored offset; recovery replays from where the last runtime stopped.
+    database.prepare('UPDATE agent_sessions SET last_event_offset = 0 WHERE conversation_id = ?').run(conversation.id);
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const recovering = recoverSharedSessionTurns(repository, { claimRetryMs: 0 });
+      await new Promise((wait) => setTimeout(wait, 100));
+      expect(hostLifecycle(conversation.id)).not.toContain(`turn_terminal:${message.id}#1`);
+      vi.advanceTimersByTime(HEARTBEAT_MS);
+      expect(renew).toHaveBeenCalledWith(message.id, OWNER_ID, LEASE_MS);
+      vi.useRealTimers();
+      await holder;
+      expect(await recovering).toEqual([message.id]);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 30_000);
+
+  it('claims recovered turns before the boot gate opens, so a task run cannot take the slot first', async () => {
+    const conversation = repository.createConversation('Room');
+    const message = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+    const task = repository.create({ title: 'Edit things', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Edit things.');
+    const session = await ensureSession(database, { conversationId: conversation.id, agent: 'claude', cwd: root });
+    await submitTurn(database, session, { prompt: 'slow recover', turnId: `${message.id}#1` });
+    let openGate!: () => void;
+    const gate = new Promise<void>((open) => { openGate = open; });
+    // Boot order: recovery is called (and claims its slot) first, then the scheduler dispatches while reattach is still pending.
+    const recovering = recoverSharedSessionTurns(repository, { claimRetryMs: 0, ready: gate });
+    const taskTurn = turn(conversation.id, 'boot-task-1', 'task turn', { runId: run.id });
+    await waitFor(() => repository.getRun(run.id)?.waitingReason === SESSION_TURN_WAITING_REASON);
+    expect(hostLifecycle(conversation.id)).not.toContain('turn_started:boot-task-1#1');
+    openGate();
+    expect(await recovering).toEqual([message.id]);
+    await taskTurn;
+    expect(hostLifecycle(conversation.id)).toEqual([`turn_started:${message.id}#1`, `turn_terminal:${message.id}#1`, 'turn_started:boot-task-1#1', 'turn_terminal:boot-task-1#1']);
+  }, 30_000);
+
+  describe('expired provider session', () => {
+    let expiringDirectory: string;
+    let savedSessions: string | undefined;
+    const turnLog = () => (existsSync(join(root, 'turns.jsonl')) ? readFileSync(join(root, 'turns.jsonl'), 'utf8') : '').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { pid: number; text: string });
+    beforeEach(() => {
+      const expiring = join(root, 'expiring-claude.mjs');
+      // Early: the first two submissions (the session turn, then its per-run
+      // fallback) exit on stderr with no events, like a CLI resuming a missing
+      // session; the third succeeds. Late: the first submission streams two tool
+      // events, then reports the expired session.
+      writeFileSync(expiring, `
+import { appendFileSync, existsSync, readFileSync, writeSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const args = process.argv.slice(2);
+if (args.includes('--no-session-persistence')) { console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '{}' })); process.exit(0); }
+appendFileSync(${JSON.stringify(spawnsPath)}, JSON.stringify({ pid: process.pid, args }) + '\\n');
+const flag = (name) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
+const sessionId = flag('--session-id') ?? flag('--resume');
+const emit = (event) => writeSync(1, JSON.stringify({ ...event, session_id: sessionId }) + '\\n');
+const turnsPath = ${JSON.stringify(join(root, 'turns.jsonl'))};
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') { emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } }); return; }
+  const text = message.message.content;
+  const earlier = existsSync(turnsPath) ? readFileSync(turnsPath, 'utf8').split('\\n').filter(Boolean).length : 0;
+  appendFileSync(turnsPath, JSON.stringify({ pid: process.pid, text: text.slice(0, 40) }) + '\\n');
+  if (earlier < 2 && text.includes('expire-early')) {
+    process.stderr.write('No conversation found with session ID: ' + sessionId + '\\n');
+    process.exit(1);
+  }
+  if (earlier === 0 && text.includes('expire-late')) {
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'one', name: 'Read', input: { file_path: '/tmp/one.txt' } }] } });
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'two', name: 'Read', input: { file_path: '/tmp/two.txt' } }] } });
+    emit({ type: 'result', subtype: 'error', is_error: true, result: 'No conversation found with session ID: ' + sessionId });
+    process.exit(1);
+  }
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'recovered reply' }] } });
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'recovered reply' });
+});
+`);
+      expiringDirectory = fakeAgentDirectory('exit 1', `exec "${process.execPath}" "${expiring}" "$@"`).directory;
+      process.env.CLAUDE_BIN = join(expiringDirectory, 'claude');
+      savedSessions = process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    });
+    afterEach(() => {
+      rmSync(expiringDirectory, { recursive: true, force: true });
+      if (savedSessions === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      else process.env.WORKBENCH_PERSISTENT_SESSIONS = savedSessions;
+    });
+
+    const expiredReply = async (request: string) => {
+      const conversation = repository.createConversation('Room');
+      repository.setConversationClaudeSessionId(conversation.id, 'dead-provider-session');
+      repository.createSharedMessage('jeffrey', request, 'completed', conversation.id, [], 'claude');
+      const reply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+      await replyInSharedRoom(repository, 'claude', reply.id);
+      return { conversation, reply };
+    };
+
+    it('resends the turn exactly once when the session expires before any event', async () => {
+      const { reply } = await expiredReply('expire-early please look');
+      const finished = repository.getSharedMessageById(reply.id)!;
+      expect(finished.status).toBe('completed');
+      expect(finished.body).toContain('recovered reply');
+      // Two submissions expired before any event; the turn was resent once after the expired-session retry.
+      expect(turnLog()).toHaveLength(3);
+    }, 60_000);
+
+    it('does not resend a turn that streamed events, fails it with the provider error, and resumes on the next turn', async () => {
+      const { conversation, reply } = await expiredReply('expire-late please look');
+      const finished = repository.getSharedMessageById(reply.id)!;
+      expect(finished.status).toBe('failed');
+      expect(finished.error).toMatch(/No conversation found with session ID/);
+      expect(finished.body).toMatch(/No conversation found with session ID/);
+      expect(turnLog()).toHaveLength(1);
+      const next = await turn(conversation.id, 'next-message', 'carry on');
+      expect(next.output).toBe('recovered reply');
+      expect(turnLog()).toHaveLength(2);
+      // The stopped host was respawned for the next turn, resuming the provider session.
+      expect(spawns().length).toBeGreaterThanOrEqual(2);
+      expect(spawns().at(-1)!.args).toContain('--resume');
+    }, 60_000);
+  });
 
   it('does not continue with Codex when Claude hits its usage limit after the turn started', async () => {
     const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
