@@ -442,3 +442,9 @@ reading it produces a review of code that is not in the pull request at all. He 
 2026-09-16, in strong terms, after a review of PR #5371 cited files and line numbers taken from the
 local `jeffrey/CON-154/ais-password-grant` branch instead of the PR head. Never substitute the local
 checkout, and never cite local paths or line numbers as evidence for a PR review.
+
+### <a id="27"></a>27. Replay a memory-ranking acceptance query against an as-of-question copy of the database
+
+Learned 2026-10-08 on the time-scoped retrieval task. A complaint about retrieval spawns follow-up tasks, runs, and activity about the same subject within hours. By the time the fix is tested, those newer rows dominate the replay: on the full live copy, `bd37e9e2` and this task's own work item took the top slots for "what changes to workbench memory were made". Run the replay twice. First, on a read-only `sqlite3 ".backup"` copy. Second, on a copy that deletes non-doc `memory_documents` rows (and their chunks) created after the question's timestamp. Judge acceptance on the as-of copy and report both results. Doc rows stay because their `created_at` is the file mtime. Also: in a time-scoped query, trigger words like "changes" match boilerplate such as "Integrated agent changes into ...", so they are kept out of the keyword channel.
+
+*Provenance: 9490929d-6aaf-4722-ae78-d5d4eaabbc2b*

@@ -693,3 +693,15 @@ Follow-up to [workbench-operating-practices.md#41], from reviewing commit d2f7ea
 - Still to do, as of 2026-10-08: `writeTurnCapability` and `clearTurnCapability` have no callers. The room process (`src/server/shared-room.ts`) and runs still get one capability per process until the persistent-session host calls them at turn start and end.
 
 *Provenance: dfb49577-24ba-4659-a4a9-dae36abb7bad*
+
+### <a id="45"></a>45. Claude stream-json persistent process control and MCP reconnect
+
+Verified 2026-10-08 with Claude CLI 2.1.295 via `npx tsx scripts/session-spike.ts`: one `claude -p --input-format stream-json --output-format stream-json --session-id <uuid> --replay-user-messages` process accepted three user messages on stdin and retained the same PID/start time. `control_request` envelopes work for `interrupt` and `set_model`; responses nest the request id at `response.request_id`. Interrupt yields a `result` with `terminal_reason: "aborted_tools"`, and the next user turn works on the same process. A stateless Streamable HTTP MCP server restarted on the same port reconnected automatically on the next tool call, with no MCP controls or `--resume`. Do not use per-turn cwd for Claude: cwd is selected when the process starts. The harness kills Claude and stops the test server in `finally`.
+
+*Provenance: 06114199-a2d3-4280-905d-46bea3a333d0*
+
+### <a id="46"></a>46. Codex app-server persistent-thread spike results
+
+Codex CLI 0.161.0 app-server supports multiple `turn/start` calls on one non-ephemeral thread, `turn/interrupt` with `{threadId, turnId}`, per-turn `cwd`, `model`, and `effort`, and automatic reconnect to a restarted stateless HTTP MCP server. Verified on 2026-10-08 with `scripts/session-spike.ts`: one PID completed three turns, interrupted a long turn and accepted the next one, used separate marker directories with low/high effort recorded in the session log, and called `spike_ping` after port 5199 restarted without status/list, reload, or resume. The app server also attempted configured unrelated remote MCP servers; their OAuth failures did not prevent the throwaway server check.
+
+*Provenance: 3ea3bec9-82ff-4166-93f5-8d940a8fa64f*
