@@ -1586,6 +1586,14 @@ export function usesPersistentSession(agent: AgentRun['agent'], kind: AgentRun['
   return persistentSessionsEnabled() && (agent === 'claude' || agent === 'codex') && kind !== 'review';
 }
 
+/**
+ * Task runs (execute, bugfix, research) linked to a conversation reuse that
+ * conversation's session. Review and fan-out kinds keep a process of their own.
+ */
+export function usesTaskRunSession(agent: AgentRun['agent'], kind: AgentRun['kind']): boolean {
+  return usesPersistentSession(agent, kind) && (kind === 'execute' || kind === 'bugfix' || kind === 'research');
+}
+
 export type SessionAgent = 'claude' | 'codex';
 
 /** Sent once, when the provider session starts. Per-turn messages stay short because of it. */

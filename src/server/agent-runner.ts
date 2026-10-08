@@ -9,7 +9,7 @@ import { describeAgentFallback, describeModelSelection, type ExecutionProfileSou
 import { agentAccountEnv, agentSubprocessEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
 import { classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, type ExternalActionAuthorization } from './external-action-authorization.js';
-import { createExternalActionProcessGuard, externalActionGuardEnvironment, observeExternalActionRefusals, recordExternalActionRefusal, type ExternalActionProcessGuard } from './external-action-command-guard.js';
+import { createExternalActionProcessGuard, externalActionGuardEnvironment, observeExternalActionRefusals, recordExternalActionRefusal, type ExternalActionProcessGuard, type ExternalActionRefusal } from './external-action-command-guard.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
@@ -2265,11 +2265,12 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     });
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
     externalActionGuard = createExternalActionProcessGuard(externalAuthorization);
-    stopExternalActionObserver = observeExternalActionRefusals(externalActionGuard, (refusal) => {
+    const onExternalActionRefusal = (refusal: ExternalActionRefusal) => {
       recordExternalActionRefusal(repository, run, refusal);
       observedRunEvents.push({ category: 'agent_tool_use', detail: refusal.detail, streamKind: 'tool', command: refusal.command, exitCode: 126 });
       if (run.conversationId) publishRealtimeMessagesEvent(run.conversationId); else publishRealtimeEvent('shared-messages');
-    });
+    };
+    stopExternalActionObserver = observeExternalActionRefusals(externalActionGuard, onExternalActionRefusal);
     const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
     const lineageDecision = await verifyAuthoritativeMutationLineage(repository, item, externalAuthorization, sourceWorkspace ?? cwd, run);
     if (lineageDecision && run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, [{ kind: 'decision', detail: lineageDecision }]);
@@ -2373,6 +2374,78 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         )).output,
       })
       : null;
+    // With WORKBENCH_PERSISTENT_SESSIONS=1 an execute, bugfix, or research run
+    // linked to a conversation is a turn on that conversation's live provider
+    // session: the same process serves every run in one worktree, and a changed
+    // worktree restarts the host with --resume (ensureSession). Review and
+    // unlinked runs keep a process of their own.
+    const room = run.conversationId && run.agent !== 'palmyra' ? await import('./shared-room.js') : null;
+    const sessionAgent = run.agent === 'claude' || run.agent === 'codex' ? run.agent : null;
+    const taskSession = Boolean(room && sessionAgent && room.usesTaskRunSession(sessionAgent, run.kind));
+    const taskSessionTurn = async (message: string, options: { fresh?: boolean; followUp?: boolean } = {}): Promise<AgentCommandResult> => {
+      if (!room || !sessionAgent || !run.conversationId) throw new Error('A task session turn needs a conversation and a CLI agent.');
+      const turn = await room.runSharedSessionTurn({
+        repository,
+        agent: sessionAgent,
+        conversationId: run.conversationId,
+        messageId: run.messageId ?? run.id,
+        runId: run.id,
+        cwd,
+        accountProfile: run.accountProfile,
+        profile,
+        model: modelFor(sessionAgent, profile),
+        message,
+        authorization: externalAuthorization,
+        signal: controller.signal,
+        fresh: options.fresh,
+        onRefusal: onExternalActionRefusal,
+        sink: {
+          onProgress: (partial) => {
+            // The capture-gate follow-up is bookkeeping: it never replaces the reply body.
+            if (controller.signal.aborted || options.followUp) return;
+            repository.updateRun(run.id, { output: partial });
+            if (run.messageId) {
+              repository.updateSharedMessage(run.messageId, { body: partial });
+              if (run.conversationId) publishRealtimeMessagesEvent(run.conversationId); else publishRealtimeEvent('shared-messages');
+            }
+          },
+          onEvents: (events) => {
+            if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, events);
+          },
+          onUsage: (usage) => {
+            if (options.followUp) return;
+            const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
+            repository.updateRun(run.id, telemetry);
+            if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
+          },
+        },
+        onSteeringReady: () => { /* Task runs are not steered mid-turn. */ },
+      });
+      observedRunEvents.push(...room.observedEventsFromSessionLog({ conversationId: run.conversationId, agent: sessionAgent }, sessionAgent, turn.startOffset, turn.endOffset));
+      // The provider session and PID repeating across runs is the observable proof that no process was spawned.
+      repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, sessionAgent, 'usage', { providerSessionId: turn.sessionId, providerPid: turn.pid, sessionHostPid: turn.hostPid, sessionReused: turn.reused, sessionTurnId: turn.turnId });
+      if (!options.followUp) {
+        const sessionStartup = !turn.reused;
+        if (promptSize.sessionStartup !== sessionStartup || promptSize.sessionMode !== 'persistent') {
+          promptSize.sessionStartup = sessionStartup;
+          promptSize.sessionMode = 'persistent';
+          repository.updateRun(run.id, { promptSize });
+        }
+      }
+      return { output: turn.output, usage: turn.usage, sessionId: turn.sessionId, costUsd: turn.costUsd, peakContextTokens: turn.peakContextTokens } as AgentCommandResult;
+    };
+    const taskSessionMessage = (): string => taskSession && room && sessionAgent && run.conversationId && room.sharedSessionHasContext(run.conversationId, sessionAgent)
+      ? room.sessionTurnMessage({
+        conversationId: run.conversationId,
+        messageId: run.messageId ?? run.id,
+        runKind: run.kind,
+        persona: personaNameFor(item, run.kind),
+        objective: `${item.title}`,
+        workspaceBindings,
+        permission: room.sessionPermissionLine(externalAuthorization),
+        userMessage: run.instructions,
+      })
+      : prompt;
     let result = run.agent === 'palmyra'
       ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, previousMessages: palmyraContext, imageAttachments: item.attachments ?? [], requiredWorkbenchTools, externalActionGuard, onProgress: (partialOutput) => {
         repository.updateRun(run.id, { output: partialOutput });
@@ -2394,6 +2467,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           trace: entry.trace,
         })));
       } })
+      : taskSession
+        ? await taskSessionTurn(taskSessionMessage(), { fresh: run.agent === 'claude' && Boolean(storedClaudeSessionId && !resumeSessionId) }).then((turn) => ({ ...turn, agent: run.agent as CliAgent, fallbackFrom: null, fallbackReason: null }))
       : await runAgentCommandWithFallback(run.agent, cwd, run.agent === 'claude' ? claudeScopeRecoveryPrompt(prompt, cwd) : prompt, (partialOutput) => {
       repository.updateRun(run.id, { output: partialOutput });
       if (run.messageId) {
@@ -2463,7 +2538,15 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // Only a Claude result may write this column: after a fallback the id
     // belongs to a different agent, and the Claude session that failed mid-turn
     // is not worth resuming either way.
-    if (resumeSessionId && run.conversationId) {
+    if (taskSession && room && sessionAgent && run.conversationId && result.agent === sessionAgent) {
+      // The live host owns the provider session; retire it only when its context has outgrown the ceiling.
+      const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile, result.usage.cacheReadInputTokens ?? 0);
+      if (sessionAgent === 'claude') repository.setConversationClaudeSessionId(run.conversationId, checkpoint ? null : result.sessionId ?? null);
+      if (checkpoint) {
+        await room.endSharedSession(repository, run.conversationId, sessionAgent);
+        repository.addActivity(item.id, 'system', 'progress', checkpointActivityDetail(result.peakContextTokens ?? 0, profile, result.usage.cacheReadInputTokens ?? 0));
+      }
+    } else if (resumeSessionId && run.conversationId) {
       if (result.agent !== 'claude') repository.setConversationClaudeSessionId(run.conversationId, null);
       else {
         const checkpoint = shouldCheckpointSession(result.peakContextTokens, profile, result.usage.cacheReadInputTokens ?? 0);
@@ -2572,7 +2655,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         const gateAgent = result.agent as CliAgent;
         const priorUsage = result.usage;
         const priorCost = result.costUsd;
-        const followUp = await runAgentCommandWithFallback(gateAgent, cwd, CAPTURE_GATE_PROMPT, undefined, controller.signal, undefined, profile, (usage) => {
+        const followUp = taskSession && result.agent === sessionAgent
+          ? await taskSessionTurn(CAPTURE_GATE_PROMPT, { followUp: true }).then((turn) => ({ ...turn, usage: addUsage(priorUsage, turn.usage) }))
+          : await runAgentCommandWithFallback(gateAgent, cwd, CAPTURE_GATE_PROMPT, undefined, controller.signal, undefined, profile, (usage) => {
           const combined = addUsage(priorUsage, usage);
           repository.updateRun(run.id, { inputTokens: combined.inputTokens, cacheCreationInputTokens: combined.cacheCreationInputTokens, cacheReadInputTokens: combined.cacheReadInputTokens, outputTokens: combined.outputTokens });
         }, (entries, producingAgent) => {

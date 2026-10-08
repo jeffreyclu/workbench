@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -9,7 +9,8 @@ import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../s
 import { agentSubprocessEnv } from './agent-security.js';
 import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, measurePromptSize, missingReviewPasses, providerSessionForTaskTurn, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, reviewFallbackReason, reviewPassCompletionPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, selectReviewAgent, shouldContinueCacheHandoff, taskPromptContentSize, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError, ProviderRefusalError } from './agent-runner.js';
 import { openDatabase } from './database.js';
-import { usesPersistentSession } from './shared-room.js';
+import { readAgentSessionStatus } from './agent-session.js';
+import { usesPersistentSession, usesTaskRunSession } from './shared-room.js';
 import { loadPersonaFiles, parsePersona, personaBody, personaPrompt, renderClaudeAgent } from './personas.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -1770,5 +1771,118 @@ describe('persona definitions', () => {
       expect(personaPrompt(persona.name)).not.toMatch(/^(?:description|tools|model):/m);
       expect(renderClaudeAgent(parsePersona(renderClaudeAgent(persona)))).toBe(renderClaudeAgent(persona));
     }
+  });
+});
+
+
+describe('task runs on the conversation session', () => {
+  const ENV = ['CLAUDE_BIN', 'WORKBENCH_AGENT_SESSIONS_DIR', 'WORKBENCH_PERSISTENT_SESSIONS'] as const;
+  const saved: Partial<Record<(typeof ENV)[number], string | undefined>> = {};
+  let root: string;
+  let spawnsPath: string;
+  let database: ReturnType<typeof openDatabase>;
+  let repository: WorkItemRepository;
+
+  const spawns = (): Array<{ pid: number; args: string[] }> => existsSync(spawnsPath)
+    ? readFileSync(spawnsPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    : [];
+
+  beforeEach(() => {
+    for (const key of ENV) saved[key] = process.env[key];
+    root = mkdtempSync(join(tmpdir(), 'workbench-task-session-'));
+    spawnsPath = join(root, 'spawns.jsonl');
+    const fakeClaude = join(root, 'fake-claude.mjs');
+    writeFileSync(fakeClaude, `
+import { appendFileSync, writeSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(spawnsPath)}, JSON.stringify({ pid: process.pid, args }) + '\\n');
+const flag = (name) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
+const sessionId = flag('--session-id') ?? flag('--resume');
+const emit = (event) => writeSync(1, JSON.stringify({ ...event, session_id: sessionId }) + '\\n');
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') {
+    emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
+    return;
+  }
+  const text = 'Finished in ' + process.pid;
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  emit({ type: 'result', subtype: 'success', is_error: false, result: text });
+});
+`);
+    const fakeDirectory = sharedFakeAgentDirectory('exit 1', `exec "${process.execPath}" "${fakeClaude}" "$@"`).directory;
+    temporaryDirectories.push(fakeDirectory);
+    process.env.CLAUDE_BIN = join(fakeDirectory, 'claude');
+    process.env.WORKBENCH_AGENT_SESSIONS_DIR = join(root, 'agent-sessions');
+    process.env.WORKBENCH_PERSISTENT_SESSIONS = '1';
+    database = openDatabase(join(root, 'workbench.db'));
+    repository = new WorkItemRepository(database);
+  });
+
+  afterEach(() => {
+    const sessionsDirectory = join(root, 'agent-sessions');
+    for (const conversationId of existsSync(sessionsDirectory) ? readdirSync(sessionsDirectory) : []) {
+      const status = readAgentSessionStatus({ conversationId, agent: 'claude' });
+      if (status?.hostPid) { try { process.kill(-status.hostPid, 'SIGKILL'); } catch { /* already gone */ } }
+    }
+    database.close();
+    for (const key of ENV) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const workspace = (name: string) => {
+    const directory = join(root, name);
+    mkdirSync(directory, { recursive: true });
+    return directory;
+  };
+  const runIn = async (conversationId: string, directory: string, instructions: string, kind: AgentRun['kind'] = 'execute') => {
+    const task = repository.create({ title: `Task in ${directory}`, description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, kind, 'claude', 'claude', instructions, conversationId);
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+    return repository.getRun(run.id)!;
+  };
+
+  it('serves two execute runs in one worktree from one process', async () => {
+    const conversation = repository.createConversation('Task');
+    const directory = workspace('tree-a');
+    const first = await runIn(conversation.id, directory, 'Implement the first change.');
+    const second = await runIn(conversation.id, directory, 'Implement the follow-up.');
+
+    expect(first).toMatchObject({ status: 'completed' });
+    expect(second).toMatchObject({ status: 'completed' });
+    expect(spawns()).toHaveLength(1);
+    expect(first.output).toContain(`Finished in ${spawns()[0].pid}`);
+    expect(second.output).toContain(`Finished in ${spawns()[0].pid}`);
+    expect(first.promptSize).toMatchObject({ sessionMode: 'persistent', sessionStartup: true });
+    expect(second.promptSize).toMatchObject({ sessionMode: 'persistent', sessionStartup: false });
+    expect(second.promptSize!.totalChars).toBeLessThan(first.promptSize!.totalChars);
+  }, 30_000);
+
+  it('respawns with --resume when the next run uses a different worktree', async () => {
+    const conversation = repository.createConversation('Task');
+    await runIn(conversation.id, workspace('tree-a'), 'Implement the first change.');
+    await runIn(conversation.id, workspace('tree-b'), 'Continue in the other worktree.');
+
+    const [first, second] = spawns();
+    expect(spawns()).toHaveLength(2);
+    expect(first.pid).not.toBe(second.pid);
+    expect(first.args).not.toContain('--resume');
+    const sessionId = first.args[first.args.indexOf('--session-id') + 1];
+    expect(second.args[second.args.indexOf('--resume') + 1]).toBe(sessionId);
+  }, 30_000);
+
+  it('keeps review runs, runs without a conversation, and other kinds off the shared session', () => {
+    expect(usesTaskRunSession('claude', 'execute')).toBe(true);
+    expect(usesTaskRunSession('codex', 'bugfix')).toBe(true);
+    expect(usesTaskRunSession('claude', 'research')).toBe(true);
+    expect(usesTaskRunSession('claude', 'review')).toBe(false);
+    expect(usesTaskRunSession('claude', 'analysis')).toBe(false);
+    expect(usesTaskRunSession('palmyra', 'execute')).toBe(false);
+    delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    expect(usesTaskRunSession('claude', 'execute')).toBe(false);
   });
 });
