@@ -342,3 +342,102 @@ first. Making two caches, two cursors, or two result sets agree is a patch — t
 again, and every downstream feature has to remember which one it is reading. Ask why the divergence
 exists at all before making the sides match, and state the tradeoff plainly if collapsing them costs
 a capability.
+
+
+## <a id="21"></a>21. Never post code review comments to GitHub — draft them for Jeffrey (2026-08-28)
+
+When Jeffrey asks for review comments on a pull request, the deliverable is text he will paste
+himself, not a mutation. He interrupted a review of `WriterInternal/fe.web-app#5287` with "wait are
+you trying to comment on GH?? don't do that. just tell me where and what to comment." Reviewing a PR
+therefore means producing, for each finding, the exact file, the exact right-side line number in the
+GitHub "Files changed" view, and the comment body ready to paste — and stopping there.
+
+Read-only GitHub calls used to establish those anchors (`gh api .../pulls/<n>/files`, fetching
+`refs/pull/<n>/head`, `git show`) are fine and are what make the line numbers trustworthy. What is
+forbidden is any write: `gh pr review`, `gh pr comment`, `gh api -X POST` against a comments
+endpoint. Anchor findings on lines that are actually part of the diff whenever possible, because a
+line outside every hunk forces Jeffrey to expand context before GitHub will let him comment there.
+
+
+## <a id="22"></a>22. Audits and static analysis run against `main`, not the checked-out branch
+
+Jeffrey's correction on 2026-08-31, during the Manage Connectors action-catalog analysis: "YOU GUYS
+SHOULD BE AUDITING MAIN NOT THE DIRTY WORKTREE FYI". I had begun cataloguing connector actions from
+whatever branch happened to be checked out in `~/dev/writer-monorepo` — at that moment a feature
+branch (`feat/con-connectors-v2-projection`) carrying in-progress, uncommitted work.
+
+The rule is general: when the deliverable is an audit, inventory, catalog, coverage analysis, or any
+other description of what the system *is*, the baseline is the repository's default branch. In-flight
+branch work is a proposal, not the system of record, and describing it as current state produces a
+document that is wrong the moment the branch is rebased or abandoned — and worse, invents test cases
+for behavior that never shipped.
+
+Practically: read the audited files with `git show main:<path>` (or an equivalent read-only view)
+rather than switching branches, so a dirty working tree is never disturbed. If in-progress branch
+work is genuinely relevant, it goes in a clearly separated "not yet on main" section, never mixed
+into the main inventory. Confirm and state which ref the analysis was taken from.
+
+
+## <a id="23"></a>23. An enumerated review-comment list is the whole scope (2026-08-31)
+
+When Jeffrey says "address the bot comments" — or names any fixed set of items — that list is the
+entire scope of the edit. Fix exactly those items and stop. Do not add tests for the code you just
+touched, do not tidy neighboring code, and do not fold in improvements that seem obviously correct.
+If a fix genuinely requires touching a file outside the stated scope, say so and get agreement
+before doing it; that is a question, not a licence.
+
+A bot suggestion does not widen the scope either. On PR #14774 a review bot asked for a duplicated
+tooltip string to be extracted into `frontend/src/components/connectors/utils.ts` and imported by
+both the V2 card and the legacy `connector-row-status.tsx`. Following it edited two files outside
+`manage-tabs/connectors-v2/`, which collides with Jeffrey's standing rule that the connectors V2
+work stays inside its own folder behind one gated entry point. The right move was to keep the
+constant inside the V2 folder, or to leave the duplication and reply to the bot — not to follow the
+suggestion into legacy code.
+
+Learned when a six-comment instruction produced an eleven-file commit (`58f3c1512c`) whose largest
+part, three new test files totalling ~219 of 260 inserted lines, nobody had asked for.
+
+
+## <a id="24"></a>24. Review the PR's own code, from the PR branch — never the primary checkout's current branch (2026-09-03)
+
+Reviewing PR #15243 (CON-230), two consecutive review passes rejected the PR claiming its artifacts
+did not exist. Both were reading `/Users/jeffrey.lu/dev/writer-monorepo`, which was sitting on an
+unrelated branch (`fix/con-221-...`). The code was real; the checkout was wrong. Jeffrey's correction
+was emphatic and came twice: review the GitHub diff, and check the branch out in its own worktree
+rather than assuming the monorepo working copy is on it.
+
+The standing rule for any code review:
+
+- Resolve the PR first (`gh pr view <n> --json headRefName,headRefOid,files`) and treat the head SHA
+  as the only thing under review.
+- Read the code at that SHA — from a worktree checked out to it, or via `gh api .../contents?ref=<sha>`
+  for individual files. Confirm the worktree's `git rev-parse HEAD` equals the PR head before trusting
+  anything read from it. Existing worktrees may already be at the right commit: check
+  `git worktree list` before creating another.
+- "The symbol does not exist in the repo" is never a finding until it has been checked at the PR's head
+  commit. The default working directory is a starting point, not the subject of the review.
+
+
+## <a id="25"></a>25. A screenshot may be of our own branch, not of shipped behavior (2026-09-14)
+
+On CON-270 a screenshot of the Connect modal was cited back to Jeffrey as evidence of what the
+product does today. It was not: the modal in it was the uncommitted frontend work on
+`jeffrey/CON-270/basic-auth-blank-password`, and only the error inside it came from the deployed
+`main` gateway. Jeffrey: "the screenshot is what WE IMPLEMENTED, NOT WHAT EXISTS."
+
+Before treating any image Jeffrey shares as evidence, establish which build produced each part of it.
+A screenshot taken against a local worktree mixes our unreleased UI with real server responses, so
+the UI in it proves nothing about main while the error in it still does. Say explicitly which half is
+which when describing it, and never use a picture of our own change as proof of the bug it fixes.
+
+
+## <a id="26"></a>26. A PR link is the review target, not the local checkout
+
+When Jeffrey supplies a pull-request URL, the review must be performed against that pull request's
+head commit as it exists on GitHub, fetched with the `gh` CLI (`gh pr view/diff <n> --repo <owner/repo>`,
+and `gh api repos/<owner/repo>/contents/<path>?ref=<head-sha>` for the surrounding files a hunk needs).
+His local working tree is frequently on an unrelated branch with unrelated uncommitted changes, so
+reading it produces a review of code that is not in the pull request at all. He corrected this on
+2026-09-16, in strong terms, after a review of PR #5371 cited files and line numbers taken from the
+local `jeffrey/CON-154/ais-password-grant` branch instead of the PR head. Never substitute the local
+checkout, and never cite local paths or line numbers as evidence for a PR review.

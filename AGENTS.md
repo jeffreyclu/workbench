@@ -19,9 +19,9 @@ This voice is stable, not frozen. Learn from Jeffrey's accepted edits and sample
 
 ## Shared memory
 
-- `docs/shared-memory.md` is the single durable memory for every agent. It holds Jeffrey's standing preferences, corrections, and constraints. Read it before acting on anything non-trivial.
+- `docs/shared-memory.md` is the single durable memory catalogue for every agent. Read its index rows before acting on anything non-trivial, then open only matching topic files.
 - Never keep private per-agent memory. Claude's `~/.claude/**/memory/` directory, Codex's own notes, or any equivalent per-tool store are not acceptable homes for a durable lesson. Jeffrey stated this directly on 2026-08-23: memory is shared or it does not exist.
-- When Jeffrey teaches or corrects something durable, append it to the right section of `docs/shared-memory.md` in the same reply, updating the existing subsection rather than adding a near-duplicate.
+- When Jeffrey teaches or corrects something durable, append it to the right topic file in `docs/shared-memory/` in the same reply, updating the existing subsection rather than adding a near-duplicate; then run `npm run memory:catalogue`.
 - Writer product facts still also belong in `~/Documents/Workbench/notes/knowledge/` so both Claude and Codex can read them without this repo.
 
 ## Operating rules

@@ -597,3 +597,368 @@ optional React layer; Zod is not excluded at all — the real constraint is that
 on incompatible Zod majors and the backend response schemas are still too loose to be worth
 validating against. A rule Jeffrey cannot trace to a tradeoff will be read as arbitrary and thrown
 out, correctly.
+
+
+## <a id="23"></a>23. Name code with mainstream industry vocabulary, not architectural jargon (2026-08-28)
+
+Jeffrey rejects imported architectural nouns in Writer code and prose when a plainer, more widely
+recognized term exists. Specifically he ruled out "projection" and "view model" as names for files,
+types, or comments, because they come from MVVM/CQRS vocabulary that neither React nor this codebase
+uses, so a reader has to learn a private dialect before reading the code.
+
+Prefer names an ordinary React/TypeScript reader already knows: `selectors.ts` for pure derivation
+functions, `useThing` for the hook, and repo-native type suffixes such as `UseThingOptions` and
+`UseThingResult` (both already used across `frontend/src`). Name a module after what it produces or
+the standard role it plays, and check the surrounding directory for a near-collision before settling
+on a filename.
+
+Learned on the Manage Connectors V2 card page, where `projection.ts` and
+`useManageConnectorsViewModel` were renamed to `selectors.ts` and `useManageConnectors`.
+
+
+## <a id="24"></a>24. Look for an existing pattern before writing new behavior
+
+*Instruction from Jeffrey, 2026-08-28.* When adding a capability — a hook, a utility, an interaction
+pattern — search the repository for an existing implementation first and extend or mirror it, rather
+than writing a fresh one. Jeffrey stated this as a standing expectation ("see if we already have
+existing patterns/utils before reinventing the wheel"), not a one-off request, and it applies beyond
+the literal "new util" case in the monorepo's `CLAUDE.md`: it covers matching an established idiom
+even when no shared module is extracted.
+
+The value is consistency of behavior, not only avoided duplication. Concretely, the accessibility
+follow-up on Manage Connectors V2 needed programmatic focus movement; the repo already had
+`scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth' })` followed by
+`element.focus({ preventScroll: true })` on a `tabIndex={-1}` landmark
+(`frontend/src/components/agent-insights/agent-insights-page.tsx`,
+`.../section-card/section-card.tsx`). Copying that pair kept reduced-motion handling and tab-order
+behavior identical across two pages instead of inventing a second convention.
+
+
+## <a id="25"></a>25. Hard-flag every legacy file a new feature touches
+
+When a feature branch modifies pre-existing ("legacy") code that a new code path shares, Jeffrey
+requires the change to be flagged in that legacy file itself — stated on 2026-08-28 as a standing
+rule with "no exceptions": "any legacy code that we touch MUST be flagged for the new logic code
+paths."
+
+The flag is a greppable ticket-keyed comment (for example `CON-194 LEGACY-AFFECTING:`) placed at each
+changed site, plus a short block at the top of the component or hook explaining what changed for the
+pre-existing callers and why the change was shared rather than gated on the new caller. Distinguish
+edits that change behavior for existing consumers from purely additive ones that no existing caller
+reads.
+
+The reason is reviewability and blast radius: a reader opening a legacy component months later must
+be able to see immediately that a newer feature altered its runtime behavior, instead of assuming the
+file is untouched. Choosing to share a fix with the legacy path (rather than gating it) is allowed —
+Jeffrey accepted that for `connect-connector-modal.tsx` — but only if the sharing is documented in
+place.
+
+
+## <a id="26"></a>26. Feature-flag gates must never fall through to legacy while flags resolve (2026-08-31)
+
+Jeffrey, on Connectors V2: seeing the legacy skeleton render before the V2 skeleton is "unacceptable".
+A gate that reads `useFeatureFlag(...)` alone treats "not resolved yet" as `false`, so every V2 user
+briefly mounts the legacy view — running its queries and flashing a layout V2 never shows. Gate on
+flag readiness as a third `pending` state that renders the new view's own skeleton, and route every
+render site that paints before the gated component (page-level tab skeletons included) through the
+same hook so they cannot disagree.
+
+
+## <a id="27"></a>27. Every failed user-triggered mutation must raise an error toast
+
+Jeffrey's standing rule (2026-08-31), stated after a failed connector-profile revoke returned
+silently: a user action that fails MUST tell the user it failed. Silence is never acceptable, and
+"the failure is visible because the list did not change" is not a substitute for a toast.
+
+The trap is a multi-step action where only some steps report. Helpers that signal failure by
+resolving `false` or returning a `{ status: 'error' }` result — rather than throwing — raise no
+toast of their own, and this repo registers no global React Query `MutationCache` `onError`, so a
+mutation failure is reported only where a caller handles it explicitly. Before assuming an
+upstream layer toasts, read it: confirm each failure path either raises its own toast or is
+toasted by the caller.
+
+Balance that against double-toasting: when the inner hook already calls `handleApiError` with a
+toast, the caller must stay silent for that path. Assert both directions in tests — the path that
+must toast, and the path that must delegate.
+
+
+## <a id="28"></a>28. Design answers must cover the asset/data lifecycle, not just the code shape (2026-08-31)
+
+When Jeffrey asks "what options do we have" for something that depends on data or assets owned
+outside the repo, an answer scoped to in-repo types, refactors, and call sites is not an answer.
+On the connector-logo question he rejected a proposal built around a typed `ConnectorLogoRef`
+union and unified render props with: "this is only solving it from a code perspective... what
+happens when external logos get updated? or source images get moved? we need a single unified
+method for both retrieving AND rendering."
+
+The lesson generalizes past logos. For anything sourced from a third party or from object storage,
+the design must say what happens when the upstream artifact changes, moves, 404s, or expires — who
+re-fetches it, on what cadence, where the durable copy lives, how a version change propagates to
+clients and caches, and what renders when every source fails. Treat retrieval and rendering as one
+mechanism with one owner; a type union at the boundary is an implementation detail of that
+mechanism, never a substitute for it.
+
+
+## <a id="29"></a>29. One selector, not a comparison builder (2026-09-01)
+
+When a Workbench review surface browses committed history, Jeffrey wants a **single commit selector**
+and nothing else. Each commit is shown against the one immediately before it. He rejected a repo
+browser that shipped two dropdowns — a branch/worktree picker plus a commit picker whose default was
+"whole branch vs base" — with "no one asked for it", because it turned reading a commit into
+configuring a comparison.
+
+The general rule this instance carries: do not invent a comparison base, a second axis, or an extra
+control the request did not ask for. Pick the obvious default (the previous commit, the newest
+commit) and expose one control. If a second dimension seems genuinely necessary, ask before building
+it rather than shipping it and explaining it afterwards.
+
+
+## <a id="30"></a>30. Feature-flagged backend changes: one entrypoint, no second evaluation (2026-09-02)
+
+When a backend change exists to serve a frontend feature that is already behind a rollout gate,
+Jeffrey's standing requirement is to "absolutely minimize blast radius and only have one single
+flagged entrypoint". The gate is evaluated once, on the client. The server must not evaluate the
+same gate a second time; it takes an explicit request parameter and honours it.
+
+This was learned the hard way on CON-218. The Connector Gateway `GET /profiles` handler evaluated
+the same `actionagentmanageconnectorsv2` Statsig gate the browser evaluates, to decide whether
+`query` should also match the connector's catalog name. One boolean evaluated in two services is two
+answers: the browser said on and deleted its client-side filter, while the gateway said off, because
+its Statsig client returns the supplied default whenever the SDK cannot initialise — which is every
+environment with no `STATSIG_API_KEY`, including local. Search then fell back to matching only the
+operator-chosen profile label and returned nothing. A server-side gate also changes behaviour for
+every other caller of a shared endpoint the moment it flips, whereas an explicit parameter confines
+the change to the one caller that sends it, by construction rather than by gate configuration.
+
+The related rule, from the same review: do not widen a search to fields the user cannot see. Adding
+a `description ILIKE` predicate alongside the requested connector-name matching was unrequested scope
+that returns cards whose visible text has nothing to do with the term. Match what the card shows or
+is identified by, and nothing else.
+
+**"One entrypoint" is literal, and stricter than it first sounds (2026-09-02).** A first attempt at
+CON-218 satisfied "no second flag evaluation" but still threaded an `unifiedCardList` field through
+the existing args type and branched on it in three places inside the existing model — extracting a
+helper, parameterising the search clause, and adding an `if` in the `orderBy` callback. Jeffrey
+rejected that outright. What he wants, in his own pseudocode, is:
+
+```
+// in the same route
+if (flag on)  -> do new shit
+if (flag off) -> do old shit
+```
+
+and "THAT IS IT, THAT'S THE ONLY CHANGE I WANT TO SEE IN EXISTING LOGIC. EVERYTHING ELSE NEEDS TO
+LIVE IN NEW LOGIC." Concretely: the branch goes at the outermost handler, the off-path stays
+byte-identical to `main`, and the whole new behaviour lives in a new module that no existing caller
+imports. Existing types, models, services, and orchestration are not modified, not parameterised, and
+not refactored "while we're here" — a diff against `main` that shows deletions in existing files has
+already failed the rule. Duplicating query-building code into the new module is the accepted cost;
+removing the feature must be deleting one directory and one `if`. The reshaped CON-218 commit is the
+reference: three new files plus a 29-line route branch, zero deletions.
+
+
+## <a id="31"></a>31. A rewrite preserves the legacy behavior exactly — do not "improve" the UX along the way (2026-09-08)
+
+During the Manage Connectors V2 work, the V2 connect flow added a deliberate behavior the legacy flow
+never had: after a successful OAuth connection it held `ConnectConnectorModal` open on a
+"Successfully Connected!" state until the user dismissed it, on the reasoning that a modal closing by
+itself gives no confirmation. Jeffrey rejected that twice, the second time as "the modal is still
+fucking open after OAUTH connection", and stated the rule directly: "these are regressions including
+the autoclosing modal. we need to maintain the legacy behavior EXACTLY."
+
+The standing rule for any V1 → V2 rewrite or refactor he asks for: the new implementation reproduces
+the old observable behavior, including behavior that looks like a flaw. A behavior change is a
+separate, explicitly requested piece of work. Reasoning that the new behavior is better is not a
+license to ship it inside a refactor, and describing it in a code comment does not make it agreed.
+
+
+## <a id="32"></a>32. When new code breaks existing machinery, delete the deviation — do not patch the symptom (2026-09-08)
+
+Continuing the Manage Connectors V2 connect flow, the V2 modal sat stuck on "connecting" after OAuth.
+Successive attempts chased the symptom: cutting a cache entry, adding a popup-closed grace period,
+adding window-closed detection — each one touching more shared files (`connect-connector-modal.tsx`,
+`oauth-popup.ts`, `use-github-oauth.ts`, the legacy `use-connector-auth.ts`). Jeffrey rejected the
+whole approach twice, the second time as: "STOP TRYING TO PATCH THE FUCKING PROBLEM. SOLVE FROM FIRST
+PRINCIPLES. WE HAVE A CONNECTOR MODAL COMPONENT THAT EXISTS. WE HAVE OAUTH FLOW LOGIC THAT EXISTS...
+ALL WE HAVE TO DO IS CORRECTLY ADAPT OUR V2 STATE TO THE EXISTING FUCKING MODAL."
+
+He was right, and the shape of the answer generalizes. When a working, shared component misbehaves
+only under a new feature, the defect is almost always something the new code added to a path it
+shares with everyone else — a flag-driven cache injected into a shared fetcher, or a local state
+layer wrapped around a hook that already owned that state. The fix is to remove the new code's
+deviation so the existing logic runs unmodified, and it should read as a deletion. Here it was
+−86 lines across 6 files, with the modal and OAuth helpers untouched.
+
+The standing rule: before editing shared code to accommodate a new surface, diff the new surface's
+behavior against the old one on that shared path and ask what the new code added. Growing the patch
+across more shared files is the signal that the diagnosis is wrong, not that the bug is deep.
+
+Restated by Jeffrey on the next iteration, as a concrete ownership boundary for Connectors: the
+`ConnectConnectorModal` owns its own open/authorizing/success/error state and that legacy behavior is
+not to be touched. Manage Connectors V2's only job is to wire its own success and error states
+through to the modal via the existing props — never to hold the modal open, override `open` or
+`connectorConfig`, or intercept `onOpenChange`. The V2-side success effects (toast, autoscroll,
+cache refresh) hang off `onAuthenticated`; the error surface stays the modal's.
+
+
+## <a id="33"></a>33. Keep code comments short; do not pre-argue review objections in them (2026-09-09)
+
+Jeffrey has twice cut back block comments in the CON-230 connectors-v2 code, the second time with
+"why is this comment so fucking long". The pattern he objects to is a comment that stops describing
+what the code does and starts defending why an alternative was rejected — an anticipated reviewer
+question answered inline, in the file, forever.
+
+The rule: a comment carries only the one non-obvious fact a reader needs to understand the code in
+front of them, in two or three lines. Design justification, rejected alternatives, and rationale for
+where a call lives belong in the PR description or the review thread, which is where the objection
+would actually be raised and where it expires once resolved. If a comment is growing a second
+paragraph that begins "deliberately" or "instead", that paragraph is review argument, not
+documentation, and should be deleted.
+
+
+## <a id="34"></a>34. The Pluto bench bills production Claude API credits (2026-09-10)
+
+Jeffrey, escalating mid-task: the last few `scripts/run-bench.cjs` runs "quite literally exhausted the
+production Claude API credits." The bench is not a free local harness — it drives the real agent against
+the real Anthropic API on the production key, so every sweep is real money out of the product's budget.
+
+Never launch a bench sweep as a casual verification step, and never re-run one just to confirm a result
+that already has a log. Before proposing a run, state its expected cost and prefer the cheapest tier that
+answers the question (`--tier retrieval` spends $0 model tokens; `--ids <case>` scopes to specific cases).
+Treat a full multi-turn sweep as an explicit, budgeted decision that is Jeffrey's to make, not an
+implementation detail of a debugging loop.
+
+Measured cost lives in Supabase `token_usage` and `/tmp/agent-v2-usage.log`; `node scripts/cost-report.cjs
+--bench-run <log>` prices a specific run. The bench's own result files record no token data at all, which
+is why the spend stayed invisible until the credits ran out.
+
+
+## <a id="35"></a>35. Prototypes are built in the real application, not in Storybook
+
+On 2026-09-11, after a connector error-UX plan proposed a Storybook-only prototype, Jeffrey rejected
+it outright and restated the requirement: cut a branch in the monorepo and build the prototype in the
+actual product code.
+
+When Jeffrey asks for a prototype, the deliverable is working code on a branch in the owning
+repository, wired into the real components, data model, and state layer the feature already uses. A
+Storybook story, a standalone demo page, an HTML mock, or any other external prototyping tool does not
+satisfy the request, because the point of the prototype is to demo the real experience to the team for
+buy-in — something a component gallery detached from the app's data cannot do.
+
+Base the branch on whatever in-flight branch the prototype depends on rather than on `main`, so the
+demo includes the plumbing it builds upon.
+
+
+## <a id="36"></a>36. Verify the server's contract before shipping a client-side validation change
+
+On 2026-09-14, during CON-270, the "blank HTTP Basic password" fix was implemented in two frontend
+repos — relaxing the forms so the username was mandatory and the password optional — and reported as
+done. Jeffrey's reply: "did you fucking verify that username mandatory, password optional is what
+be.mcp-gateway expects??" It was not. Reading `be.mcp-gateway` showed the connect route declared
+`password: t.String({ minLength: 1 })`, so every relaxed form would have traded a client-side
+"Password is required" message for a server-side 422.
+
+Whenever a change loosens, tightens, or reshapes what a client sends, read the receiving service's
+schema, handler, and storage format first, and quote the exact file and line. A validation rule is
+one end of a contract; changing one end without reading the other is not a fix, it just relocates the
+error. The same sweep must continue past the request boundary — in this case the credential was also
+persisted in a format whose reader silently dropped a blank password, a second failure that a
+route-only check would have missed.
+
+
+## <a id="37"></a>37. Regenerate generated API clients; never hand-write their types
+
+When frontend work needs new backend fields, regenerate the typed client with the repo's own
+OpenAPI codegen command instead of hand-authoring the request/response types. Jeffrey stated this
+directly on 2026-09-15 for the AIS password-grant work: "there should be an openai ts command to
+auto generate the client. use it."
+
+In `~/dev/fe.web-app`, that command is `pnpm generate:connect-gateway`, run from
+`apps/service.writer-app`. It wipes `src/generated/connector-gateway` and runs `@hey-api/openapi-ts`
+via `src/generated/generate-connector-gateway.ts`, using `openapi-ts.config.ts`, which reads a local
+`connector-gateway.yaml` if present and otherwise fetches
+`https://app.qordobadev.com/api/mcp-gateway/swagger/json` with a `Q_TOKEN` env var.
+
+The one legitimate reason to write types by hand is hey-api's literal collapse: it emits discriminator
+fields as `kind: string` / `mode: string`, so generated unions cannot be narrowed. The codebase's
+established response is a small hand-patched literal union layered over the generated type (see
+`DetectedAuth` in `create-custom-connector/api/byo.queries.ts`), not a hand-written client.
+
+
+## <a id="38"></a>38. Contract tests must be derived from the backend, not restate the audit
+
+When an audit concludes "the frontend matches what the backend expects", Jeffrey wants that
+conclusion enforced by tests rather than asserted in prose. On 2026-09-16, during the AIS
+password-grant work, he said: "what i need is unit tests for this logic. we need to guarantee that
+your audit - ie what the backend expects - matches the frontend permutation EXACTLY."
+
+The weak form he is rejecting is a test that restates the finding as a literal, such as
+`expect([...OPENAPI_AUTH_TYPES_WITH_CUSTOM_HEADERS]).toEqual([AUTH_TYPE.OAUTH2, AUTH_TYPE.PASSWORD])`.
+That passes forever and drifts silently the moment the backend changes. The strong form drives the
+real mapper over every reachable permutation and checks the emitted payload against a contract table
+that is itself pinned to the generated client, so regenerating the client after a backend change
+fails the suite instead of shipping a 400.
+
+Two related traps. First, the backend source of truth is `origin/main`, not whatever branch happens
+to be checked out locally: the `be.mcp-gateway` working copy was eight days stale and was missing an
+entire auth variant, which made an earlier audit wrong. Second, when a contract test surfaces a real
+defect, leave it failing and report it rather than weakening the assertion to keep the suite green.
+
+
+## <a id="39"></a>39. Client types come from the OpenAPI generator, never hand-written or hand-widened
+
+Jeffrey's standing rule for frontend work against the Writer gateways: get client types from the
+OpenAPI type generation, not from hand-authored interfaces or by widening a generated union in
+place. He restated it mid-task on 2026-09-16 during the CON-274 Writer Agent password-grant work —
+"also use the openapi types generation for the client" — while an implementation was considering
+adding a `password` member to the generated `securityScheme` union by hand.
+
+In practice this means deriving request and response shapes from the generated module
+(`@/generated/mcp-gateway` in `writer-monorepo/frontend`, regenerated by `pnpm sync:mcp-gateway`,
+configured in `frontend/openapi-ts.config.ts`, which fetches the live swagger and needs a `Q_TOKEN`
+or `DEV_AUTH_TOKEN`). Extract the variant you need from the generated union rather than retyping it,
+for example `Extract<PostApi...ConnectData['body'], { password: string }>`.
+
+The rule also has a diagnostic use. If a value genuinely cannot be expressed in the generated types,
+that usually means it belongs to a different vocabulary rather than that the generated type is
+wrong. In the password-grant case the legacy mcp-gateway `SecurityScheme` enum has no password
+member and never will, because the password grant is a Connector Gateway concept carried on
+`authMode`. Editing the generated file would have hidden that distinction; reading the generated
+types as authoritative surfaced it.
+
+
+## <a id="40"></a>40. Do not wrap a trivial expression in a named helper function
+
+Write the condition inline when the helper body is a single expression that any reader already
+understands. A named wrapper around something like an emptiness check adds a definition, a jump, and
+a second name for a thing that has an obvious literal spelling — it costs readability instead of
+buying it. Reserve extracted helpers for logic that is genuinely non-obvious, repeated in a
+meaningfully complex form, or needs a name to explain a business rule.
+
+Corrected on 2026-09-17 during CON-274 (frontend password grant). The modal had
+`function isSubmittableCredential(raw: string): boolean { return raw.trim().length > 0; }` used twice
+in one line; Jeffrey's response was "what the fuck is this". It was inlined to
+`username.trim() !== '' && password.trim() !== '' && !isPending`.
+
+
+## <a id="41"></a>41. A scope-narrowing order does not authorize deleting load-bearing code
+
+When Jeffrey narrows a diff — "no non-connector-gateway changes", "remove all of it" — he is
+excluding changes that *spread* the feature into surfaces he did not ask for. He is not asking to
+delete code the feature needs to run. Before reverting any file under such an order, establish what
+that file's change actually does: if removing it breaks a contract, a validation boundary, or the
+happy path, it belongs in the diff and the right move is to keep it and say why it is in scope.
+
+Corrected on 2026-09-18 during CON-274 (frontend password grant). An earlier turn read "NO V1 OR
+LEGACY SHIT AT ALL. REMOVE ALL OF IT" as covering
+`backend/mcp_gateway/mcp_gateway_client.py`, and reverted it along with the genuinely out-of-scope
+legacy-table and shared-`utils.ts` edits. Jeffrey's response: "what the fuck??? this is absolutely
+necessary or it breaks the connector registry validation????" He was right. That file is the
+monorepo's *Connector Gateway* client, not a legacy surface: `CgConnectionOrgProfile.auth_mode` is a
+strict Pydantic `Literal` and `CgV1TeamConnectionsResponse.model_validate()` parses a whole page at
+once, so one org profile with `authMode: "password"` raises `ValidationError` for the entire
+connector list rather than skipping that row.
+
+The generalizable test is whether a file sits on the feature's own path or on a neighbouring surface
+the feature was pushed into. "Backend file" and "Python file" are not the boundary; "not the thing
+Jeffrey asked to build" is.

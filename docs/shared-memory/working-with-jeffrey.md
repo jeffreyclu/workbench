@@ -451,3 +451,266 @@ Backend analysis is still useful as supporting context, but it is never the answ
 the backend cause in one line if it matters, then locate and report the defect in
 `writer-monorepo/frontend/src`. Ask which surface is in scope only when the frontend genuinely has
 no involvement in the reported behavior.
+
+
+## <a id="26"></a>26. Pushing is a separate instruction from the work (2026-08-28)
+
+Jeffrey grants push/PR permission explicitly and narrowly. When he says "push" or "create a PR",
+that IS explicit authorization and the agent must do it rather than claiming it cannot. But that
+authorization does not carry forward: it covers the push he asked for, not the next one.
+
+After a later, differently-scoped instruction — "audit the PR for WDS tokens", "review this",
+"check X" — the deliverable is the finding plus the local edit. Do not push those edits, and do not
+treat the earlier push approval as still active. Report what changed locally and let Jeffrey decide
+whether it goes to the remote.
+
+Learned when an audit-only request for PR #14774 was answered with an unrequested push of
+`2b60429647` to `feat/con-connectors-v2-projection`.
+
+
+## <a id="27"></a>27. Every "done" report must say where Jeffrey can see it — or that there is nothing to see (2026-08-29)
+
+Jeffrey has twice rejected a completion report on the same grounds: "where am i supposed to see
+these changes??" and "i don't see any of this implemented in the UI." Both times the work was real
+and correctly wired, but the report described code layers instead of observable surfaces, so he went
+looking in the app for something that either lived only on the server or sat behind a gate his
+screen never reached.
+
+The rule: a change is not reported as done until the report names the concrete surface — the screen,
+the tab, the button, the exact preconditions to reach it — or states plainly that the change has no
+UI surface at all and explains what it affects instead (prompt text, audit output, API response).
+Prompt-construction and validation layers are the usual offenders: they are substantial work that
+renders nothing. Say so up front rather than letting an unqualified "done and wired" imply pixels.
+When the surface is gated (needs a linked work item, a specific pane, a non-PR source), the gate is
+part of the report, not a detail to discover later.
+
+
+## <a id="28"></a>28. Explain infra and setup in plain language, not dense technical prose (2026-09-01)
+
+Jeffrey repeatedly cuts off jargon-heavy explanations with "ELI5." It happened twice during the
+local `be.mcp-gateway` bring-up: an answer that led with rewrite ordering, catch-all proxy
+semantics, and env-var precedence got the same reply both times.
+
+What he wants is the mechanism in everyday words first — what talks to what, what was broken, what
+one change fixes it, and what he types to see it work. Names of config keys and file paths belong
+in the answer, but as the last step of a story he can already follow, not as its opening. This is
+about explanations in conversation, not about code or docs style; it applies most when he is
+unblocking a local environment and is not asking for a design review.
+
+
+## <a id="29"></a>29. Branch, commits, and PR description must name the ticket the work actually belongs to (2026-09-01)
+
+Jeffrey reacted sharply when follow-up work carved out of CON-194 kept carrying `CON-194` in its
+branch name, commit subjects, and PR description after CON-194 was already closed. His rule: once
+work is split into its own ticket, every reference on the branch must point at the new ticket, not
+the finished parent. That means the branch name, the `[linear:XXX-000]` key in each commit subject,
+the PR title, and the ticket link inside the PR description body — all four, not just the ones that
+are convenient to change.
+
+The reason is that a closed ticket key on an open PR makes the work untraceable: reviewers and
+Linear both attribute it to something already marked done. When a ticket key changes mid-flight,
+fix the existing commits too rather than only the new ones.
+
+
+## <a id="30"></a>30. A frontend defect found while working on a defect-fix PR is in scope (2026-09-01)
+
+On the CON-221 branch I read the Figma consent screen, listed three ways the shipped
+`allow-connectors-modal.tsx` diverged from it, and called them "outside CON-221's scope". Jeffrey
+rejected that: "not true, this PR is for fixing FE defects like this one. fix it."
+
+The rule to carry forward: when a branch exists specifically to fix frontend defects on a surface,
+other genuine defects I find on that same surface belong in it, and I should fix them rather than
+file them as out-of-scope observations. This does not reverse the 2026-08-31 entry above — an
+enumerated list of review comments is still the whole scope of a "address these comments" edit, and
+I still must not tidy neighboring code or add unrequested tests. The distinction is between
+unrequested polish, which stays out, and a real user-visible defect on the surface the PR exists to
+repair, which goes in. When only part of such a fix is possible (for example a Figma-exported
+illustration I cannot obtain), ship the rest in full and name the exact blocker.
+
+
+## <a id="31"></a>31. "Tool unavailable" is not a blocker until deferred schemas have been loaded (2026-09-02)
+
+Jeffrey had to repeat an instruction three times because an agent reported the Workbench
+`publish_artifact` tool as "not available in this provider session" and stopped there. The tool was in
+fact present; it was only *deferred*, meaning its name was listed without a callable schema, and one
+`ToolSearch` call with `select:mcp__workbench__publish_artifact` made it usable immediately.
+
+The standing rule: before reporting that a capability is missing, attempt to load it. A tool name that
+appears in a deferred list is available, not absent. Only a real tool invocation that returns a concrete
+error counts as evidence of a blocker, and that error must be quoted. This is the same principle already
+recorded about `be.mcp-gateway` not being checked out locally: one closed door is not the end of the
+search.
+
+Reporting a false blocker is worse than a slow answer, because it pushes work back onto Jeffrey that the
+agent was fully capable of doing.
+
+
+## <a id="32"></a>32. Personal writing tasks: draft it, don't stall on unverified details (2026-09-02)
+
+When Jeffrey asks for a personal artifact — an All Hands intro, a bio, a Slack post about himself —
+produce the finished text. Do not return a stub plus a list of facts he needs to supply, and do not
+refuse to use a detail because it was recorded as "unverified" in an earlier session. This has now
+drawn a correction twice: on 2026-08-25 for the Engineering & Product Design All Hands intro, and
+again on 2026-09-02 for the company-wide All Hands intro, where two agents in a row handed back
+"here's what I can verify" instead of the intro itself.
+
+The correct behavior is to write the whole thing using everything durable memory holds, drop a single
+bracketed placeholder for any fact that genuinely does not exist anywhere on disk, and note in one
+short line which details came from unverified memory so Jeffrey can correct them in seconds. A draft
+he edits is useful; a questionnaire is not. The accuracy concern is real but it is satisfied by
+flagging, not by withholding.
+
+Facts on file about Jeffrey for this purpose: frontend engineer on the Connectors team working on
+Writer Agent; based in South Orange, NJ; interested in fragrance; runs Claude and Codex against each
+other before trusting an answer. The company he joined Writer from is not recorded anywhere in
+`~/notes`, Workbench memory, or his home directory — that one is a real gap, not a verification
+scruple.
+
+
+## <a id="33"></a>33. Personal intros contain no work content
+
+When Jeffrey asks for hobbies, interests, or fun facts — including for a company
+introduction — the answer must contain zero work material. No role, team, employer
+history, side-project engineering, or professional accomplishments, even when the
+surrounding request format asks for them. He corrected this twice (2026-08-25 and
+2026-09-02) after agents padded a personal intro with Connectors/Writer Agent context.
+Source the personal facts from the durable record (the GPT-5.6 memory export stored in
+`shared_messages`), and exclude sensitive categories he never asked to share:
+finances, compensation, health, body composition, family details, and religious or
+political views.
+
+
+## <a id="34"></a>34. Jeffrey's self-described profile (supplied by him, 2026-09-02)
+
+Jeffrey supplied these facts directly, in his own words, while finalizing his Writer All Hands
+intro. They close the gaps that repeatedly stalled earlier intro tasks — treat them as his own
+statement of record, not agent inference:
+
+- Senior software engineer on the **Connectors** team.
+- Prior career in the **"Enterprise Collaboration"** space at **Webflow, Mural, and Handshake**.
+  This resolves the previously-recorded gap "the company he joined Writer from is not recorded
+  anywhere" — that gap is closed.
+- Lives in **South Orange, NJ** with his wife, a 3.5-year-old daughter, and a 6-year-old maltipoo.
+- Describes his entire personality in one word as a **"lazy technophile"**: a chronic early adopter
+  who owns or has at least researched the latest tech in nearly every category — smart glasses,
+  personal mobility (e-bikes, e-scooter), electric vehicles, home automation, personal automation
+  via AI, home networking, lawn maintenance.
+- Currently has blue hair, and expects to change the color periodically.
+
+**How this interacts with the "personal intros contain no work content" rule above:** that rule
+forbids *agents padding* a personal intro with role, team, or employer context Jeffrey did not ask
+for — it does not forbid Jeffrey including those himself. When he authors or approves an intro that
+names his role, employer history, or family, follow his version. The same applies to the sensitive-
+category exclusion list: it governs what agents volunteer, not what he chooses to share.
+
+**When he pastes his own draft, edit, do not rewrite.** On 2026-09-02 he handed over a finished
+intro written in his own voice (lowercase, casual, Slack emoji). The correct response was to fix the
+two grammar slips and hand it straight back, preserving voice and structure — not to produce a
+"better" version.
+
+
+## <a id="35"></a>35. Hand over the concrete artifact, not just the click path
+
+On 2026-09-11, during CON-270, Jeffrey asked how to create a Basic-auth custom connector by clicking.
+He was given the route, the button, and the wizard tabs — but not the thing the wizard actually
+demands. His reply: "ok AND WHAT FUCKING FILE OR URL DO I UPLOAD???"
+
+When instructions end at an input — a file picker, a URL field, a token box, a config value — the
+answer is incomplete until the exact artifact is supplied: produce the file at a stated absolute path,
+give the literal URL, or say plainly that no such value exists and what to use instead. A navigation
+path that dead-ends at an empty field is not an answer, and Jeffrey should never have to ask a second
+time for the payload.
+
+Before producing such an artifact, search for one already on disk — in that same task, a spec file had
+been written hours earlier at `~/dev/companies-house-basic-auth.openapi.json` and a second copy was
+created in `~/Downloads` before the duplicate was caught and deleted.
+
+
+## <a id="36"></a>36. Linear tickets are short: symptom, cause with file:line, fix direction
+
+Jeffrey's reaction to CON-420 on 2026-09-17 was "brooo that's so fucking wordy". The ticket had been
+written as a full investigation report — narrative context, both short-circuit outcomes named and
+explained, what had been verified and what had not, and a restatement of the earlier incorrect
+claim it superseded.
+
+A bug ticket he files or reads should be a few lines: the observable symptom, the cause anchored to
+`file.ts:line`, and the direction of the fix. Everything else — the reasoning that produced the
+diagnosis, the caveats, the history of how the wrong conclusion was reached — belongs in the reply
+to him, not in the ticket. The audience for a ticket is an engineer who needs to find the code, not
+a reader who needs to be convinced. This applies to PR descriptions for the same reason.
+
+Jeffrey repeated this instruction three times on 2026-09-17, and the reason it had to be repeated is
+worth recording separately: the first two replies proposed shorter body text in chat and recorded
+the brevity rule in this file, but never changed the issue. "Rewrite the ticket" is an instruction
+about the ticket, so it is satisfied only when the Linear title and description are actually
+replaced. The title counts too, not just the body. When no Linear-mutation capability is issued for
+the turn, say so in one line at the top, give the exact replacement title and body ready to paste,
+and do not spend the reply re-explaining the bug.
+
+Calibration added 2026-09-17 after the correction went too far the other way: CON-420 was cut to a
+one-line symptom plus a one-line instruction, and Jeffrey rejected that as far too short. The target
+is a middle length, not the minimum. A bug ticket should carry three things: the symptom as a user
+observes it, the concrete cause with `file.ts:line` anchors, and the expected behavior after the fix.
+That is roughly three short paragraphs or a sentence plus three bullets. Cutting the `file:line`
+evidence or the expected-behavior statement to save words removes the part an engineer actually needs.
+
+
+## <a id="37"></a>37. Never declare Linear creation blocked without calling the tool first
+
+When Jeffrey says "open a Linear ticket" and the turn carries a supervisor-issued capability for it,
+call `create_linear_issue` directly. On 2026-09-17 a run instead reported Linear creation "blocked —
+this run carries no Linear-mutation capability" and filed the ticket into Workbench as a substitute.
+That was wrong: the tool was available behind deferred-schema loading, and Jeffrey had to repeat
+"CREATE THE LINEAR TICKET" six times before it happened (the result was CON-421).
+
+The rule: a tool may only be reported unavailable after it was actually called and returned a
+concrete error worth quoting. A deferred or unlisted tool schema is a discovery step, not a blocker,
+and recording the ticket in Workbench is never an acceptable stand-in for the Linear issue Jeffrey
+asked for.
+
+
+## <a id="38"></a>38. Do not spin off a separate Linear ticket for work that belongs to the task in flight
+
+Before filing a new Linear issue for a problem found mid-task, decide whether it is genuinely
+separate work or just an unfinished part of the current ticket. If fixing it is required for the
+current ticket's acceptance criteria to hold, it belongs to that ticket — do the work and mention it
+there, rather than creating a second issue that fragments one deliverable across two trackers.
+
+This was corrected on 2026-09-17 during CON-274 (frontend password grant). A monorepo gap — the
+`mcp_gateway_client.py` auth-mode `Literal` unions missing `"password"`, which broke every connector
+in dev org 1 — was filed as its own ticket, CON-421. Jeffrey's response: "ok then it isn't a fucking
+separate task, it's part of my current task" and he had CON-421 deleted. The password grant does not
+work end to end until that client accepts the new auth mode, so it was never a separate deliverable.
+
+Note this sits alongside the rule above about never declaring Linear creation blocked without
+calling the tool. The two are not in tension: when a ticket is genuinely warranted, file it without
+hesitation; the judgment call is only about whether a *new* ticket is the right home for the work.
+
+
+## <a id="39"></a>39. A PR description is roughly 100–150 words, not a design doc (2026-09-18)
+
+On CON-274 / PR #16623 Jeffrey said "the PR desc is still way too fucking long" — the second time in
+the same task, after a first pass had already trimmed it to about 560 words. The same complaint
+appears in older tasks ("it's way too long", "why the actual fuck are you taking so long to update a
+PR desc"), so this is a standing preference rather than a reaction to one body.
+
+The shape that was accepted is about 110 words: the ticket link, one sentence on the observable
+behaviour change, one short paragraph on the cause and the fix with the concrete symbol or endpoint
+named, and three numbered test steps. Everything else — the "changes since review" log, per-file
+rationale, notes-for-reviewers, the list of test files, alternative designs considered — goes in the
+reply to Jeffrey or the review thread, not the body. Reviewers read the diff; the description exists
+to tell them what to look for.
+
+Two failure modes to avoid: padding the body with every decision made during review so it reads as a
+changelog, and treating a previous trim as sufficient. When he says it is still too long, cut by a
+factor, not by a few sentences.
+
+
+## <a id="40"></a>40. Never start dev servers for Jeffrey — give him the command
+
+Standing instruction, stated twice on 2026-09-23 ("just tell me how to start the nextjs app ... don't do
+it yourself", then "STOP TRYING TO RUN COMMANDS JUST TELL ME"). When Jeffrey asks how to run or test
+something locally, reply with the exact shell command and working directory and stop there. Do not launch
+a dev server, watcher, or any long-running process on his behalf, even through a tracked job manager:
+agent-started servers are killed when the turn ends, so they never give him a usable running app and the
+attempt only burns the turn. Answer the question; he runs it.

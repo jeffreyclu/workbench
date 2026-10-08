@@ -1703,3 +1703,61 @@ MCPJam/public tunnel, and never uploads Workbench data. Browser requests to `/mc
 loopback or explicitly configured trusted Origin; native MCP clients may omit Origin. Live model evals
 are outside the automatic gate because they can spend model credits and require Jeffrey's explicit
 run-specific instruction.
+
+
+## <a id="84"></a>84. A heuristic Jeffrey cannot read on screen has not been delivered (2026-08-29)
+
+The prior entry told me to *say* when a layer has no UI. Jeffrey's next reply made clear that saying
+so is not the fix he wants: "the whole point is for me to SEE THE FUCKING HEURISTIC, SO I CAN
+UNDERSTAND THE CODE." Honest reporting about an invisible layer is still an invisible layer.
+
+The standing rule: when I build a heuristic, classifier, scorer, audit, or any deterministic rule
+set, the default deliverable includes a surface that shows its actual reasoning to a reader — the
+measurements it took, the rules it evaluated in order, which rule fired, and which were never
+reached. Shipping it only as prompt text, a validation gate, or a one-word label is incomplete work,
+not a design choice to defend. Jeffrey reads these surfaces to understand the codebase, so their
+audience is him, not the model.
+
+Build the visible trace out of the same code path that produces the verdict — make the classifier a
+projection of its own explainer — so the explanation cannot drift from the behaviour. A trace
+reconstructed alongside the real logic is worse than none, because it explains a verdict the
+pipeline never reached.
+
+
+## <a id="85"></a>85. Visible means readable in under 100 words (2026-08-29)
+
+The entry above is right that a heuristic needs a surface, and I over-corrected on it: I shipped the
+full trace — line counts, path buckets, every rule in evaluation order, evidence hunks, the parity
+axes — and Jeffrey's verdict was "this shit is not human readable. the whole point of this is for me
+to able to quickly understand changes. like it can't be more than 100 words."
+
+So the two entries compose into one rule rather than fighting: the deterministic layer must reach the
+screen, and what reaches the screen must be plain-language prose a person absorbs in one glance.
+Roughly 100 words is the ceiling Jeffrey named, and he meant it as a cap, not a target. When there is
+more to say than fits, drop the lowest-priority sentences and keep the warnings — the reason to read
+a summary at all is the part that says something is wrong. Completeness is not the goal; a complete
+surface nobody reads carries no information.
+
+This generalises past this one panel: for any explanation surface I build, prefer a few short
+sentences over a table of measurements, and reach for the raw trace only when Jeffrey asks for it.
+
+
+## <a id="86"></a>86. The heuristic panel exists to price review time, not to describe the diff (2026-08-29)
+
+Jeffrey stated the panel's purpose outright: "remember this is help me decide how much time to
+dedicate to reviewing the block." That is the acceptance test for every sentence it renders. A fact
+earns its place only if knowing it would change how long he spends on the block; if it would not, it
+is padding no matter how accurate it is.
+
+This supersedes the earlier instinct to spend a word budget. Filling 100 words with restatements of
+the same measurement — total lines, then the file list, then the production/non-production split,
+then "N of M hunks touch docs" — reads as repetition because it is one fact said four times, and
+none of the four changes the time estimate. His correction was "very repetitive. i want CRITICAL
+information only, with thorough explanations": fewer items, each explained deeply enough to act on,
+rather than more items each stated shallowly.
+
+The general rule for triage surfaces: state each measurement at most once, lead with the attention
+call, and follow it only with findings that raise or lower the cost of reviewing — a stale verdict, a
+dropped declaration, a still-referenced removal, a risk flag, an untested new symbol. When nothing
+raises the cost, say that explicitly and name the checks that came back clean; "cheap to review" is
+itself a critical answer.

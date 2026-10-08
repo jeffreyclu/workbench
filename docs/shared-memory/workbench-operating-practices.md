@@ -567,3 +567,32 @@ needs a promotion," say that plainly instead of letting "done and verified" impl
 Verify the surface rather than assuming it. Grepping the running release's built asset for a selector
 or string that only exists in the working tree is a cheap, decisive test of whether Jeffrey's browser
 is being served the new code.
+
+
+## <a id="34"></a>34. One ticket means one branch and one worktree
+
+On 2026-09-11, two agents each set up their own CON-270 checkout — Claude created the branch
+`jeffrey/CON-270/basic-auth-blank-password` while Codex created `con-270-basic-auth` in the worktree
+`~/dev/writer-monorepo-con-270-basic-auth`. Jeffrey's reaction was "i don't want a worktree and a
+branch - consolidate for fucks sake." This echoes an earlier correction on 2026-09-03: "why aren't you
+just wholesale swapping the worktree into my working branch??????"
+
+A single ticket gets exactly one branch in exactly one worktree. When parallel agents explore the same
+ticket, reconcile their output into that one location before reporting — delete the duplicate branch,
+rename the survivor to the repository convention (`jeffrey/CON-<number>/<slug>`, matching
+`jeffrey/CON-230/connector-search`), and leave no second checkout behind. Jeffrey should never have to
+choose between two half-set-up copies of the same work, and asking him which branch to keep is itself
+the failure.
+
+
+## <a id="35"></a>35. Worktrees must live directly under ~/dev, not in a hidden Workbench directory
+
+On CON-465 Jeffrey said "i can't access that fucking worktree retard, move it to ~/dev" after work
+was started in `~/dev/.workbench-worktrees/fe.web-app-<hash>/tasks/con-465`. He opens worktrees
+himself — in an editor, a terminal, and a browser dev server — so a path buried under a dotted,
+hash-named Workbench directory is unusable to him even though it is a valid git worktree.
+
+Every worktree must therefore be created as a direct, human-readable child of `~/dev`, named after
+the repository and the ticket, for example `~/dev/fe.web-app-con-465`. This holds regardless of what
+path a Workbench task routing block suggests: if routing points at `.workbench-worktrees`, create or
+move the worktree to `~/dev/<repo>-<ticket>` and work there instead.
