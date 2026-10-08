@@ -204,8 +204,9 @@ function startCodex() {
 }
 
 async function codexProcessInfo(label: string) {
-  if (!codexChild?.pid) throw new Error('Codex did not start');
-  const output = await new Promise<string>((resolve, reject) => execFile('ps', ['-o', 'pid,lstart', '-p', String(codexChild.pid)], (error, stdout) => error ? reject(error) : resolve(stdout.trim())));
+  const pid = codexChild?.pid;
+  if (!pid) throw new Error('Codex did not start');
+  const output = await new Promise<string>((resolve, reject) => execFile('ps', ['-o', 'pid,lstart', '-p', String(pid)], (error, stdout) => error ? reject(error) : resolve(stdout.trim())));
   log('ps', { label, output });
 }
 
