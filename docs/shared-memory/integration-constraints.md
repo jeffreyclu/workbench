@@ -188,3 +188,19 @@ allowed, and read-only tools are never affected.
 `~/.codex/rules`, which match shell commands, not file edits. Interactive Codex sessions therefore
 rely on the written worktree rule alone. Workbench-dispatched runs of either provider still get
 worktrees from `run-worktree.ts`. Do not claim Codex is enforced until Codex ships a pre-edit hook.
+
+### <a id="9"></a>9. Telling terminal provider sessions apart from Workbench's own runs
+
+Verified 2026-10-08 against ~/.claude/projects and ~/.codex/sessions. Every Claude transcript Workbench creates (`claude -p` and session hosts) has `entrypoint: "sdk-cli"`. That was 676 of 678 files, and many had a non-worktree cwd such as ~/dev/workbench or ~/dev/writer-monorepo, so the cwd and owned-session-id rules alone misclassify them. Interactive terminal sessions have `entrypoint: "cli"`. Codex marks Workbench runs with session_meta `originator: "workbench"`; terminal runs are `codex-tui`. A Codex rollout file stays under the date folder of the session's *start* (one live terminal thread from 2026-09-03 is 1.5 GB), so discovery must use file mtime, not the date path. The importer is `src/server/terminal-session-sync.ts`.
+
+*Provenance: 7ad4837c-8706-4238-a961-b604bcbd5611*
+
+### <a id="10"></a>10. Telling terminal CLI sessions apart from Workbench-spawned ones
+
+Session transcripts on disk mix sessions Jeffrey ran in a terminal with sessions Workbench spawned itself. Codex sessions that Workbench spawns carry the originator `workbench`. Terminal Claude Code transcripts carry the entrypoint `cli`. Any import or sync of terminal sessions (for example terminal-session-sync.ts from commit ed71edb) should filter on these markers, not on folder or timing. Note: when the ed71edb review ran on 2026-10-08, every recent Claude transcript was Workbench-spawned, so a ticket asking to see "this Claude Code session" in the sync can't be shown if that session was started by Workbench. Source: the ed71edb review on 2026-10-08, which checked real transcript files; not re-checked separately.
+
+### <a id="11"></a>11. Check the Workbench-run marker on every synced event, not only when a session is first seen
+
+When Jeffrey replies from Workbench to a conversation that started in a terminal, Workbench resumes that same Claude session (`shared-room.ts` ~2183, `agent-runner.ts` ~999). The resumed run fires the same terminal hooks, but its entrypoint is `sdk-cli`. If the importer checks the marker only when it creates the session row, Workbench's own orchestration prompt gets posted as a Jeffrey message and the reply is posted twice. Any hook or transcript sync must drop sdk-entrypoint (Claude) or `originator: workbench` (Codex) events one by one, even when the session already exists. This extends [integration-constraints.md#9]. Source: review of run 9e9aa9c4, commit 3ed0f0f (`src/server/terminal-session-sync.ts:580-587`), 2026-10-08. Found by reading source; not reproduced at runtime.
+
+*Provenance: 9e9aa9c4-3eaa-461e-b960-2954f6d17fea*

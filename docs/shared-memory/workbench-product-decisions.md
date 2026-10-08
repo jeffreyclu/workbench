@@ -1780,3 +1780,7 @@ themselves, and that survive a Workbench restart by reattaching. The design task
 agent sessions" (created 2026-10-08); its plan needs Jeffrey's approval before any build. Until
 that lands, do not add new per-run prompt injection; anything new goes behind a tool the agent
 calls.
+
+## <a id="88"></a>88. Agent sessions are two-way: terminal-started sessions show up in Workbench automatically
+
+Jeffrey, 2026-10-08: "it should be two way too - conversations that i start here should show in workbench automatically." Extends entry 87 (agents become persistent processes Workbench feeds). Workbench is not only a dispatcher into Claude and Codex; any session Jeffrey starts in a terminal must appear as a shared conversation with his prompts and the replies, with no step from him. Source of truth: the CLIs' own transcripts (`~/.claude/projects/<slug>/<sessionId>.jsonl`, `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`), keyed on the existing `claude_session_id` / `codex_thread_id` columns. Workbench-spawned runs are told apart by Codex's `session_meta.originator` = `workbench` and by a Claude cwd under `~/dev/.workbench-worktrees`. Task: work item 7ad4837c.

@@ -357,3 +357,21 @@ Verified read-only in be.mcp-gateway on 2026-10-08: routes/profile/schema.ts pub
 ### <a id="27"></a>27. Profile panel actions and validation ownership
 
 Jeffrey clarified CON-657 on 2026-10-08: useViewActions and useEditActions own view/edit interactions; save and dismiss are actions, not separate wrapper layers. Shared close/cancel reset must work during loading without mounting edit/save logic in view mode. Menu definitions belong in static config, not useMemo plus push construction inside an actions hook. In the save-validation hook, name the two boundaries validateDraft and validateRequest and their outcomes draftValidation and requestValidation. Keep exhaustive draft field schemas readable by extracting named edit-rule validators; preserve backend operation constraints and unchanged historical PATCH semantics. API-boundary schemas should be checked against generated DTO types; local drafts match Jotai draft types, and normalized outputs must not be falsely equated with raw DTOs.
+
+### <a id="28"></a>28. Schema, validation, and shared control boundaries
+
+Jeffrey clarified CON-657 on 2026-10-08: schemas/ contains strict declarative Zod schema definitions; validation/ owns selecting and validating schemas and checks against the connector contract or saved profile. Do not mix contextual validator factories into schema modules. types/ contains pure TypeScript domain/generated DTO types only: no Zod imports, schema imports, or z.infer, even type-only. Preserve generated raw DTO types separately from frontend normalization and historical compatibility, and check schema fields against their appropriate types. Shared creation/edit field controls should use neutral names (BasicAuthFields, ClientCredentialsFields, SecretField, etc.), not a misleading Profile prefix suggesting profile-panel ownership. Inline secret-field JSX fallbacks rather than mutable ReactNode scratch variables. Consolidate panel tab selection into useViewActions while keeping selected tab state in its primitive Jotai atom.
+
+*Provenance: https://github.com/WriterInternal/fe.web-app/pull/5547*
+
+### <a id="29"></a>29. Shared ownership requires consumers and deletion of dead paths
+
+Jeffrey approved the CON-657 shared audit cleanup on 2026-10-08 and explicitly required unused/dead code to be deleted. Shared is not a feature-only holding area: edit write schemas and PATCH operations belong to profile-panel, creation-only credential/tenant-selection validation and credential inputs belong to Configure/modals, and Govern owns its paginated profile query. Common resource queries, capability contracts, shared query-key configuration, reusable controls and tenant-format validation stay shared. Remove compatibility exports, dead variants and unused optional slots rather than preserving them. Quick start can derive connected names from the complete shared profiles query, preserving all-page coverage without a duplicate fetch loop. Writer notes fe-web-app-stack-migration.md entry 2 updated.
+
+*Provenance: https://github.com/WriterInternal/fe.web-app/pull/5547*
+
+### <a id="30"></a>30. CON-657 review stack and Zod host runtime boundary
+
+On 2026-10-08 CON-657 was split in the existing dedicated worktree into #5570 shared foundations (base develop), #5547 panel production (base foundation branch), and #5571 new tests/checklist (base panel branch). The initial tip's tree exactly matched the original d102c2c4bab74dde31a746d89a22f755834717a7; backup/CON-657-pre-split-20261008 is retained. Later runtime correction: connector package Zod 3.25.76 versus host Zod 4.4.3. Host Vite dependency-cache metadata showed bare zod optimized to Zod 4; profile draft import crashed on refinedSchema.innerType(). Explicit zod/v3 imports and a named unrefined object schema remove that dependency on runtime major and refined internals, without dependency or generated-code changes. Vite-host source-module loading and draft parsing passed; live UI was not inspected. Slow opening is structurally gated on four queries including the full connector catalog; tools query errors are currently discarded. These are separate findings, not verified causes of all intermittent reloads. Writer notes fe-web-app-stack-migration.md entry 2 updated.
+
+*Provenance: https://github.com/WriterInternal/fe.web-app/pull/5547*

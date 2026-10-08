@@ -705,3 +705,25 @@ Verified 2026-10-08 with Claude CLI 2.1.295 via `npx tsx scripts/session-spike.t
 Codex CLI 0.161.0 app-server supports multiple `turn/start` calls on one non-ephemeral thread, `turn/interrupt` with `{threadId, turnId}`, per-turn `cwd`, `model`, and `effort`, and automatic reconnect to a restarted stateless HTTP MCP server. Verified on 2026-10-08 with `scripts/session-spike.ts`: one PID completed three turns, interrupted a long turn and accepted the next one, used separate marker directories with low/high effort recorded in the session log, and called `spike_ping` after port 5199 restarted without status/list, reload, or resume. The app server also attempted configured unrelated remote MCP servers; their OAuth failures did not prevent the throwaway server check.
 
 *Provenance: 3ea3bec9-82ff-4166-93f5-8d940a8fa64f*
+
+### <a id="47"></a>47. Agent session hosts keep sockets in the temp directory and outlive the runtime on purpose
+
+Found while building the session host (2026-10-08). `src/server/agent-session-host.mjs` is a detached worker per (conversation, agent), started by `ensureSession` in `src/server/agent-session.ts`. Its files live under `WORKBENCH_AGENT_SESSIONS_DIR` (default `data/agent-sessions/<conversationId>/<agent>/`: spec.json, status.json, events.jsonl, stderr.log). Its Unix socket does not live there: macOS caps socket paths near 104 bytes and a worktree data directory already exceeds that. The socket is `$TMPDIR/wb-session-<hash>.sock`, and the real path is recorded in status.json and `agent_sessions.socket_path`. Always read it from there rather than recomputing it. Runtime shutdown deliberately leaves hosts running; `reattachAll` adopts them at boot. A host spawned before the per-turn capability file was attached gets `WORKBENCH_EXTERNAL_CAPABILITY='{}'` (deny all) for its whole life. See [workbench-operating-practices.md#41]. Test fakes that print and then `process.exit` must use `writeSync(1, …)`: macOS pipe stdout is asynchronous, so the last line is lost otherwise.
+
+*Provenance: 6285ed3a-91a9-4767-b924-7711b1de5a70*
+
+### <a id="48"></a>48. Agent session hosts have no single-start guard; add one before wiring a caller
+
+Found in review of run 042d1595 (2026-10-08). `ensureSession` in `src/server/agent-session.ts` has no per-key lock, and `agent-session-host.mjs` unconditionally unlinks its socket path at startup. Two concurrent `ensureSession` calls for the same (conversation, agent) both see no live host and start two hosts: the second deletes the first's socket, both append to the same events.jsonl with independent offset counters, and both resume the same Claude session id. Nothing calls the client yet, so this is latent. Before any caller is connected, add an in-process in-flight promise per key in `ensureSession` and make the host refuse to start when the existing socket still answers. Two related gaps to fix at the same time: a turn sent while the host is killing a CLI that ignored an interrupt goes to the dying process and fails as `provider_exited` (null `child` on host kill), and a live host is reused even when the account profile or cwd changed (compare and restart on mismatch).
+
+*Provenance: 6285ed3a-91a9-4767-b924-7711b1de5a70*
+
+### <a id="49"></a>49. Session-mode memory: where the prefetch lives
+
+In session mode (WORKBENCH_PERSISTENT_SESSIONS=1), Workbench-side memory prefetch lives in replyInSharedRoom and dispatchNextSharedTurn in src/server/shared-room.ts, not at the line numbers a ticket cited (shared-room ~1744/1790, agent-runner 2189/2258). Tickets' line numbers go stale; search by function name. The per-run path in agent-runner.ts never uses session mode, so it was left alone. Session turns now skip searchActivityMemory and getSharedContextWithItems; agents call recall_context and record_learning themselves per RUNNER_SYSTEM_CONTRACT. Retrieved-memory badge uses retrievedMemoryCount=null (shows "—") with detail.agentDriven=true; the badge tooltip still says "older reply" (client not changed).
+
+### <a id="50"></a>50. Use scripts/preview-api.ts for end-to-end agent checks against a database copy
+
+To exercise real agent dispatch against a copied Workbench database, start scripts/preview-api.ts. It uses previewRuntimeCapabilities (src/server/runtime-capabilities.ts): executeAgents true, ownScheduler false, runDiscoveryCatchUp false. So the copy's queued work never runs. Do not use src/server/index.ts: it uses live capabilities and owns the scheduler. Do not use scripts/e2e-api.ts either: e2eRuntimeCapabilities turns agent dispatch off. Also, vitest only includes src/**/*.test.ts(x) (vitest.config.ts:6). Logic for a new scripts/ entry point must live in src/ to be testable. Verified in source 2026-10-08.
+
+*Provenance: 98ce376e-6ba5-4074-ae35-b2762c6355b1*
