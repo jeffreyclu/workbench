@@ -22,6 +22,7 @@ import { startMcpQualityMonitor } from './mcp-quality-monitor.js';
 import { ensureWorkbenchDocumentRoot } from './local-documents.js';
 import { startKnowledgeDriftMonitor } from './knowledge-drift-monitor.js';
 import { startConsolidationMonitor } from './consolidation-monitor.js';
+import { startTerminalSessionSync } from './terminal-session-sync.js';
 
 const port = Number(process.env.PORT ?? 4317);
 ensureWorkbenchDocumentRoot();
@@ -39,6 +40,9 @@ const mcpQualityMonitor = liveRuntimeCapabilities.ownScheduler ? startMcpQuality
 }) : null;
 const knowledgeDriftMonitor = liveRuntimeCapabilities.ownScheduler ? startKnowledgeDriftMonitor(database) : null;
 const consolidationMonitor = liveRuntimeCapabilities.ownScheduler ? startConsolidationMonitor(repository) : null;
+// Claude Code and Codex sessions Jeffrey starts in a terminal appear as
+// conversations; only the scheduler-owning runtime imports them.
+const terminalSessionSync = liveRuntimeCapabilities.ownScheduler ? startTerminalSessionSync(database) : null;
 // Session hosts are detached and outlive the previous runtime. Adopt the live
 // ones and mark the rest stopped; their provider sessions resume on next use.
 if (liveRuntimeCapabilities.ownScheduler) {
@@ -52,6 +56,7 @@ configureRuntimeRetirement(() => {
   mcpQualityMonitor?.stop();
   knowledgeDriftMonitor?.stop();
   consolidationMonitor?.stop();
+  terminalSessionSync?.stop();
   retireRealtimeClients();
 });
 warmDiffConfidenceModel();
@@ -86,6 +91,7 @@ const shutdown = () => {
   mcpQualityMonitor?.stop();
   knowledgeDriftMonitor?.stop();
   consolidationMonitor?.stop();
+  terminalSessionSync?.stop();
   // Do not exit immediately after the graceful signal: provider CLIs create
   // detached process groups, so the owning runtime must remain alive long
   // enough to escalate any group that ignores SIGTERM. This is also used when

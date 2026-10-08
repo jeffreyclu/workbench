@@ -2640,6 +2640,34 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // One row per Claude Code or Codex transcript file seen on disk. The byte
+    // offset is the resume point, so a re-scan imports only appended lines;
+    // the reply columns let a terminal turn that is still streaming keep
+    // growing the same Workbench message instead of adding a new one.
+    id: '096_terminal_session_imports',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS terminal_session_imports (
+          transcript_path TEXT PRIMARY KEY,
+          provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+          session_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'terminal', 'skipped')),
+          skip_reason TEXT,
+          cwd TEXT,
+          conversation_id TEXT,
+          byte_offset INTEGER NOT NULL DEFAULT 0 CHECK (byte_offset >= 0),
+          import_since TEXT NOT NULL,
+          reply_message_id TEXT,
+          reply_text TEXT NOT NULL DEFAULT '',
+          reply_tool_count INTEGER NOT NULL DEFAULT 0 CHECK (reply_tool_count >= 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_terminal_session_imports_conversation ON terminal_session_imports(conversation_id);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

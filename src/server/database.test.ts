@@ -109,6 +109,7 @@ const EXPECTED_MIGRATIONS = [
   '093_agent_run_review_lenses',
   '094_consolidation_apply_results',
   '095_agent_sessions',
+  '096_terminal_session_imports',
 ];
 
 describe('openDatabase', () => {
