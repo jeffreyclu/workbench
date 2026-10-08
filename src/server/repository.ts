@@ -361,9 +361,15 @@ export class WorkItemRepository {
   }
 
   persistConversationExternalActionGrant(conversationId: string, authorization: ExternalActionAuthorization, now = new Date()): void {
+    // ec13a8cb LEGACY-AFFECTING: persist the classifier's exact expiry instead
+    // of granting a fresh five minutes when the run consumes the capability.
     if (!authorization.granted || !this.getConversation(conversationId)) return;
     const grantedAt = now.toISOString();
-    const expiresAt = new Date(now.getTime() + EXTERNAL_ACTION_GRANT_TTL_MS).toISOString();
+    const expiresAt = authorization.capability.actionIds
+      .map((id) => authorization.capability.expiresAtByAction?.[id])
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1) ?? new Date(now.getTime() + EXTERNAL_ACTION_GRANT_TTL_MS).toISOString();
     this.conversations.saveExternalActionGrant(
       conversationId,
       authorization.capability.actionIds,
@@ -374,13 +380,17 @@ export class WorkItemRepository {
   }
 
   getConversationExternalActionGrants(conversationId: string, now = new Date()): ExternalActionAuthorization[] {
-    return this.conversations.listActiveExternalActionGrants(conversationId, now.toISOString()).flatMap(({ authorizationJson }) => {
+    return this.conversations.listActiveExternalActionGrants(conversationId, now.toISOString()).flatMap(({ authorizationJson, expiresAt }) => {
       try {
         const authorization = JSON.parse(authorizationJson) as ExternalActionAuthorization;
         if (!authorization.granted) return [];
         return [{
           ...authorization,
-          capability: { ...authorization.capability, source: 'conversation_lease' as const },
+          capability: {
+            ...authorization.capability,
+            expiresAtByAction: Object.fromEntries(authorization.capability.actionIds.map((id) => [id, expiresAt])),
+            source: 'conversation_lease' as const,
+          },
         }];
       } catch {
         return [];

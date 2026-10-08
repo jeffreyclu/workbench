@@ -3,6 +3,9 @@ import { delimiter, join } from 'node:path';
 
 export type ExternalActionCapability = {
   actionIds: string[];
+  // ec13a8cb LEGACY-AFFECTING: action grants now carry their original lease
+  // expiry so a long-lived provider process cannot extend authorization.
+  expiresAtByAction?: Record<string, string>;
   command: string;
   requiredExecutables: string[];
   requiredWorkbenchTools: string[];
@@ -40,6 +43,8 @@ export function mergeExternalActionAuthorizations(authorizations: readonly Exter
     operation: [...new Set(granted.map((authorization) => authorization.operation))].join(' '),
     capability: {
       actionIds: [...new Set(granted.flatMap((authorization) => authorization.capability.actionIds))],
+      expiresAtByAction: Object.fromEntries(granted.flatMap((authorization) => Object.entries(authorization.capability.expiresAtByAction ?? {}))
+        .sort(([, left], [, right]) => left.localeCompare(right))),
       command: [...new Set(granted.map((authorization) => authorization.capability.command))].join(' | ').slice(0, 1_500),
       requiredExecutables: [...new Set(granted.flatMap((authorization) => authorization.capability.requiredExecutables))],
       requiredWorkbenchTools: [...new Set(granted.flatMap((authorization) => authorization.capability.requiredWorkbenchTools))],
@@ -175,11 +180,13 @@ function authorizationFor(rules: AuthorizationRule[], current: string, source: E
   ].filter(Boolean).join(' and ');
   const preflight = toolRoute ? ` The supervisor will preflight the required ${toolRoute} before the turn starts. Use that route directly; do not substitute a read-only connector or start a separate authentication flow.` : '';
   const operation = `${actions.join('; ')}.${preflight} Jeffrey's current instruction: ${currentScope}.${pendingScope ? ` Resolve any omitted target only from the immediately preceding pending operation: ${pendingScope}.` : ''}`.slice(0, 1_500);
+  const expiresAt = new Date(Date.now() + EXTERNAL_ACTION_GRANT_TTL_MS).toISOString();
   return {
     granted: true,
     operation,
     capability: {
       actionIds: [...new Set(rules.map((rule) => rule.id))],
+      expiresAtByAction: Object.fromEntries(rules.map((rule) => [rule.id, expiresAt])),
       command: pendingScope || currentScope,
       requiredExecutables,
       requiredWorkbenchTools,

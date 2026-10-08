@@ -9,6 +9,7 @@ import { describeAgentFallback, describeModelSelection, type ExecutionProfileSou
 import { agentAccountEnv, agentSubprocessEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
 import { classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, type ExternalActionAuthorization } from './external-action-authorization.js';
+import { createExternalActionProcessGuard, externalActionGuardEnvironment, observeExternalActionRefusals, recordExternalActionRefusal, type ExternalActionProcessGuard } from './external-action-command-guard.js';
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
@@ -168,7 +169,9 @@ export function isWorkbenchWorkspace(cwd: string): boolean {
     || (isManagedRunWorktree(resolved) && resolved.includes('/workbench-'));
 }
 
-export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountProfile: string, cwd: string): NodeJS.ProcessEnv {
+// ec13a8cb LEGACY-AFFECTING: every provisioned provider process now receives
+// the git/gh guard PATH and a run-scoped, expiring external-action capability.
+export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountProfile: string, cwd: string, externalActionGuard?: ExternalActionProcessGuard): NodeJS.ProcessEnv {
   // palmyra-execution-parity LEGACY-AFFECTING: Palmyra executes tools inside
   // Workbench, so it shares the guarded subprocess environment without a
   // provider CLI credential directory.
@@ -183,6 +186,7 @@ export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountPr
   // turn rediscovering `uv`, `pnpm`, or a user-local CLI.
   const executablePaths = [join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
   env.PATH = [...guardPaths, env.PATH, ...executablePaths].filter(Boolean).join(delimiter);
+  Object.assign(env, externalActionGuardEnvironment(externalActionGuard));
   // Claude snapshots the configured shell before it can emit its first
   // provider event. Jeffrey's interactive zsh exports thousands of functions
   // and has taken minutes to snapshot. The harness supplies PATH explicitly,
@@ -1427,11 +1431,11 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
   return null;
 }
 
-async function runAgentCommandWithUsage(agent: CliAgent, cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: CliAgent) => void, onAudit?: (entries: AgentAuditCandidate[], agent: CliAgent) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void, resumeSessionId?: string, poolEligible = false, kind: AgentRun['kind'] = 'analysis'): Promise<AgentCommandResult> {
+async function runAgentCommandWithUsage(agent: CliAgent, cwd: string, prompt: string, onProgress?: (output: string) => void, signal?: AbortSignal, profile: ExecutionProfile = 'economy', onUsage?: (usage: AgentUsage, agent: CliAgent) => void, onAudit?: (entries: AgentAuditCandidate[], agent: CliAgent) => void, accountProfile = DEFAULT_ACCOUNT_PROFILE, modelOverride?: string, onSteeringReady?: (steer: AgentInputSteering) => void, resumeSessionId?: string, poolEligible = false, kind: AgentRun['kind'] = 'analysis', externalActionGuard?: ExternalActionProcessGuard): Promise<AgentCommandResult> {
   const { command, args } = commandFor(agent, cwd, profile, modelOverride, resumeSessionId, kind);
   const spawnFresh = () => spawn(command, args, {
     cwd,
-    env: agentEnvironmentForWorkspace(agent, accountProfile, cwd),
+    env: agentEnvironmentForWorkspace(agent, accountProfile, cwd, externalActionGuard),
     stdio: ['pipe', 'pipe', 'pipe'],
     // On Unix this makes child.pid the process-group leader, allowing Stop
     // to kill Codex/Claude and every shell/tool process it created.
@@ -1447,7 +1451,7 @@ async function runAgentCommandWithUsage(agent: CliAgent, cwd: string, prompt: st
     // Claude may claim the single turn-specific process prestarted by the
     // shared-room dispatcher. It is never background-replenished: a second
     // idle Claude sibling competes for the same provider capacity.
-    const canUseWarmPool = poolEligible;
+    const canUseWarmPool = poolEligible && !externalActionGuard;
     const claimed = canUseWarmPool ? claimWarmProcess(agent, cwd, command, args, accountProfile) : null;
     const child = claimed ?? spawnFresh();
     // Attach at the spawn boundary. ENOENT can arrive before the rest of the
@@ -1853,6 +1857,7 @@ export async function runAgentCommandWithFallback(
   allowFallback = true,
   initialUsage?: AgentUsage,
   expiredSessionPrompt?: string,
+  externalActionGuard?: ExternalActionProcessGuard,
 ): Promise<{ output: string; agent: CliAgent; usage: AgentUsage; fallbackFrom: CliAgent | null; fallbackReason: string | null; sessionId?: string | null; costUsd?: number | null; peakContextTokens?: number }> {
   let aggregate: AgentUsage = initialUsage ?? { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
   try {
@@ -1872,7 +1877,7 @@ export async function runAgentCommandWithFallback(
         }, segmentController.signal, profile, (usage, agent) => {
           const aggregateUsage = addUsage(before, usage);
           onUsage?.(aggregateUsage, agent);
-        }, onAudit, accountProfile, modelOverride, onSteeringReady, segmentResume, poolEligible && segmentPrompt === prompt, kind);
+        }, onAudit, accountProfile, modelOverride, onSteeringReady, segmentResume, poolEligible && segmentPrompt === prompt, kind, externalActionGuard);
       } catch (error) {
         const stalled = providerStallError(error);
         const stallMessage = error instanceof Error ? error.message : String(error);
@@ -1916,7 +1921,7 @@ export async function runAgentCommandWithFallback(
     // the provider's "No conversation found" protocol error to Jeffrey.
     if (primary === 'claude' && resumeSessionId && /no conversation found with session id/i.test(error instanceof Error ? error.message : String(error))) {
       onProgress?.('● Claude session expired. Restarting this turn in a fresh session…');
-      return runAgentCommandWithFallback(primary, cwd, expiredSessionPrompt ?? prompt, onProgress, signal, onFallback, profile, onUsage, onAudit, kind, accountProfile, modelOverride, onSteeringReady, undefined, false, allowFallback, aggregate);
+      return runAgentCommandWithFallback(primary, cwd, expiredSessionPrompt ?? prompt, onProgress, signal, onFallback, profile, onUsage, onAudit, kind, accountProfile, modelOverride, onSteeringReady, undefined, false, allowFallback, aggregate, undefined, externalActionGuard);
     }
     if (signal?.aborted || modelOverride || !allowFallback || !isAgentCapacityError(error)) throw error;
     const fallback = primary === 'claude' ? 'codex' : 'claude';
@@ -1927,7 +1932,7 @@ export async function runAgentCommandWithFallback(
     const fallbackPrompt = primary === 'claude' && fallback === 'codex'
       ? `${prompt}\n\n${RUNNER_SYSTEM_CONTRACT}`
       : prompt;
-    const result = await runAgentCommandWithFallback(fallback, cwd, fallbackPrompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, undefined, profile, onUsage, onAudit, kind, accountProfile, undefined, undefined, undefined, poolEligible, false, aggregate);
+    const result = await runAgentCommandWithFallback(fallback, cwd, fallbackPrompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, undefined, profile, onUsage, onAudit, kind, accountProfile, undefined, undefined, undefined, poolEligible, false, aggregate, undefined, externalActionGuard);
     return { ...result, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
   }
 }
@@ -2077,6 +2082,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   // first few seconds of every run and the run reads as hung.
   if (run.messageId) repository.updateSharedMessage(run.messageId, { body: `● Starting ${run.kind}…` });
   const observedRunEvents: ObservedRunEvent[] = [];
+  let externalActionGuard: ExternalActionProcessGuard | undefined;
+  let stopExternalActionObserver: (() => void) | undefined;
   try {
     if (workspaceResolutionError) throw workspaceResolutionError;
     const cwd = workspace ?? resolveWorkingDirectory(item);
@@ -2144,6 +2151,12 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       },
     });
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
+    externalActionGuard = createExternalActionProcessGuard(externalAuthorization);
+    stopExternalActionObserver = observeExternalActionRefusals(externalActionGuard, (refusal) => {
+      recordExternalActionRefusal(repository, run, refusal);
+      observedRunEvents.push({ category: 'agent_tool_use', detail: refusal.detail, streamKind: 'tool', command: refusal.command, exitCode: 126 });
+      if (run.conversationId) publishRealtimeMessagesEvent(run.conversationId); else publishRealtimeEvent('shared-messages');
+    });
     const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
     const lineageDecision = await verifyAuthoritativeMutationLineage(repository, item, externalAuthorization, sourceWorkspace ?? cwd, run);
     if (lineageDecision && run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, [{ kind: 'decision', detail: lineageDecision }]);
@@ -2230,7 +2243,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // choice and its reason so the activity log explains what actually ran.
     repository.addActivity(item.id, 'system', 'model_selected', describeModelSelection({ agent: run.agent, kind: run.kind, model, profile, source: decision.source }));
     let result = run.agent === 'palmyra'
-      ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, previousMessages: palmyraContext, imageAttachments: item.attachments ?? [], requiredWorkbenchTools, onProgress: (partialOutput) => {
+      ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, previousMessages: palmyraContext, imageAttachments: item.attachments ?? [], requiredWorkbenchTools, externalActionGuard, onProgress: (partialOutput) => {
         repository.updateRun(run.id, { output: partialOutput });
         if (run.messageId) {
           repository.updateSharedMessage(run.messageId, { body: partialOutput });
@@ -2274,7 +2287,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
         trace: entry.trace,
       })));
-    }, run.kind, run.accountProfile, undefined, undefined, resumeSessionId, !resumesSession);
+    }, run.kind, run.accountProfile, undefined, undefined, resumeSessionId, !resumesSession, true, undefined, undefined, externalActionGuard);
     const attemptedAuthorizedAction = () => externalActionAttempted(
       externalAuthorization,
       observedRunEvents
@@ -2300,7 +2313,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
         })));
-      }, run.kind, run.accountProfile);
+      }, run.kind, run.accountProfile, undefined, undefined, undefined, false, true, undefined, undefined, externalActionGuard);
       if (hasUnsupportedCapabilityDenial(recovered.output) && !attemptedAuthorizedAction()) throw new Error(reason);
       result = { ...recovered, fallbackFrom: result.agent === 'claude' ? 'claude' : result.agent === 'codex' ? result.fallbackFrom : null, fallbackReason: reason };
       repository.updateRun(run.id, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: result.fallbackFrom, fallbackReason: reason });
@@ -2347,7 +2360,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
         })));
-      }, run.kind, run.accountProfile);
+      }, run.kind, run.accountProfile, undefined, undefined, undefined, false, true, undefined, undefined, externalActionGuard);
       result = { ...recovered, fallbackFrom: 'claude', fallbackReason: reason };
       repository.updateRun(run.id, { agent: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { author: result.agent, model: modelFor(result.agent, profile), fallbackFrom: 'claude', fallbackReason: reason });
@@ -2386,6 +2399,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
           const previousMessages = 'messages' in result ? result.messages : undefined;
           const repaired = await (await import('./palmyra-agent.js')).runPalmyraAgent({
             cwd, prompt: retryPrompt, model: palmyraTier, signal: controller.signal, previousMessages, imageAttachments: item.attachments ?? [],
+            externalActionGuard,
             onProgress: (partialOutput) => {
               repository.updateRun(run.id, { output: partialOutput });
               if (run.messageId) repository.updateSharedMessage(run.messageId, { body: partialOutput });
@@ -2402,7 +2416,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
             repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: retryAgent, fallbackReason: reason.slice(0, 500) });
             if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: retryAgent, fallbackReason: reason.slice(0, 500) });
             if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
-          }, profile, recordRetryUsage, recordRetryAudit, run.kind, run.accountProfile, undefined, undefined, undefined, false, true, priorUsage);
+          }, profile, recordRetryUsage, recordRetryAudit, run.kind, run.accountProfile, undefined, undefined, undefined, false, true, priorUsage, undefined, externalActionGuard);
           const combinedCost = priorCost == null && repaired.costUsd == null ? null : (priorCost ?? 0) + (repaired.costUsd ?? 0);
           result = { ...repaired, costUsd: combinedCost };
         }
@@ -2520,6 +2534,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     publishRealtimeNotification({ tone: 'error', message: 'Agent needs your attention', description: item.title, duration: 0, action: { label: run.conversationId ? 'Open conversation' : 'Open task', route: run.conversationId ? `/conversations/${run.conversationId}` : `/tasks/${item.id}` } });
     notifyAgentRunFinished(item, repository.getRun(run.id) ?? run, 'failed', message);
   } finally {
+    stopExternalActionObserver?.();
     clearInterval(leaseHeartbeat);
     activeRunControllers.delete(run.id);
     // Free the working tree for whatever is waiting on it, whatever the outcome.

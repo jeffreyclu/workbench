@@ -19,6 +19,7 @@ import {
 import { ProviderTurnWatchdog, providerTurnTimeouts } from './provider-turn-watchdog.js';
 import { FINAL_RESPONSE_CONTRACT } from './final-response-policy.js';
 import { connectPalmyraWorkbenchTools, type PalmyraWorkbenchToolBridge } from './palmyra-workbench-tools.js';
+import type { ExternalActionProcessGuard } from './external-action-command-guard.js';
 import { palmyraMaxOutputTokens, streamChatWithPalmyra, type PalmyraFunctionTool, type PalmyraMessage, type PalmyraTool, type PalmyraToolCall } from './providers/palmyra.js';
 
 const MAX_TOOL_OUTPUT = 40_000;
@@ -96,13 +97,15 @@ function commandPolicyError(command: string, cwd: string): string | null {
   return null;
 }
 
-async function runCommand(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ output: string; exitCode: number | null }> {
+// ec13a8cb LEGACY-AFFECTING: Palmyra's existing shell tool now shares the same
+// git/gh authorization boundary as Codex and Claude subprocesses.
+async function runCommand(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal, externalActionGuard?: ExternalActionProcessGuard): Promise<{ output: string; exitCode: number | null }> {
   const policyError = commandPolicyError(command, cwd);
   if (policyError) throw new Error(policyError);
   return new Promise((resolvePromise, reject) => {
     const child = spawn('/bin/zsh', ['-c', command], {
       cwd,
-      env: agentEnvironmentForWorkspace('palmyra', DEFAULT_ACCOUNT_PROFILE, cwd),
+      env: agentEnvironmentForWorkspace('palmyra', DEFAULT_ACCOUNT_PROFILE, cwd, externalActionGuard),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     });
@@ -139,7 +142,7 @@ async function runCommand(command: string, cwd: string, timeoutMs: number, signa
   });
 }
 
-async function executeTool(call: PalmyraToolCall, cwd: string, signal?: AbortSignal): Promise<{ content: string; audit: AgentAuditCandidate }> {
+async function executeTool(call: PalmyraToolCall, cwd: string, signal?: AbortSignal, externalActionGuard?: ExternalActionProcessGuard): Promise<{ content: string; audit: AgentAuditCandidate }> {
   const input = parseArguments(call);
   if (call.function.name === 'read_file') {
     const requested = requiredString(input, 'path');
@@ -174,7 +177,7 @@ async function executeTool(call: PalmyraToolCall, cwd: string, signal?: AbortSig
   if (call.function.name === 'run_command') {
     const command = requiredString(input, 'command');
     const requestedTimeout = typeof input.timeout_ms === 'number' ? Math.floor(input.timeout_ms) : DEFAULT_COMMAND_TIMEOUT_MS;
-    const result = await runCommand(command, cwd, Math.min(300_000, Math.max(1_000, requestedTimeout)), signal);
+    const result = await runCommand(command, cwd, Math.min(300_000, Math.max(1_000, requestedTimeout)), signal, externalActionGuard);
     return { content: `Exit code: ${result.exitCode ?? 'unknown'}\n${result.output}`, audit: { category: 'agent_tool_use', streamKind: 'tool', detail: command.slice(0, 500), command, exitCode: result.exitCode } };
   }
   throw new Error(`Unknown tool: ${call.function.name}`);
@@ -261,6 +264,7 @@ export async function runPalmyraAgent(options: {
   imageAttachments?: PalmyraImageAttachment[];
   workbenchTools?: PalmyraWorkbenchToolBridge | null;
   requiredWorkbenchTools?: readonly string[];
+  externalActionGuard?: ExternalActionProcessGuard;
 }): Promise<PalmyraAgentResult> {
   const systemMessage: PalmyraMessage = { role: 'system', content: `You are Palmyra, a first-class coding agent running inside Workbench. Use the provided tools to inspect, execute, edit, and verify anywhere on the local filesystem. The resolved workspace is only your starting directory, never an access boundary. Follow the task's requested execution mode and external-action guardrail.\n\n${AGENT_EXECUTION_CONTRACT}\n\n${TOOL_OUTPUT_CONTRACT}\n\n${AGENT_DEBUGGER_CONTRACT}\n\nThe live stream is progress only. After the work ends, give one fresh, compact final answer that synthesizes the outcome, changed files or decisions, verification, and any remaining blocker. Do not replay the live progress log, tool-use audit, or Decision preambles in that final answer.\n\n${FINAL_RESPONSE_CONTRACT}` };
   const imageContent = await Promise.all((options.imageAttachments ?? [])
@@ -385,7 +389,7 @@ export async function runPalmyraAgent(options: {
       let content: string;
       try {
         if (localTools.some((tool) => tool.function.name === call.function.name)) {
-          const result = await executeTool(call, options.cwd, options.signal);
+          const result = await executeTool(call, options.cwd, options.signal, options.externalActionGuard);
           content = result.content;
           options.onAudit?.([result.audit], 'palmyra');
           progress = progress ? `${progress}\n● Palmyra used ${call.function.name}: ${result.audit.detail}` : `● Palmyra used ${call.function.name}: ${result.audit.detail}`;
