@@ -703,6 +703,13 @@ export class AgentTerminalWarningError extends Error {
   }
 }
 
+export class ProviderRefusalError extends AgentTerminalWarningError {
+  constructor(message: string, checkpoint: string) {
+    super(message, checkpoint);
+    this.name = 'ProviderRefusalError';
+  }
+}
+
 class AgentProviderStallError extends Error {
   constructor(
     readonly agent: AgentRun['agent'],
@@ -775,6 +782,15 @@ export function terminalExitCheckpoint(finalOutput: string, progress: string): s
 
 /** Kept in sync with `isTransientAgentError` and `isAgentCapacityError`: those decide retry, and they only see the message. */
 const PROVIDER_FAILURE_SIGNAL = /(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|socket hang up|network|timed out|timeout|5\d\d\b|temporarily unavailable|service unavailable|\b429\b|credit|usage limit|session limit|rate limit|quota|too many requests|hit (?:your|the) limit|limit resets?|capacity|subscription access|API key instead|admin to enable access)/i;
+const PROVIDER_REFUSAL_SIGNAL = /(?:safeguards?\s+(?:flagged|blocked)|safety (?:system|filter)s?\s+(?:flagged|blocked)|provider refused|request (?:was )?refused|reasoning_extraction)/i;
+
+export function providerRefusalDiagnostic(source: string): string | null {
+  const lines = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const first = lines.find((line) => PROVIDER_REFUSAL_SIGNAL.test(line));
+  if (!first) return null;
+  const diagnosticLines = [first, ...lines.filter((line) => line !== first && /^(?:details|request id)\s*:/i.test(line))];
+  return diagnosticLines.map((line) => line.slice(0, 1_000)).join('\n');
+}
 
 function providerFailureSignal(...sources: string[]): string {
   for (const source of sources) {
@@ -802,6 +818,8 @@ export function terminalExitFailure(exit: { stderr: string; terminalError: strin
   const signal = providerFailureSignal(exit.finalOutput, exit.progress, exit.stdout ?? '');
   const diagnostic = exit.stderr.trim() || exit.terminalError.trim() || signal || `${exit.command} exited with code ${exit.code}.`;
   const checkpoint = terminalExitCheckpoint(exit.finalOutput, exit.progress);
+  const refusal = providerRefusalDiagnostic(diagnostic) ?? providerRefusalDiagnostic(exit.finalOutput);
+  if (refusal) return new ProviderRefusalError(refusal, checkpoint);
   return checkpoint ? new AgentTerminalWarningError(diagnostic, checkpoint) : new Error(diagnostic);
 }
 
@@ -1469,9 +1487,15 @@ function terminalAgentError(agent: AgentRun['agent'], line: string): string | nu
       // the terminal subtype is a protocol warning such as max turns. Never
       // turn that entire user-facing report into the error diagnostic.
       const structuredError = event.error as Record<string, unknown> | string | undefined;
-      if (typeof structuredError === 'string' && structuredError.trim()) return structuredError.trim();
-      if (structuredError && typeof structuredError === 'object' && typeof structuredError.message === 'string') return structuredError.message;
+      const structuredMessage = typeof structuredError === 'string'
+        ? structuredError.trim()
+        : structuredError && typeof structuredError === 'object' && typeof structuredError.message === 'string'
+          ? structuredError.message.trim()
+          : '';
       const resultText = typeof event.result === 'string' ? event.result.trim() : '';
+      const refusal = providerRefusalDiagnostic(`${structuredMessage}\n${resultText}`);
+      if (refusal) return refusal;
+      if (structuredMessage) return structuredMessage;
       // This diagnostic drives the fresh-session recovery path below; retain
       // it verbatim while keeping ordinary handoff prose out of the error.
       if (/no conversation found with session id/i.test(resultText)) return resultText;
@@ -1968,7 +1992,11 @@ export async function runAgentCommandWithFallback(
         segmentResume = undefined;
         continue;
       }
-      if (result.terminalWarning) throw new AgentTerminalWarningError(result.terminalWarning, result.output);
+      if (result.terminalWarning) {
+        const refusal = providerRefusalDiagnostic(result.terminalWarning);
+        if (refusal) throw new ProviderRefusalError(refusal, result.output);
+        throw new AgentTerminalWarningError(result.terminalWarning, result.output);
+      }
       break;
     }
     return { ...result, usage: aggregate, agent: primary, fallbackFrom: null, fallbackReason: null };
@@ -2501,9 +2529,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.setConversationPalmyraContext(run.conversationId, JSON.stringify(result.messages));
     }
     const persistedFallbackReason = reviewFallbackReason(run, result.agent, result.fallbackReason, repository.listRuns(item.id));
-    if (persistedFallbackReason !== result.fallbackReason) result = { ...result, fallbackReason: persistedFallbackReason } as typeof result;
     const rawOutput = result.output;
-    const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason, costUsd: result.costUsd ?? null };
+    const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: persistedFallbackReason, costUsd: result.costUsd ?? null };
     let executionPlan: { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null; dependsOn: number[] }> } | null = null;
     if (run.instructions.includes('WORKBENCH_DECOMPOSITION')) {
       const match = rawOutput.match(/<workbench-plan>([\s\S]*?)<\/workbench-plan>/);
@@ -2610,7 +2637,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       // notifying on every attempt would spam Slack for something Jeffrey doesn't need to see yet.
       return;
     }
-    if (!repository.finishRun(run.id, ownerId, { status: 'failed', error: message, completedAt: new Date().toISOString(), ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}) })) return;
+    const failureKind = error instanceof ProviderRefusalError ? 'provider_refusal' : null;
+    if (!repository.finishRun(run.id, ownerId, { status: 'failed', error: message, failureKind, completedAt: new Date().toISOString(), ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}) })) return;
     if (run.messageId) repository.updateSharedMessage(run.messageId, { status: 'failed', error: message, ...(terminalCheckpoint ? { body: terminalCheckpoint } : {}) });
     await superviseTerminalConversationReply(repository, run);
     const latestItem = repository.get(item.id);

@@ -133,6 +133,7 @@ const baseSchemaStatements = [
       instructions TEXT NOT NULL DEFAULT '',
       output TEXT NOT NULL DEFAULT '',
       error TEXT NOT NULL DEFAULT '',
+      failure_kind TEXT CHECK (failure_kind IN ('provider_refusal')),
       started_at TEXT,
       completed_at TEXT,
       created_at TEXT NOT NULL,
@@ -2512,6 +2513,17 @@ const schemaMigrations: readonly Migration[] = [
           SELECT RAISE(ABORT, 'agent run review handoffs are immutable');
         END;
       `);
+    },
+  },
+  {
+    // Provider refusals need a durable outcome distinct from ordinary failures
+    // so the task card can name them and a later retry can change vendors.
+    id: '088_agent_run_failure_kind',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'failure_kind')) {
+        database.exec("ALTER TABLE agent_runs ADD COLUMN failure_kind TEXT CHECK (failure_kind IN ('provider_refusal'));");
+      }
     },
   },
 ];

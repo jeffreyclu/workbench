@@ -238,7 +238,7 @@ describe('WorkspaceDiffView decision queue', () => {
     });
     renderView(fetchMock, false, {
       agentRunId: 'run-1', formatVersion: 1, summary: 'Implemented the requested change.', changes: [], acceptanceCriteria: [], contractChanges: [], verification: [],
-      uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'], tradeoffs: [], createdAt: '2026-08-27T01:00:00.000Z',
+      uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'], tradeoffs: [], blockers: [], learnings: [], priorArt: [], createdAt: '2026-08-27T01:00:00.000Z',
     });
 
     await screen.findByRole('navigation', { name: /review decision queue/i });

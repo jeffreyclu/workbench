@@ -12,7 +12,7 @@ const handoff: AgentRunReviewHandoff = {
   changes: [{ path: 'src/app.ts', summary: 'Changed during this run.', rationale: 'Observed file-write event from the coding runner.' }],
   acceptanceCriteria: [{ criterion: 'Fix the flaky login test.', files: ['src/app.ts'], decisions: [] }], contractChanges: [],
   verification: [{ command: 'pnpm typecheck', exitCode: 0, result: 'passed' }, { command: 'pnpm build', exitCode: 1, result: 'failed' }],
-  uncertainties: [], tradeoffs: [],
+  uncertainties: [], tradeoffs: [], blockers: [], learnings: [], priorArt: [],
 };
 
 describe('AgentRunReviewHandoffCard', () => {

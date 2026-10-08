@@ -101,6 +101,7 @@ const EXPECTED_MIGRATIONS = [
   '085_agent_run_prompt_size',
   '086_memory_usage_metrics',
   '087_agent_run_handoff_v2',
+  '088_agent_run_failure_kind',
 ];
 
 describe('openDatabase', () => {
@@ -160,6 +161,21 @@ describe('openDatabase', () => {
     const tables = upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memory_retrievals', 'memory_citations') ORDER BY name").all();
     expect(tables).toEqual([{ name: 'memory_citations' }, { name: 'memory_retrievals' }]);
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '086_memory_usage_metrics'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the run failure classification when upgrading from migration 087', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE agent_runs DROP COLUMN failure_kind;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '088_agent_run_failure_kind'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+    expect(columns.map(({ name }) => name)).toContain('failure_kind');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '088_agent_run_failure_kind'").get()).toBeTruthy();
     upgraded.close();
   });
 
