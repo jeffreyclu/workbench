@@ -382,7 +382,7 @@ function personaFor(item: WorkItem, run: AgentRun): string {
   return name === null ? '' : personaPrompt(name, name === 'doc-writer' ? 'document-writer' : name);
 }
 
-type PromptContentSize = Omit<AgentRunPromptSize, 'totalChars' | 'systemContractChars'>;
+type PromptContentSize = Omit<AgentRunPromptSize, 'totalChars' | 'systemContractChars' | 'envelopeChars' | 'sessionMode' | 'sessionStartup'>;
 
 const emptyPromptContentSize = (): PromptContentSize => ({
   personaChars: 0,
@@ -395,13 +395,27 @@ const emptyPromptContentSize = (): PromptContentSize => ({
   repoRoutingBlockChars: 0,
 });
 
+export interface PromptSessionShape {
+  sessionMode: AgentRunPromptSize['sessionMode'];
+  sessionStartup: boolean;
+}
+
 /** Partitions the exact provider payload; fixed orchestration text is the
- * residual after counting the named variable sections. */
-export function measurePromptSize(prompt: string, sections: Partial<PromptContentSize> = {}, additionalSystemChars = 0): AgentRunPromptSize {
+ * residual after counting the named variable sections. `envelopeChars` is that
+ * residual inside this turn's own payload, so it excludes the standing system
+ * contract that `additionalSystemChars` adds. */
+export function measurePromptSize(prompt: string, sections: Partial<PromptContentSize> = {}, additionalSystemChars = 0, session: PromptSessionShape = { sessionMode: 'per_run', sessionStartup: false }): AgentRunPromptSize {
   const content = { ...emptyPromptContentSize(), ...sections };
   const totalChars = prompt.length + additionalSystemChars;
   const contentChars = Object.values(content).reduce((sum, chars) => sum + chars, 0);
-  return { totalChars, systemContractChars: Math.max(0, totalChars - contentChars), ...content };
+  return {
+    totalChars,
+    systemContractChars: Math.max(0, totalChars - contentChars),
+    ...content,
+    envelopeChars: Math.max(0, prompt.length - contentChars),
+    sessionMode: session.sessionMode,
+    sessionStartup: session.sessionStartup,
+  };
 }
 
 export function taskPromptContentSize(

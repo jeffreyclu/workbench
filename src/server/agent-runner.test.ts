@@ -9,6 +9,7 @@ import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../s
 import { agentSubprocessEnv } from './agent-security.js';
 import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, measurePromptSize, missingReviewPasses, providerSessionForTaskTurn, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, reviewFallbackReason, reviewPassCompletionPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, selectReviewAgent, shouldContinueCacheHandoff, taskPromptContentSize, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError, ProviderRefusalError } from './agent-runner.js';
 import { openDatabase } from './database.js';
+import { usesPersistentSession } from './shared-room.js';
 import { loadPersonaFiles, parsePersona, personaBody, personaPrompt, renderClaudeAgent } from './personas.js';
 import { WorkItemRepository } from './repository.js';
 import { fakeAgentDirectory as sharedFakeAgentDirectory } from './test-fake-agent.js';
@@ -126,12 +127,37 @@ describe('classifyExecution', () => {
     expect(prompt).toContain('brief.pdf (application/pdf, 42 bytes): /tmp/workbench-attachments/brief.pdf');
   });
 
+  it('records the envelope and session shape for per-run and persistent turns', () => {
+    const perRun = measurePromptSize('0123456789', { taskDescriptionChars: 4 }, 100);
+    expect(perRun).toMatchObject({ totalChars: 110, envelopeChars: 6, sessionMode: 'per_run', sessionStartup: false });
+
+    const startup = measurePromptSize('0123456789', { taskDescriptionChars: 4 }, 0, { sessionMode: 'persistent', sessionStartup: true });
+    const later = measurePromptSize('01234', {}, 0, { sessionMode: 'persistent', sessionStartup: false });
+    expect(startup).toMatchObject({ envelopeChars: 6, sessionMode: 'persistent', sessionStartup: true });
+    expect(later).toMatchObject({ totalChars: 5, envelopeChars: 5, sessionMode: 'persistent', sessionStartup: false });
+  });
+
+  it('never gives a review run a persistent session, so a reviewer does not share the writer\'s context', () => {
+    const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    process.env.WORKBENCH_PERSISTENT_SESSIONS = '1';
+    try {
+      expect(usesPersistentSession('claude', 'execute')).toBe(true);
+      expect(usesPersistentSession('codex', 'bugfix')).toBe(true);
+      expect(usesPersistentSession('claude', 'review')).toBe(false);
+      expect(usesPersistentSession('codex', 'review')).toBe(false);
+      expect(usesPersistentSession('palmyra', 'execute')).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      else process.env.WORKBENCH_PERSISTENT_SESSIONS = saved;
+    }
+  });
+
   it('partitions a task prompt into named sections that add to the dispatched payload', () => {
     const task = { ...item('Measure prompt sections'), description: 'Implementation context.', strategy: 'Ship the smallest safe change.' };
     const run = { agent: 'codex', kind: 'execute', instructions: 'Implement and verify it.' } as AgentRun;
     const prompt = buildPrompt(task, run, 'Short-term facts.', EXTERNAL_ACTION_CONTRACT, 'Durable facts.');
     const size = measurePromptSize(prompt, taskPromptContentSize(task, run, 'Short-term facts.', 'Durable facts.'));
-    const sectionTotal = Object.entries(size).filter(([key]) => key !== 'totalChars').reduce((sum, [, chars]) => sum + chars, 0);
+    const sectionTotal = Object.entries(size).filter(([key]) => !['totalChars', 'envelopeChars', 'sessionMode', 'sessionStartup'].includes(key)).reduce((sum, [, chars]) => sum + chars, 0);
 
     expect(size.totalChars).toBe(prompt.length);
     expect(sectionTotal).toBe(size.totalChars);

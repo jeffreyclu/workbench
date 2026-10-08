@@ -340,7 +340,7 @@ describe('WorkItemRepository', () => {
   it('persists the prompt section breakdown on an agent run', () => {
     const item = repository.create({ title: 'Measure prompt size', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const run = repository.createRun(item.id, 'execute', 'codex', 'codex', 'Implement it.');
-    const promptSize = { totalChars: 55, systemContractChars: 10, personaChars: 9, taskDescriptionChars: 8, strategyChars: 7, conversationHistoryChars: 6, shortTermMemoryChars: 5, durablePrefetchChars: 4, connectionContextChars: 3, repoRoutingBlockChars: 3 };
+    const promptSize = { totalChars: 55, systemContractChars: 10, personaChars: 9, taskDescriptionChars: 8, strategyChars: 7, conversationHistoryChars: 6, shortTermMemoryChars: 5, durablePrefetchChars: 4, connectionContextChars: 3, repoRoutingBlockChars: 3, envelopeChars: 2, sessionMode: 'per_run' as const, sessionStartup: false };
 
     repository.updateRun(run.id, { promptSize });
 

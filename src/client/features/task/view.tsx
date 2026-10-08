@@ -98,6 +98,7 @@ const PROMPT_SIZE_ROWS = [
   ['Durable prefetch', 'durablePrefetchChars'],
   ['Connection context', 'connectionContextChars'],
   ['Repo routing block', 'repoRoutingBlockChars'],
+  ['Envelope', 'envelopeChars'],
 ] as const satisfies ReadonlyArray<readonly [string, keyof NonNullable<AgentRun['promptSize']>]>;
 
 /**
@@ -721,8 +722,10 @@ export function TaskDetail({ id, onClose, onOpenConversation, onOpenTask, onCrea
               {run.promptSize && <table className="prompt-size-table">
                 <caption>Prompt size <span>{run.promptSize.totalChars.toLocaleString()} chars</span></caption>
                 <tbody>
-                  {PROMPT_SIZE_ROWS.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{run.promptSize![key].toLocaleString()}</td></tr>)}
+                  {PROMPT_SIZE_ROWS.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{(run.promptSize![key] ?? 0).toLocaleString()}</td></tr>)}
                   <tr className="prompt-size-total"><th scope="row">Total</th><td>{run.promptSize.totalChars.toLocaleString()}</td></tr>
+                  <tr><th scope="row">Session mode</th><td>{run.promptSize.sessionMode === 'persistent' ? 'Persistent' : 'Per run'}</td></tr>
+                  <tr><th scope="row">Session startup</th><td>{run.promptSize.sessionStartup ? 'Yes' : 'No'}</td></tr>
                 </tbody>
               </table>}
               {run.status === 'completed' && run.output && <div className="run-summary"><span className="section-label">Agent summary</span><AgentMessageBody body={run.output} running={false} workItemId={item.id} /></div>}

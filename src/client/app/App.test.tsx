@@ -2244,7 +2244,7 @@ describe('task execution', () => {
       attempt: 0, maxAttempts: 3, nextAttemptAt: null, waitingReason: null, resolvedWorkspace: null, origin: 'manual' as const,
     };
     const runs = [
-      { ...baseRun, id: '00000000-0000-4000-8000-000000000011', requestedAgent: 'codex' as const, agent: 'codex' as const, promptSize: { totalChars: 1234, systemContractChars: 400, personaChars: 100, taskDescriptionChars: 200, strategyChars: 50, conversationHistoryChars: 150, shortTermMemoryChars: 100, durablePrefetchChars: 80, connectionContextChars: 74, repoRoutingBlockChars: 80 }, reviewDispatch: { mode: 'always' as const, tier: 'sensitive' as const, reason: 'it touches data (src/server/database.ts)', files: ['src/server/database.ts'], changedLines: 1, reviewRunId: null, decidedAt: '2026-01-01T00:01:00Z' } },
+      { ...baseRun, id: '00000000-0000-4000-8000-000000000011', requestedAgent: 'codex' as const, agent: 'codex' as const, promptSize: { totalChars: 1234, systemContractChars: 400, personaChars: 100, taskDescriptionChars: 200, strategyChars: 50, conversationHistoryChars: 150, shortTermMemoryChars: 100, durablePrefetchChars: 80, connectionContextChars: 74, repoRoutingBlockChars: 80, envelopeChars: 60, sessionMode: 'persistent' as const, sessionStartup: true }, reviewDispatch: { mode: 'always' as const, tier: 'sensitive' as const, reason: 'it touches data (src/server/database.ts)', files: ['src/server/database.ts'], changedLines: 1, reviewRunId: null, decidedAt: '2026-01-01T00:01:00Z' } },
       { ...baseRun, id: '00000000-0000-4000-8000-000000000012', requestedAgent: 'claude' as const, agent: 'claude' as const },
     ];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
@@ -2261,6 +2261,9 @@ describe('task execution', () => {
     expect(screen.getByText('Prompt size').closest('caption')).toHaveTextContent('1,234 chars');
     expect(screen.getByText('System contract')).toBeTruthy();
     expect(screen.getByText('Repo routing block')).toBeTruthy();
+    expect(screen.getByText('Envelope').nextElementSibling).toHaveTextContent('60');
+    expect(screen.getByText('Session mode').nextElementSibling).toHaveTextContent('Persistent');
+    expect(screen.getByText('Session startup').nextElementSibling).toHaveTextContent('Yes');
     expect(screen.getByText('Total').nextElementSibling).toHaveTextContent('1,234');
     expect(screen.getByText('review: always / sensitive, because it touches data (src/server/database.ts)')).toBeTruthy();
 

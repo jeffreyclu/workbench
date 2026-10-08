@@ -3,19 +3,20 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, SUPERVISOR_EVIDENCE_REASON_PREFIX, defaultAccountProfileForTask, type AgentRun, type AgentStreamEvent, type GitHubPullRequestDiff, type SharedMessage, type WorkItem, type WorkspaceDiff } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, agentEnvironmentForWorkspace, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, measurePromptSize, mcpTraceEventForProviderItem, modelFor, MUTATING_RUN_KINDS, personaNameFor, readableAgentEvent, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, taskPromptContentSize, warmAgentCommand, type AgentAuditCandidate, type AgentEventContext, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, agentEnvironmentForWorkspace, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, measurePromptSize, mcpTraceEventForProviderItem, modelFor, MUTATING_RUN_KINDS, personaNameFor, type PromptSessionShape, readableAgentEvent, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, taskPromptContentSize, warmAgentCommand, type AgentAuditCandidate, type AgentEventContext, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
 import { clearTurnCapability, createExternalActionProcessGuard, observeExternalActionRefusals, recordExternalActionRefusal, turnCapabilityFor, writeTurnCapability, type ExternalActionProcessGuard, type ExternalActionRefusal } from './external-action-command-guard.js';
-import { awaitTurn, ensureSession, interrupt, readAgentSessionStatus, resetSession, sessionExternalActionGuard, steerTurn, submitTurn, tail, type AgentSessionEvent, type AgentTurnResult } from './agent-session.js';
+import { awaitTurn, ensureSession, interrupt, readAgentSessionStatus, readSessionEventsFromFile, resetSession, sessionExternalActionGuard, steerTurn, submitTurn, tail, type AgentSessionEvent, type AgentSessionKey, type AgentTurnResult } from './agent-session.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
 import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
 import { groundTurn } from './turn-grounding-ai.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
-import { buildAgentRunReviewHandoff } from './review-handoff.js';
+import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
+import { CAPTURE_GATE_ISSUED_EVENT, CAPTURE_GATE_PROMPT, CAPTURE_GATE_SATISFIED_EVENT, captureGateHandoffLine, captureGateState } from './capture-gate.js';
 import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness } from './review-harness-runner.js';
 import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
@@ -1307,6 +1308,8 @@ export function measureSharedReplyPromptSize(input: {
   linked?: { item: WorkItem; run: AgentRun };
   executionWorkspaces?: readonly RunWorkspaceBinding[];
   resumed: boolean;
+  /** Persistent when the prompt is a turn on a live provider session; startup is true when that turn starts the process. */
+  session?: PromptSessionShape;
 }) {
   const executionWorkspaces = input.executionWorkspaces ?? [];
   const sections = input.resumed ? {
@@ -1321,7 +1324,12 @@ export function measureSharedReplyPromptSize(input: {
     conversationHistoryChars: compactConversationHistory(input.thread).length,
     connectionContextChars: input.connectionContext.length,
   };
-  return measurePromptSize(input.prompt, sections, input.agent === 'claude' ? RUNNER_SYSTEM_CONTRACT.length : 0);
+  const session = input.session ?? { sessionMode: 'per_run' as const, sessionStartup: false };
+  // A live session was handed its system prompt when its process started, so only that turn carries it.
+  const systemChars = session.sessionMode === 'persistent'
+    ? (session.sessionStartup ? sessionSystemPrompt(input.agent as SessionAgent).length : 0)
+    : input.agent === 'claude' ? RUNNER_SYSTEM_CONTRACT.length : 0;
+  return measurePromptSize(input.prompt, sections, systemChars, session);
 }
 
 /** The repository returns conversation messages in chronological order. */
@@ -1569,6 +1577,15 @@ export function persistentSessionsEnabled(): boolean {
   return process.env.WORKBENCH_PERSISTENT_SESSIONS === '1';
 }
 
+/**
+ * Review turns stay on a fresh per-run process: a reviewer that shared the
+ * writer's context would inherit the writer's assumptions
+ * (workbench-operating-practices.md#5).
+ */
+export function usesPersistentSession(agent: AgentRun['agent'], kind: AgentRun['kind']): boolean {
+  return persistentSessionsEnabled() && (agent === 'claude' || agent === 'codex') && kind !== 'review';
+}
+
 export type SessionAgent = 'claude' | 'codex';
 
 /** Sent once, when the provider session starts. Per-turn messages stay short because of it. */
@@ -1751,6 +1768,36 @@ export interface SharedSessionTurnResult extends SessionTurnSnapshot {
   pid: number | null;
   hostPid: number;
   reused: boolean;
+  /** Session log byte range of this turn: where it was accepted and just past its terminal record. */
+  startOffset: number;
+  endOffset: number;
+}
+
+/** Runner-observed events for the handoff from the session log bytes in [startOffset, endOffset). */
+export function observedEventsFromSessionLog(key: AgentSessionKey, agent: SessionAgent, startOffset: number, endOffset: number): ObservedRunEvent[] {
+  const observed: ObservedRunEvent[] = [];
+  const reader = createSessionTurnReader(agent, {
+    onProgress: () => undefined,
+    onUsage: () => undefined,
+    onEvents: (events) => {
+      for (const event of events) {
+        observed.push({
+          category: event.kind === 'file_write' ? 'agent_file_write' : event.kind === 'file_read' ? 'agent_file_read' : 'agent_tool_use',
+          detail: event.detail,
+          streamKind: event.kind,
+          result: event.trace?.phase === 'response' ? JSON.stringify(event.trace.payload ?? '').slice(0, 2_000) : undefined,
+        });
+      }
+    },
+  });
+  let offset = startOffset;
+  while (offset < endOffset) {
+    const batch = readSessionEventsFromFile(key, offset);
+    if (batch.nextOffset <= offset) break;
+    for (const event of batch.events) if (event.endOffset <= endOffset) reader.read(event);
+    offset = batch.nextOffset;
+  }
+  return observed;
 }
 
 const sessionTurnAttempts = new Map<string, number>();
@@ -1826,6 +1873,8 @@ export async function runSharedSessionTurn(input: SharedSessionTurnInput): Promi
       pid: status?.pid ?? session.pid,
       hostPid: session.hostPid,
       reused: session.reused,
+      startOffset: accepted.startOffset,
+      endOffset: turn.nextOffset,
     };
   } finally {
     input.signal.removeEventListener('abort', cancel);
@@ -2096,7 +2145,7 @@ export async function replyInSharedRoom(
     });
     // A persistent session calls recall_context itself, so Workbench injects no
     // memory bodies for it. A per-run agent still gets the prefetch.
-    const sessionMode = persistentSessionsEnabled() && (agent === 'claude' || agent === 'codex');
+    const sessionMode = usesPersistentSession(agent, runKind);
     const usableMemorySnapshot = memorySnapshot?.deferredToSession ? undefined : memorySnapshot;
     const memoryQuery = usableMemorySnapshot?.query ?? automaticMemoryQuery;
     const memoryPlan = durableMemoryRetrievalPlan(latestUserMessage);
@@ -2189,16 +2238,35 @@ export async function replyInSharedRoom(
     const prompt = resumeProviderId
       ? withReviewHarness(`${buildResumedSharedReplyPrompt(connectionContext, target.conversationId, messageId, externalActionContract, turnGrounding, memoryContext, cascadeBreakerForPrompt(thread), shortTermContext, runKind, latestUserMessage)}\n\n${linkedItem ? repositoryRoutingPrompt(linkedItem, listCandidateWorkspaces(), workspaceBindings) : ''}`.trim())
       : freshPrompt;
+    const linkedRunKind = runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis';
+    // The exact text a session turn sends: the short turn message once the provider holds context, the full prompt otherwise.
+    const sessionMessageFor = (turnAgent: SessionAgent, followUp = '', fresh = false) => !fresh && sharedSessionHasContext(target.conversationId, turnAgent)
+      ? sessionTurnMessage({
+        conversationId: target.conversationId,
+        messageId,
+        runKind: linkedRunKind === 'analysis' ? runKind : linkedRunKind,
+        persona: personaNameFor(linkedItem ?? undefined, runKind),
+        objective: turnGrounding.objective,
+        workspaceBindings,
+        permission: sessionPermissionLine(externalAuthorization),
+        userMessage: latestUserMessage,
+      }) + (followUp ? `\n\n${followUp}` : '')
+      : `${freshPrompt}${followUp ? `\n\n${followUp}` : ''}`;
+    // A session turn is measured on what it actually sends. Once the provider
+    // holds context that is the short turn message, with no variable sections.
+    const sessionHasContext = sessionMode && sharedSessionHasContext(target.conversationId, agent as SessionAgent);
     const promptSize = measureSharedReplyPromptSize({
-      prompt,
+      prompt: sessionMode ? sessionMessageFor(agent as SessionAgent) : prompt,
       agent,
       thread,
-      shortTermContext,
-      memoryContext,
-      connectionContext,
-      linked: linkedItem && linkedRun ? { item: linkedItem, run: linkedRun } : undefined,
+      shortTermContext: sessionHasContext ? '' : shortTermContext,
+      memoryContext: sessionHasContext ? '' : memoryContext,
+      connectionContext: sessionHasContext ? '' : connectionContext,
+      linked: !sessionHasContext && linkedItem && linkedRun ? { item: linkedItem, run: linkedRun } : undefined,
       executionWorkspaces: workspaceBindings,
-      resumed: Boolean(resumeProviderId),
+      resumed: sessionMode ? sessionHasContext : Boolean(resumeProviderId),
+      // Startup is confirmed from the host once the turn runs; before that, a session without context is about to start.
+      session: sessionMode ? { sessionMode: 'persistent', sessionStartup: !sessionHasContext } : undefined,
     });
     if (runId) repository.updateRun(runId, { promptSize });
     if (runId) repository.addAgentRunDiagnostic(runId, messageId, agent, 'prompt', {
@@ -2221,11 +2289,11 @@ export async function replyInSharedRoom(
       providerSessionResetForExternalMutation: externalAuthorization.granted,
     });
     const guardedPrompt = prompt;
-    const linkedRunKind = runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis';
     // A live session already holds the room prompt, so after the first turn it
     // gets only the short turn message. A session without context, or one that
     // was just reset, gets the full prompt once.
-    const sessionTurnFor = (turnAgent: SessionAgent, message: string, options: { fresh?: boolean } = {}) => runSharedSessionTurn({
+    const sessionTurnRanges: Array<{ agent: SessionAgent; startOffset: number; endOffset: number }> = [];
+    const sessionTurnFor = (turnAgent: SessionAgent, message: string, options: { fresh?: boolean; followUp?: boolean } = {}) => runSharedSessionTurn({
       repository,
       agent: turnAgent,
       conversationId: target.conversationId,
@@ -2242,11 +2310,12 @@ export async function replyInSharedRoom(
       onRefusal: onExternalActionRefusal,
       sink: {
         onProgress: (partial) => {
-          if (controller.signal.aborted) return;
+          // The capture-gate follow-up is bookkeeping: it never replaces the reply body.
+          if (controller.signal.aborted || options.followUp) return;
           updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
         },
         onEvents: (events) => persistNonTerminalAgentUpdate(() => addLiveAgentStreamEvents(repository, messageId, runId ?? null, target.conversationId, events)),
-        onUsage: (usage) => persistNonTerminalAgentUpdate(() => {
+        onUsage: (usage) => options.followUp ? undefined : persistNonTerminalAgentUpdate(() => {
           const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
           repository.updateSharedMessage(messageId, telemetry);
           if (runId) repository.updateRun(runId, telemetry);
@@ -2257,23 +2326,17 @@ export async function replyInSharedRoom(
         void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
       },
     }).then((turn) => {
+      sessionTurnRanges.push({ agent: turnAgent, startOffset: turn.startOffset, endOffset: turn.endOffset });
+      // The process-spawn fact comes from the host, not from the earlier guess.
+      if (runId && !options.followUp && promptSize.sessionStartup === turn.reused) {
+        promptSize.sessionStartup = !turn.reused;
+        repository.updateRun(runId, { promptSize });
+      }
       // The same provider session and PID across turns is the observable proof
       // that no process was spawned for this message.
       if (runId) repository.addAgentRunDiagnostic(runId, messageId, turnAgent, 'usage', { providerSessionId: turn.sessionId, providerPid: turn.pid, sessionHostPid: turn.hostPid, sessionReused: turn.reused, sessionTurnId: turn.turnId, inputTokens: turn.usage.inputTokens, cacheCreationInputTokens: turn.usage.cacheCreationInputTokens, cacheReadInputTokens: turn.usage.cacheReadInputTokens, outputTokens: turn.usage.outputTokens });
       return { output: turn.output, agent: turnAgent, usage: turn.usage, peakContextTokens: turn.peakContextTokens, costUsd: turn.costUsd, sessionId: turn.sessionId, codexThreadId: turnAgent === 'codex' ? turn.sessionId ?? undefined : undefined, fallbackFrom: null, fallbackReason: null };
     });
-    const sessionMessageFor = (turnAgent: SessionAgent, followUp = '', fresh = false) => !fresh && sharedSessionHasContext(target.conversationId, turnAgent)
-      ? sessionTurnMessage({
-        conversationId: target.conversationId,
-        messageId,
-        runKind: linkedRunKind === 'analysis' ? runKind : linkedRunKind,
-        persona: personaNameFor(linkedItem ?? undefined, runKind),
-        objective: turnGrounding.objective,
-        workspaceBindings,
-        permission: sessionPermissionLine(externalAuthorization),
-        userMessage: latestUserMessage,
-      }) + (followUp ? `\n\n${followUp}` : '')
-      : `${freshPrompt}${followUp ? `\n\n${followUp}` : ''}`;
     // The status-only and external-grant resets stay: a reset session is a new
     // provider session, started with the full prompt.
     const sessionResetRequired = sessionMode && Boolean(storedProviderId && !resumeProviderId);
@@ -2502,6 +2565,34 @@ export async function replyInSharedRoom(
         detail: `Review harness passed: every decision was checked in all five passes. ${recorded.recorded} verdict(s) recorded in the review queue${recorded.kept ? `; ${recorded.kept} left alone because Jeffrey or the Review Director already decided them` : ''}.`,
       }]);
     }
+    // Everything this reply's session turns observed, read from the session
+    // log by each turn's start and end offsets so no earlier turn leaks in.
+    const sessionObservedEvents = (): ObservedRunEvent[] => sessionTurnRanges.flatMap((range) =>
+      observedEventsFromSessionLog({ conversationId: target.conversationId, agent: range.agent }, range.agent, range.startOffset, range.endOffset));
+    // Capture gate: substantive work records a lesson or says none. In a live
+    // session the follow-up is one more turn on the same process, issued once.
+    // The reply stays the deliverable and a failed follow-up never fails it.
+    let captureGateLine: string | undefined;
+    if (sessionMode && runId && sessionTurnRanges.length && result.agent !== 'palmyra') {
+      const gateAgent = result.agent as SessionAgent;
+      const initialGate = captureGateState(sessionObservedEvents(), result.output);
+      let issued = false;
+      let gateReply = '';
+      if (initialGate === 'follow_up') {
+        issued = true;
+        if (linkedItem) repository.addActivity(linkedItem.id, 'system', 'progress', CAPTURE_GATE_ISSUED_EVENT);
+        try {
+          const followUp = await sessionTurnFor(gateAgent, CAPTURE_GATE_PROMPT, { followUp: true });
+          gateReply = followUp.output;
+          result = { ...result, usage: addUsage(result.usage, followUp.usage), costUsd: result.costUsd == null && followUp.costUsd == null ? null : (result.costUsd ?? 0) + (followUp.costUsd ?? 0) };
+        } catch (error) {
+          console.error('[shared-room] capture-gate follow-up failed; completing the reply without it', error);
+        }
+      } else if (initialGate !== 'not_required' && linkedItem) {
+        repository.addActivity(linkedItem.id, 'system', 'progress', CAPTURE_GATE_SATISFIED_EVENT);
+      }
+      captureGateLine = captureGateHandoffLine(issued, initialGate === 'not_required' ? 'not_required' : captureGateState(sessionObservedEvents(), `${result.output}\n${gateReply}`));
+    }
     const rawOutput = result.output;
     result = { ...result, output: await finalizeSupervisedOutput({
       kind: runKind,
@@ -2538,8 +2629,8 @@ export async function replyInSharedRoom(
       repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt, ...telemetry });
       const completedRun = repository.getRun(runId);
       if (completedRun && !completedRun.reviewHandoff) {
-        const events = turnEvents().map((event) => ({ category: event.kind === 'file_write' ? 'agent_file_write' as const : event.kind === 'file_read' ? 'agent_file_read' as const : 'agent_tool_use' as const, detail: event.detail, streamKind: event.kind }));
-        repository.recordRunReviewHandoff(buildAgentRunReviewHandoff(completedRun, result.output, events, completedAt));
+        const events = sessionMode && sessionTurnRanges.length ? sessionObservedEvents() : turnEvents().map((event) => ({ category: event.kind === 'file_write' ? 'agent_file_write' as const : event.kind === 'file_read' ? 'agent_file_read' as const : 'agent_tool_use' as const, detail: event.detail, streamKind: event.kind }));
+        repository.recordRunReviewHandoff(buildAgentRunReviewHandoff(completedRun, result.output, events, completedAt, captureGateLine));
       }
     }
     if (linkedRun && linkedItem && MUTATING_RUN_KINDS.has(linkedRun.kind)) {

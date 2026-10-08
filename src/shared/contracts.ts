@@ -1113,6 +1113,12 @@ export interface AgentRunPromptSize {
   durablePrefetchChars: number;
   connectionContextChars: number;
   repoRoutingBlockChars: number;
+  /** Chars of the per-turn orchestration envelope: the whole payload minus the named variable sections and the standing system contract. */
+  envelopeChars: number;
+  /** `persistent` when one provider process serves many turns; `per_run` when this run spawned its own process. */
+  sessionMode: 'persistent' | 'per_run';
+  /** True only for the turn that spawned the provider process. */
+  sessionStartup: boolean;
 }
 
 export interface AgentRun {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentRun } from '../shared/contracts.js';
+import { mkdirSync, mkdtempSync, rmSync, statSync, appendFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach } from 'vitest';
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
+import { observedEventsFromSessionLog } from './shared-room.js';
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -63,5 +68,43 @@ describe('buildAgentRunReviewHandoff', () => {
     const handoff = buildAgentRunReviewHandoff(run(), 'All good.\nVerdict: 1 blocking finding.', [], '2026-08-27T01:00:00.000Z');
 
     expect(handoff).toMatchObject({ blockers: [], learnings: [], priorArt: [] });
+  });
+});
+
+describe('session turn handoff slices', () => {
+  const savedDirectory = process.env.WORKBENCH_AGENT_SESSIONS_DIR;
+  let root = '';
+  afterEach(() => {
+    if (savedDirectory === undefined) delete process.env.WORKBENCH_AGENT_SESSIONS_DIR;
+    else process.env.WORKBENCH_AGENT_SESSIONS_DIR = savedDirectory;
+    if (root) rmSync(root, { recursive: true, force: true });
+    root = '';
+  });
+
+  it('builds a turn\'s handoff from only the session log bytes between its start and end offsets', () => {
+    root = mkdtempSync(join(tmpdir(), 'workbench-handoff-slice-'));
+    process.env.WORKBENCH_AGENT_SESSIONS_DIR = join(root, 'agent-sessions');
+    const key = { conversationId: 'conversation-slice', agent: 'claude' as const };
+    const directory = join(root, 'agent-sessions', key.conversationId, key.agent);
+    mkdirSync(directory, { recursive: true });
+    const eventsPath = join(directory, 'events.jsonl');
+    const writeTurn = (turnId: string, path: string) => {
+      const start = (() => { try { return statSync(eventsPath).size; } catch { return 0; } })();
+      appendFileSync(eventsPath, `${JSON.stringify({ at: 't', source: 'host', turnId, type: 'turn_started' })}\n`);
+      appendFileSync(eventsPath, `${JSON.stringify({ at: 't', source: 'provider', turnId, event: { type: 'assistant', message: { content: [{ type: 'tool_use', id: `${turnId}-w`, name: 'Write', input: { file_path: path, content: 'x' } }] } } })}\n`);
+      appendFileSync(eventsPath, `${JSON.stringify({ at: 't', source: 'host', turnId, type: 'turn_terminal', status: 'completed' })}\n`);
+      return { start, end: statSync(eventsPath).size };
+    };
+    const first = writeTurn('m1#1', '/repo/earlier-turn.ts');
+    const second = writeTurn('m2#1', '/repo/this-turn.ts');
+    const third = writeTurn('m3#1', '/repo/later-turn.ts');
+
+    const events = observedEventsFromSessionLog(key, 'claude', second.start, second.end);
+    const handoff = buildAgentRunReviewHandoff(run(), 'Done.', events, '2026-08-27T01:00:00.000Z');
+
+    expect(events.map((event) => event.detail)).toEqual(['/repo/this-turn.ts']);
+    expect(handoff.changes.map((change) => change.path)).toEqual(['/repo/this-turn.ts']);
+    expect(observedEventsFromSessionLog(key, 'claude', first.start, third.end).map((event) => event.detail))
+      .toEqual(['/repo/earlier-turn.ts', '/repo/this-turn.ts', '/repo/later-turn.ts']);
   });
 });

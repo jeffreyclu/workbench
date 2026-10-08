@@ -12,7 +12,8 @@ import { reviewHarnessPrompt } from '../shared/review-harness.js';
 import { personaBody } from './personas.js';
 import { ensureSession, readAgentSessionStatus, sessionExternalActionGuard, submitTurn } from './agent-session.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
-import { accountProfileForSharedReply, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { captureGateState, CAPTURE_GATE_PROMPT } from './capture-gate.js';
+import { observedEventsFromSessionLog, accountProfileForSharedReply, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -271,7 +272,7 @@ describe('compactConversationHistory', () => {
     const thread = [message(0, 'Inspect the current run.'), message(1, 'I am checking it.')];
     const prompt = buildSharedReplyPrompt('codex', 'Short-term facts.', 'Connected source facts.', thread, undefined, 'conversation-id', EXTERNAL_ACTION_CONTRACT, fallbackTurnGrounding(thread), 'message-id', 'Durable facts.');
     const size = measureSharedReplyPromptSize({ prompt, agent: 'codex', thread, shortTermContext: 'Short-term facts.', memoryContext: 'Durable facts.', connectionContext: 'Connected source facts.', resumed: false });
-    const sectionTotal = Object.entries(size).filter(([key]) => key !== 'totalChars').reduce((sum, [, chars]) => sum + chars, 0);
+    const sectionTotal = Object.entries(size).filter(([key]) => !['totalChars', 'envelopeChars', 'sessionMode', 'sessionStartup'].includes(key)).reduce((sum, [, chars]) => sum + chars, 0);
 
     expect(sectionTotal).toBe(size.totalChars);
     expect(size.systemContractChars).toBeGreaterThan(0);
@@ -1303,6 +1304,7 @@ let turn = 0;
 const reply = (text) => {
   const content = [];
   if (text.includes('tool')) content.push({ type: 'tool_use', id: 'tool-' + turn, name: 'Read', input: { file_path: '/tmp/example.txt' } });
+  if (text.includes('edit file')) content.push({ type: 'tool_use', id: 'write-' + turn, name: 'Write', input: { file_path: '/tmp/turn-' + turn + '.ts', content: 'x' } });
   content.push({ type: 'text', text: 'reply ' + turn + ' from ' + process.pid });
   emit({ type: 'assistant', message: { content } });
   emit({ type: 'result', subtype: 'success', is_error: false, result: 'reply ' + turn + ' from ' + process.pid });
@@ -1377,6 +1379,25 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(events.some((event) => event.kind === 'file_read' || event.kind === 'tool')).toBe(true);
     expect(bodies.at(-1)).toContain(`reply 1 from ${pid}`);
     expect(sharedSessionHasContext(conversation.id, 'claude')).toBe(true);
+  }, 30_000);
+
+  it('runs the capture-gate follow-up as one more turn on the same process and slices each turn by offsets', async () => {
+    const conversation = repository.createConversation('Room');
+    const key = { conversationId: conversation.id, agent: 'claude' as const };
+    const earlier = await turn(conversation.id, 'message-1', 'edit file earlier');
+    const work = await turn(conversation.id, 'message-2', 'edit file this turn');
+    const workEvents = observedEventsFromSessionLog(key, 'claude', work.startOffset, work.endOffset);
+
+    expect(captureGateState(workEvents, work.output)).toBe('follow_up');
+    const followUp = await turn(conversation.id, 'message-2', CAPTURE_GATE_PROMPT);
+
+    expect(spawns()).toHaveLength(1);
+    expect([earlier.pid, work.pid, followUp.pid]).toEqual([spawns()[0].pid, spawns()[0].pid, spawns()[0].pid]);
+    expect(work.startOffset).toBe(earlier.endOffset);
+    expect(followUp.startOffset).toBe(work.endOffset);
+    expect(workEvents.map((event) => event.detail)).toEqual(['/tmp/turn-2.ts']);
+    expect(observedEventsFromSessionLog(key, 'claude', followUp.startOffset, followUp.endOffset)).toEqual([]);
+    expect(observedEventsFromSessionLog(key, 'claude', work.startOffset, followUp.endOffset).map((event) => event.detail)).toEqual(['/tmp/turn-2.ts']);
   }, 30_000);
 
   it('writes the turn permission at start and clears it at the end on a stable path', async () => {
