@@ -1582,6 +1582,50 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     }
   }, 60_000);
 
+  it('does not repeat a turn that already streamed events when the session dies mid-turn', async () => {
+    const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    const countFile = join(root, 'spawn-count');
+    const crashing = join(root, 'crash-mid-turn-claude.mjs');
+    writeFileSync(crashing, `
+import { readFileSync, writeFileSync, writeSync, existsSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+// The supervisor's grounding call also runs this binary but never in a provider session; only session-bound spawns count.
+if (!process.argv.includes('--session-id') && !process.argv.includes('--resume')) { console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '{}' })); process.exit(0); }
+// Counts turns the provider received: the session host respawns an idle provider after a crash, and that spawn runs nothing.
+const receivedTurn = () => writeFileSync(COUNT, String((existsSync(COUNT) ? Number(readFileSync(COUNT, 'utf8')) : 0) + 1));
+const emit = (event) => writeSync(1, JSON.stringify({ ...event, session_id: 'crashing-session' }) + '\\n');
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') { emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } }); return; }
+  receivedTurn();
+  emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'one', name: 'Write', input: { file_path: '/tmp/first.ts', content: 'x' } }] } });
+  emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'two', name: 'Write', input: { file_path: '/tmp/second.ts', content: 'x' } }] } });
+  process.exit(1);
+});
+`.replaceAll('COUNT', JSON.stringify(countFile)));
+    const dir = fakeAgentDirectory('exit 1', `exec "${process.execPath}" "${crashing}" "$@"`).directory;
+    process.env.CLAUDE_BIN = join(dir, 'claude');
+    try {
+      const conversation = repository.createConversation('Room');
+      repository.createSharedMessage('jeffrey', 'edit two files', 'completed', conversation.id, [], 'claude');
+      const reply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+      await replyInSharedRoom(repository, 'claude', reply.id);
+      const finished = repository.getSharedMessageById(reply.id)!;
+      expect(finished.status).toBe('failed');
+      expect(finished.error + finished.body).toContain('Agent session turn failed: provider_exited');
+      expect(Number(readFileSync(countFile, 'utf8'))).toBe(1);
+      const details = repository.listAgentStreamEvents(conversation.id).map((event) => event.detail).join('\n');
+      expect(details).toContain('first.ts');
+      expect(details).toContain('second.ts');
+      expect(details).not.toContain('continuing this turn on a per-run');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      if (saved === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      else process.env.WORKBENCH_PERSISTENT_SESSIONS = saved;
+    }
+  }, 60_000);
+
   it('injects no memory bodies in a session turn and records the memory as agent-driven', async () => {
     const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
     process.env.WORKBENCH_PERSISTENT_SESSIONS = '1';

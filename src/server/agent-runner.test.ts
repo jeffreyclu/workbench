@@ -1935,4 +1935,34 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(finished.status).toBe('completed');
     expect(Number(readFileSync(countFile, 'utf8'))).toBe(2);
   }, 30_000);
+
+  it('does not repeat a run whose session turn already streamed events before failing', async () => {
+    const countFile = join(root, 'spawn-count');
+    const crashing = join(root, 'crash-mid-turn-claude.mjs');
+    writeFileSync(crashing, `
+import { readFileSync, writeFileSync, writeSync, existsSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+// The turn-grounding classifier also runs this binary without --input-format; only interactive spawns count.
+if (!process.argv.includes('--input-format')) { console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '{}' })); process.exit(0); }
+// Counts turns the provider received: the session host respawns an idle provider after a crash, and that spawn runs nothing.
+const receivedTurn = () => writeFileSync(COUNT, String((existsSync(COUNT) ? Number(readFileSync(COUNT, 'utf8')) : 0) + 1));
+const emit = (event) => writeSync(1, JSON.stringify({ ...event, session_id: 'crashing-session' }) + '\\n');
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') { emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } }); return; }
+  receivedTurn();
+  emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'one', name: 'Write', input: { file_path: '/tmp/first.ts', content: 'x' } }] } });
+  emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'two', name: 'Write', input: { file_path: '/tmp/second.ts', content: 'x' } }] } });
+  process.exit(1);
+});
+`.replaceAll('COUNT', JSON.stringify(countFile)));
+    const fakeDirectory = sharedFakeAgentDirectory('exit 1', `exec "${process.execPath}" "${crashing}" "$@"`).directory;
+    temporaryDirectories.push(fakeDirectory);
+    process.env.CLAUDE_BIN = join(fakeDirectory, 'claude');
+    const conversation = repository.createConversation('Task');
+    const finished = await runIn(conversation.id, workspace('tree-crash'), 'Implement it.');
+    expect(finished.status).toBe('failed');
+    expect(finished.error).toContain('Agent session turn failed: provider_exited');
+    expect(Number(readFileSync(countFile, 'utf8'))).toBe(1);
+  }, 30_000);
 });

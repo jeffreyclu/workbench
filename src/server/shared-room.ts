@@ -1886,7 +1886,29 @@ async function withSessionTurnLock<T>(lockKey: string, signal: AbortSignal, onWa
   }
 }
 
+/** A session turn failure after the provider streamed its first event: the turn may already have acted. */
+export class SessionTurnStartedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'SessionTurnStartedError';
+  }
+}
+
+/** Whether a failed session turn may be re-run on a per-run process: only if it never streamed an event. */
+export function canFallBackToPerRun(error: unknown): boolean {
+  return !(error instanceof SessionTurnStartedError);
+}
+
 async function runSessionTurnExclusive(input: SharedSessionTurnInput): Promise<SharedSessionTurnResult> {
+  let started = false;
+  try {
+    return await runSessionTurnAttempt(input, () => { started = true; });
+  } catch (error) {
+    throw started && !input.signal.aborted ? new SessionTurnStartedError(error) : error;
+  }
+}
+
+async function runSessionTurnAttempt(input: SharedSessionTurnInput, onStarted: () => void): Promise<SharedSessionTurnResult> {
   const { repository, agent, conversationId } = input;
   const key = { conversationId, agent };
   if (input.fresh) {
@@ -1907,7 +1929,7 @@ async function runSessionTurnExclusive(input: SharedSessionTurnInput): Promise<S
   sessionTurnAttempts.set(input.messageId, attempt);
   const turnId = `${input.messageId}#${attempt}`;
   writeTurnCapability(guard, turnCapabilityFor(input.authorization), turnId);
-  const reader = createSessionTurnReader(agent, input.sink);
+  const reader = createSessionTurnReader(agent, { ...input.sink, onFirstEvent: () => { onStarted(); input.sink.onFirstEvent?.(); } });
   const cancel = () => { void interrupt(session).catch(() => { /* the host may already be gone */ }); };
   try {
     if (input.signal.aborted) throw new Error('Agent run canceled.');
@@ -2489,7 +2511,7 @@ export async function replyInSharedRoom(
         } catch (sessionError) {
           // A cancel is not a failure. Anything else (host cannot start, usage
           // limit, safeguard refusal) leaves the turn to the per-run path.
-          if (controller.signal.aborted) throw sessionError;
+          if (controller.signal.aborted || !canFallBackToPerRun(sessionError)) throw sessionError;
           const sessionReason = sessionError instanceof Error ? sessionError.message : String(sessionError);
           console.error('[shared-room] persistent session turn failed; falling back to a per-run process', sessionError);
           await endSharedSession(repository, target.conversationId, agent as SessionAgent).catch(() => { /* The host may already be gone. */ });

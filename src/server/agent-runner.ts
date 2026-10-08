@@ -2454,7 +2454,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         const turn = await taskSessionTurn(taskSessionMessage(), { fresh: run.agent === 'claude' && Boolean(storedClaudeSessionId && !resumeSessionId) });
         sessionTurnResult = { ...turn, agent: run.agent as CliAgent, fallbackFrom: null, fallbackReason: null };
       } catch (sessionError) {
-        if (controller.signal.aborted) throw sessionError;
+        if (controller.signal.aborted || !room.canFallBackToPerRun(sessionError)) throw sessionError;
         const sessionReason = sessionError instanceof Error ? sessionError.message : String(sessionError);
         console.error('[agent-runner] persistent session turn failed; falling back to a per-run process', sessionError);
         await room.endSharedSession(repository, run.conversationId, sessionAgent).catch(() => { /* The host may already be gone. */ });
