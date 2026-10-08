@@ -37,6 +37,7 @@
     { "name": "publish_artifact", "expected": "error", "arguments": { "path": "/definitely/missing/workbench-mcpjam-probe.md" } },
     { "name": "queue_linear_work_item", "expected": "error", "arguments": { "workItemId": "00000000-0000-4000-8000-000000000001" } },
     { "name": "recall_context", "expected": "success", "arguments": { "limit": 1, "query": "MCPJam release gate", "scope": "all" } },
+    { "name": "record_learning", "expected": "error", "arguments": { "actor": "codex", "body": "MCPJam probe", "file": "mcpjam-probe-unknown.md", "title": "MCPJam probe" } },
     { "name": "reorder_stack", "expected": "error", "arguments": { "orderedWorkItemIds": [], "stack": "attention" } },
     { "name": "resolve_discovery", "expected": "error", "arguments": { "action": "dismiss", "discoveryId": "00000000-0000-4000-8000-000000000001" } },
     { "name": "resolve_execution_plan", "expected": "error", "arguments": { "planId": "00000000-0000-4000-8000-000000000001", "resolution": "rejected" } },

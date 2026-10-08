@@ -12,7 +12,7 @@
         }
       }
     },
-    "instructions": "Workbench is the canonical shared state for Jeffrey, Codex, Claude, and Palmyra. Codex, Claude, and Palmyra hold identical, complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, local state, the artifact library, connected-source reads, and runtime promotion when Jeffrey explicitly authorizes that promotion in the current turn. External-provider mutations remain unavailable without a current-turn capability. Read current state before mutating it, and use the actor that represents the calling assistant so the shared log stays truthful. Durable context is available through recall_context. Use it when prior decisions, implementations, failures, constraints, preferences, or related work could improve the answer. Research, analysis, strategy, and bug-fix work may recall once near the start unless the task is clearly self-contained or the current provider session already supplies enough context. It is not a mandatory preflight: never repeat or broaden recall in the same turn, and never treat an assistant's earlier claim as corroboration for itself. Finite commands expected to run longer than 90 seconds must use start_managed_command and inspect_managed_command. Workbench writes their live output and terminal status to disk, reuses a stable keyed job after a provider retry, and can stop the complete process group. Inspect an existing keyed job before starting over. External websites, services, and networked CLIs require Jeffrey's explicit current instruction for the particular operation. This MCP surface cannot perform them. The only things outside this surface are provider credentials, unauthorized external-provider mutations, public deployment, direct database access, and general machine administration. You are a Workbench-local administrator. Execute requested local Workbench actions directly; do not ask Jeffrey for approval, force flags, or a handoff. Only concrete state-integrity conflicts — such as an active run, dependency cycle, or stale plan — can reject a local action.",
+    "instructions": "Workbench is the canonical shared state for Jeffrey, Codex, Claude, and Palmyra. Codex, Claude, and Palmyra hold identical, complete control over Workbench-local task actions, execution dispatch/cancel/retry, plan approval, local state, the artifact library, connected-source reads, and runtime promotion when Jeffrey explicitly authorizes that promotion in the current turn. External-provider mutations remain unavailable without a current-turn capability. Read current state before mutating it, and use the actor that represents the calling assistant so the shared log stays truthful. Durable context is available through recall_context. Use it when prior decisions, implementations, failures, constraints, preferences, or related work could improve the answer. Research, analysis, strategy, and bug-fix work may recall once near the start unless the task is clearly self-contained or the current provider session already supplies enough context. It is not a mandatory preflight: never repeat or broaden recall in the same turn, and never treat an assistant's earlier claim as corroboration for itself. Finite commands expected to run longer than 90 seconds and explicitly requested temporary dev services must use start_managed_command and inspect_managed_command. Workbench writes live output and status to disk, reuses a stable keyed job after a provider retry, and can stop the complete process group. For a service, inspect with waitMs 0 until ready, run its dependent work, then stop_managed_command before the turn ends. Inspect an existing keyed job before starting over. External websites, services, and networked CLIs require Jeffrey's explicit current instruction for the particular operation. This MCP surface cannot perform them. The only things outside this surface are provider credentials, unauthorized external-provider mutations, public deployment, direct database access, and general machine administration. You are a Workbench-local administrator. Execute requested local Workbench actions directly; do not ask Jeffrey for approval, force flags, or a handoff. Only concrete state-integrity conflicts — such as an active run, dependency cycle, or stale plan — can reject a local action.",
     "protocolVersion": "2025-11-25",
     "serverCapabilities": {
       "tools": {
@@ -559,7 +559,7 @@
     },
     {
       "name": "create_linear_issue",
-      "description": "Creates one real Linear issue through Workbench-owned credentials. It can assign the issue to the authenticated user, add it to the selected team's current cycle, and set its estimate. Exact-title retries in the same team return the existing issue instead of creating a duplicate. Use only when the supervisor-issued capability at the top of this turn explicitly authorizes creating that Linear issue.",
+      "description": "Creates one real Linear issue through Workbench-owned credentials. It can create a child beneath a parent issue, assign it to the authenticated user, add it to the selected team's current cycle, and set its estimate. Exact-title retries beneath the same parent return the existing issue instead of creating a duplicate. Use only when the supervisor-issued capability at the top of this turn explicitly authorizes creating that Linear issue.",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -581,6 +581,12 @@
             "maximum": 100,
             "minimum": 0,
             "type": "integer"
+          },
+          "parentIdentifier": {
+            "description": "Optional parent issue identifier. When supplied, the new issue is created as a Linear subtask.",
+            "maxLength": 100,
+            "pattern": "^[A-Za-z][A-Za-z0-9]*-\\d+$",
+            "type": "string"
           },
           "teamKey": {
             "description": "Linear team key or UUID, for example CON.",
@@ -1488,7 +1494,7 @@
           },
           "scope": {
             "default": "auto",
-            "description": "auto prefers project-wide history when a project can be inferred, then conversation/task context, then all memory. Choose all for genuinely cross-project recall.",
+            "description": "auto searches all memory and boosts (never filters to) the inferred project, reporting scopeApplied \"all, project-boosted\". Choose project, task, or conversation only to deliberately narrow the search.",
             "enum": [
               "all",
               "auto",
@@ -1528,6 +1534,62 @@
         },
         "required": [
           "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "record_learning",
+      "description": "Appends the next numbered entry to a memory topic file under docs/shared-memory/ or ~/Documents/Workbench/notes/knowledge/, refreshes that file's catalogue entry count, and returns the citation id [file.md#N]. Markdown stays the source of truth. If provenance is a work item id or a run id, the task activity log gets \"recorded learning [file.md#N]\". Cite existing entries as [file.md#N] instead of restating them. Bodies that look like they contain secrets are rejected; unknown files are refused with the valid list.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "actor": {
+            "description": "Which assistant is acting. This is attribution, not permission: all three agents hold identical, complete Workbench admin rights. Jeffrey and system are excluded only so the log never misreports who acted.",
+            "enum": [
+              "claude",
+              "codex",
+              "palmyra"
+            ],
+            "type": "string"
+          },
+          "body": {
+            "description": "Entry text without markdown headings.",
+            "maxLength": 20000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "file": {
+            "description": "Topic file name, for example workbench-operating-practices.md. Must be listed in a memory catalogue.",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "provenance": {
+            "description": "Run id, message id, work item id (UUID), or http(s) URL the lesson came from.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "tier": {
+            "description": "Optional guard: refuse if the file is not in this tier.",
+            "enum": [
+              "portable",
+              "workbench",
+              "writer"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "body",
+          "file",
+          "title"
         ],
         "type": "object"
       }
@@ -1799,7 +1861,7 @@
     },
     {
       "name": "start_managed_command",
-      "description": "Starts one finite local command outside the provider shell timeout. Stdout, stderr, PID, status, and exit code are written to disk. Pass the raw command without tail or tee because Workbench captures output directly. A stable key reopens the same job after an agent retry instead of rerunning it; set restart only for an intentional new attempt. Never use this for a dev server, watcher, or other command intended to run forever.",
+      "description": "Starts one local command outside the provider shell timeout. Stdout, stderr, PID, status, and exit code are written to disk. Pass the raw command without tail or tee because Workbench captures output directly. A stable key reopens the same job after an agent retry instead of rerunning it; set restart only for an intentional new attempt. Temporary dev servers and watchers are allowed only when the current request requires them: inspect with waitMs 0 until ready, run the dependent work, then call stop_managed_command before the turn ends.",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {

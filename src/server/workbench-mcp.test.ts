@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -124,6 +124,7 @@ describe('Workbench MCP', () => {
       'publish_artifact',
       'queue_linear_work_item',
       'recall_context',
+      'record_learning',
       'reorder_stack',
       'resolve_discovery',
       'resolve_execution_plan',
@@ -150,6 +151,29 @@ describe('Workbench MCP', () => {
     }
     const updateProperties = tools.tools.find((tool) => tool.name === 'update_work_item')?.inputSchema.properties ?? {};
     expect(Object.keys(updateProperties)).not.toEqual(expect.arrayContaining(['source', 'sourceIdentifier', 'providerUpdatedAt', 'queuePosition', 'archivedAt']));
+  });
+
+  it('records a learning, bumps the catalogue, and logs activity on the linked work item', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-learning-'));
+    mkdirSync(join(root, 'docs/shared-memory'), { recursive: true });
+    writeFileSync(join(root, 'docs/shared-memory/topic.md'), 'tier: workbench\n### <a id="1"></a>1. First\n\nOld.\n');
+    writeFileSync(join(root, 'docs/shared-memory.md'), '| `topic.md` | 1 | workbench | core | k | — |\n');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root);
+    try {
+      const created = await callData<{ item: { id: string } }>('create_work_item', { title: 'Learner' });
+      const recorded = await callData<{ citation: string }>('record_learning', {
+        actor: 'claude', file: 'topic.md', title: 'Second', body: 'Lesson.', provenance: created.item.id,
+      });
+      expect(recorded.citation).toBe('[topic.md#2]');
+      expect(readFileSync(join(root, 'docs/shared-memory.md'), 'utf8')).toContain('| `topic.md` | 2 |');
+      const detail = await callData<{ activity: Array<{ body: string }> }>('get_work_item', { workItemId: created.item.id });
+      expect(detail.activity.map((entry) => entry.body)).toContain('recorded learning [topic.md#2]');
+      const refused = await client.callTool({ name: 'record_learning', arguments: { actor: 'claude', file: 'nope.md', title: 't', body: 'b' } });
+      expect(refused.isError).toBe(true);
+    } finally {
+      cwd.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('runs a long command through MCP while persisting output and reusing its stable job', async () => {

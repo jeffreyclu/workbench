@@ -26,6 +26,7 @@ import { DEFAULT_DURABLE_MEMORY_SOURCES, isPersonalLongTermMemoryRequest, memory
 import { inspectManagedCommand, listManagedCommands, startManagedCommand, stopManagedCommand } from './managed-command.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
+import { RecordLearningError, recordLearning } from './record-learning.js';
 import { brokerExternalEvidence } from './external-evidence.js';
 import { EXTERNAL_SOURCE_EVIDENCE_VERSION } from './source-resolver.js';
 
@@ -491,6 +492,31 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
   }, async ({ workItemId, actor, kind, body }) => runTool('add_activity', () => {
     requireWorkItem(repository, workItemId);
     return { activity: repository.addActivity(workItemId, actor, kind, body) };
+  }));
+
+  server.registerTool('record_learning', {
+    title: 'Record a durable lesson',
+    description: 'Appends the next numbered entry to a memory topic file under docs/shared-memory/ or ~/Documents/Workbench/notes/knowledge/, refreshes that file\'s catalogue entry count, and returns the citation id [file.md#N]. Markdown stays the source of truth. If provenance is a work item id or a run id, the task activity log gets "recorded learning [file.md#N]". Cite existing entries as [file.md#N] instead of restating them. Bodies that look like they contain secrets are rejected; unknown files are refused with the valid list.',
+    inputSchema: {
+      actor: actorSchema,
+      file: z.string().trim().min(1).max(200).describe('Topic file name, for example workbench-operating-practices.md. Must be listed in a memory catalogue.'),
+      title: z.string().trim().min(1).max(300),
+      body: z.string().trim().min(1).max(20_000).describe('Entry text without markdown headings.'),
+      tier: z.enum(['portable', 'workbench', 'writer']).optional().describe('Optional guard: refuse if the file is not in this tier.'),
+      provenance: z.string().trim().max(2_000).optional().describe('Run id, message id, work item id (UUID), or http(s) URL the lesson came from.'),
+    },
+    annotations: mutationAnnotations(),
+  }, async ({ actor, file, title, body, tier, provenance }) => runTool('record_learning', () => {
+    let result;
+    try {
+      result = recordLearning({ file, title, body, tier, provenance });
+    } catch (error) {
+      if (error instanceof RecordLearningError) throw new ToolFailure(error.code, error.message);
+      throw error;
+    }
+    const linkedId = provenance ? (repository.get(provenance) ? provenance : repository.getRun(provenance)?.workItemId ?? null) : null;
+    const activity = linkedId && repository.get(linkedId) ? repository.addActivity(linkedId, actor, 'note', `recorded learning ${result.citation}`) : null;
+    return { ...result, activity };
   }));
 
   server.registerTool('list_discoveries', {
