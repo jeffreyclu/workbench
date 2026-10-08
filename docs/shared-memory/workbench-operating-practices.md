@@ -676,3 +676,20 @@ Not verified: whether Claude's stream-json stdin accepts an interrupt or model-s
 ### <a id="42"></a>42. Older memory replies store a merged count and no entry ids
 
 Replies stored before the memory split keep the old combined total in their memory count. Reply 8ca506d5 stored 13 but had only 8 retrieved items. Badge code must work out the count when the reply is read, by counting retrieved items. It must not trust the stored total, and it must not rewrite stored rows. These older replies also saved no entry ids. That means `[file.md#N]` citations cannot be rebuilt for their `doc` lesson items. Only new replies can show those citations. Citations come from any entry id that ends in `#N` (`memoryCitation` in src/server/memory-retrieval.ts), not from the item's type.
+
+### <a id="43"></a>43. Never stop :5180 to test MCP reconnect; agent runs depend on it
+
+The live Workbench runtime on localhost:5180 is more than Jeffrey's UI. It is also the MCP server for every running agent, including the agent doing the test. A ticket or plan that says "stop/restart 5180" to test MCP reconnect would take down Jeffrey's UI and kill the testing run partway through. Observed 2026-10-08 while planning the persistent-sessions spike: `lsof` on :5180 showed the node runtime (PID 96516), and that same run was using it for MCP.
+
+What to do: test reconnect against a throwaway MCP server inside the test script, on a spare port such as 5199. Workbench's real MCP handler keeps no per-connection state (src/server/workbench-mcp.ts ~line 992-995), so a stateless McpServer + StreamableHTTPServerTransport exercises the same reconnect path. A second full Workbench API with a copied database is heavier and no more faithful for this question. When a ticket asks to stop 5180, flag it as a conflict before acting and propose the stand-in.
+
+### <a id="44"></a>44. Per-turn capability file: what commit d2f7eac does and what is still unwired
+
+Follow-up to [workbench-operating-practices.md#41], from reviewing commit d2f7eac on 2026-10-08.
+
+- The shim (`scripts/agent-bin/external-action-command-guard.mjs`) reads `WORKBENCH_EXTERNAL_CAPABILITY_FILE` on every git/gh/curl call. It falls back to `WORKBENCH_EXTERNAL_CAPABILITY` only when the file variable is absent.
+- It refuses when it can't read the file. The capability file shares a temp directory with `refusals.jsonl`. The cleanup returned by `observeExternalActionRefusals` deletes that directory, so every later command is refused.
+- Don't flag inherited env variables as a leak risk. Child environments are built from an allowlist (`ALLOWED_AGENT_ENV_KEYS` in `src/server/agent-security.ts`), so a `WORKBENCH_EXTERNAL_CAPABILITY_FILE` in the server's own environment never reaches an agent.
+- Still to do, as of 2026-10-08: `writeTurnCapability` and `clearTurnCapability` have no callers. The room process (`src/server/shared-room.ts`) and runs still get one capability per process until the persistent-session host calls them at turn start and end.
+
+*Provenance: dfb49577-24ba-4659-a4a9-dae36abb7bad*
