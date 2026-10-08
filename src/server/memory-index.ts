@@ -590,11 +590,17 @@ type MemoryDocumentRow = {
   actor: string | null; title: string; body: string; created_at: string;
 };
 
+/**
+ * Gentle source priors applied after the hybrid lexical+semantic score. They
+ * order otherwise comparable evidence (a lesson above a chat line that merely
+ * shares a word); they must never let an unrelated lesson outrank a record
+ * that actually matches the query, which a 6x lesson prior once did.
+ */
 export const MEMORY_SOURCE_PRIORS = {
-  numbered_lesson: 6,
-  doc: 1.8,
-  artifact: 1.3,
-  activity: 1.45,
+  numbered_lesson: 1.6,
+  doc: 1.35,
+  artifact: 1.15,
+  activity: 1.3,
   work_item: 1.2,
   run_output: 1,
   run_instructions: 0.96,
@@ -700,6 +706,8 @@ function sourcePrior(document: Pick<MemoryDocumentRow, 'source' | 'source_id'>):
   return { label: document.source.replaceAll('_', ' '), multiplier: MEMORY_SOURCE_PRIORS[key] ?? 1 };
 }
 
+const RECENCY_EXEMPT_SOURCES = new Set(['doc', 'artifact']);
+
 function recencyMultiplier(createdAt: string): { ageDays: number | null; multiplier: number } {
   const timestamp = Date.parse(createdAt);
   if (!Number.isFinite(timestamp)) return { ageDays: null, multiplier: 0.6 };
@@ -716,8 +724,10 @@ function rankingPath(document: Pick<MemoryDocumentRow, 'source' | 'source_id' | 
   path: string[];
 } {
   const prior = sourcePrior(document);
-  const recency = recencyMultiplier(document.created_at);
-  const age = recency.ageDays === null ? 'unknown age' : `${Math.floor(recency.ageDays)}d old`;
+  // Durable knowledge does not go stale by age, and a doc row's created_at is
+  // its indexing time, so recency only applies to chat and run records.
+  const recency = RECENCY_EXEMPT_SOURCES.has(document.source) ? { ageDays: null, multiplier: 1 } : recencyMultiplier(document.created_at);
+  const age = RECENCY_EXEMPT_SOURCES.has(document.source) ? 'not applied (durable)' : recency.ageDays === null ? 'unknown age' : `${Math.floor(recency.ageDays)}d old`;
   return {
     prior: prior.multiplier,
     recency: recency.multiplier,

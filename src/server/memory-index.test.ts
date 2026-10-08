@@ -435,7 +435,7 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     expect(results.map(({ sourceId }) => sourceId)).not.toContain('current-question');
     expect(results[0]?.retrievalPath).toEqual([
       'Matched request',
-      'Source prior: numbered lesson ×6.00',
+      'Source prior: numbered lesson ×1.60',
       expect.stringMatching(/^Recency:/),
     ]);
 

@@ -346,6 +346,7 @@ describe('Workbench MCP', () => {
       expect(repository.getRetrievedMemoryDetail(reply.id)).toEqual({
         query: 'RAG badge retrieved result',
         items: recalled.results.map(({ source, title, body, createdAt, retrievalPath }) => ({ source, title, body, createdAt, retrievalPath })),
+        shortTermItems: [],
       });
     } finally {
       setEmbedder(null);
