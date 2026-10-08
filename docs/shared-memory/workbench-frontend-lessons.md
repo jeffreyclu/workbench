@@ -1,6 +1,6 @@
-## Workbench frontend lessons
+## <a id="62"></a>62. Workbench frontend lessons
 
-### Conversation freshness stays off the review toggle
+### <a id="1"></a>1. Conversation freshness stays off the review toggle
 
 *Correction from Jeffrey, 2026-09-23.* The conversation freshness notification must not sit behind
 the top-left Conversation/Changes toggle or consume its own layout row. Keep it as a small,
@@ -10,7 +10,7 @@ the control visually prominent. Before claiming promotion, inspect the served cl
 conversation wrapper and compact label; repeated promotions built the primary checkout while the fix
 remained only in its dedicated worktree, so live kept rendering the old top-left control.
 
-### Attention-stack badge numerals use optical centering
+### <a id="2"></a>2. Attention-stack badge numerals use optical centering
 
 *Correction from Jeffrey, 2026-09-18.* Attention-stack counts must be centered structurally in the
 DOM/CSS; canvas painting, pixel transforms, and fixed nudges are not acceptable. Give the task-stack
@@ -18,7 +18,7 @@ badge a genuinely square flex circle, remove inherited header letter-spacing fro
 trim the numeral's cap-to-baseline text box before flex centering it. Scope this structure to task
 stack headers so conversation headers and other count pills do not change.
 
-### Compact desktop navigation icons share one center axis
+### <a id="3"></a>3. Compact desktop navigation icons share one center axis
 
 *Correction from Jeffrey, 2026-08-30.* In the collapsed desktop sidebar, the W mark, every
 destination glyph, active-button glyph, and footer Search glyph must be centered on the same
@@ -27,7 +27,7 @@ item gap to zero and restore it only for the expanded state. Center the footer c
 rail content box instead of applying nested horizontal padding that offsets Search. When the desktop
 sidebar expands, Search grows from that centered square into a bar spanning the available footer width.
 
-### New Task Linear identifiers resolve beyond the current sync scope
+### <a id="4"></a>4. New Task Linear identifiers resolve beyond the current sync scope
 
 *Confirmed 2026-08-25.* The New Task modal searches through
 `POST /api/sources/search`, not the legacy Linear-only route. Its Linear
@@ -39,7 +39,7 @@ must also fetch and persist the issue on demand when it falls outside the
 configured scope. Do not use Linear's deprecated `issueSearch(query:)` field:
 the API returns an error even though it still appears in schema introspection.
 
-### Conversation telemetry badges size to their content
+### <a id="5"></a>5. Conversation telemetry badges size to their content
 
 *Decision from Jeffrey, 2026-08-25.* The blue model/telemetry badge in a
 conversation bubble header is content-sized, not a fixed or full-row control.
@@ -52,7 +52,7 @@ author/time on the first header line, with the blue badge alone on the second;
 the cancel X remains independently positioned in the top-right. Do not let a
 header-wide `margin-left: auto` position the RAG button.
 
-### Dual agent replies size independently
+### <a id="6"></a>6. Dual agent replies size independently
 
 *Decision from Jeffrey, 2026-08-25.* When Codex and Claude replies render
 side-by-side, each bubble starts at its intrinsic content height. Keep the
@@ -60,7 +60,7 @@ pair's flex columns top-aligned (`align-items: flex-start`) and do not apply
 `height: 100%` to either bubble; longer streamed output may grow its own
 column without adding empty space to the other.
 
-### Conversation message rows stay in document flow
+### <a id="7"></a>7. Conversation message rows stay in document flow
 
 *Confirmed 2026-08-29.* Do not absolutely position or height-virtualize the
 conversation transcript. Message height changes while Markdown streams and
@@ -69,7 +69,7 @@ cold refresh, cached estimates placed later user and System rows on top of a
 long Codex response. Keep the API history paginated, but render the loaded
 rows in normal document flow so reflow cannot create overlap.
 
-### Interactive details need an in-app tooltip, not a native `title`
+### <a id="8"></a>8. Interactive details need an in-app tooltip, not a native `title`
 
 *Confirmed 2026-08-25.* Browser-native `title` text is not a reliable details
 surface in Workbench and has no touch/click fallback. For compact controls that
@@ -77,7 +77,7 @@ must reveal recorded data, use an explicit focusable control and render an
 in-app `role="tooltip"` on hover, keyboard focus, and click. Cover all of
 those entry paths in the component regression test.
 
-### Promote UI/behavior fixes immediately instead of asking
+### <a id="9"></a>9. Promote UI/behavior fixes immediately instead of asking
 
 When a fix changes what Jeffrey sees in the Workbench UI (a rail section, a filter, a rendered
 state), promote it to the live runtime as part of finishing the task rather than leaving it staged
@@ -87,7 +87,7 @@ because he was still looking at the stale live build, and only then was it promo
 against source and tests is not the same as verifying it against what Jeffrey actually sees — for
 UI-visible changes, promotion is part of "done."
 
-### A healthy server and present assets do not prove a promoted client can mount
+### <a id="10"></a>10. A healthy server and present assets do not prove a promoted client can mount
 
 Confirmed 2026-09-03 after a promotion left the Workbench UI blank while
 `/api/health`, `/`, and every HTML-referenced asset still returned 200. The
@@ -105,7 +105,7 @@ promotion, first atomically return `.workbench-runtime/current` to the previous
 compatible release, then diagnose the candidate without leaving the user on the
 broken build.
 
-### Compact form controls (select/input in dense rows) get a real `<label>`, not `aria-label`
+### <a id="11"></a>11. Compact form controls (select/input in dense rows) get a real `<label>`, not `aria-label`
 
 Jeffrey's explicit constraint (2026-08-25, WCAG labels-or-instructions task): `aria-label` alone is
 insufficient even when a control is visually self-evident from a placeholder or a neighboring button —
@@ -117,7 +117,7 @@ element (not `aria-label`), it satisfies the constraint, and it keeps the existi
 The `.visually-hidden` utility class already existed in `styles.css` (used for the hidden file input in
 conversation view) — check for an existing hidden-label utility before adding a new one.
 
-### A "regression test added" claim must be checked for what it actually asserts
+### <a id="12"></a>12. A "regression test added" claim must be checked for what it actually asserts
 
 2026-08-24: Codex reported the Active/Archive conversation-view toggle fixed, verified, and
 promoted, backed by "a regression test for clicking Archive twice." Jeffrey reported it still
@@ -161,26 +161,26 @@ failure mode was navigation reopening the last Active conversation. Keep the vie
 primary-nav overlay, and test the stacking relationship itself; one successful click at the target's
 center does not prove the whole touch target remains clickable through an animated overlay state.
 
-### Task-linked conversation controls stay icon-only
+### <a id="13"></a>13. Task-linked conversation controls stay icon-only
 
 *Decision from Jeffrey, 2026-08-23.* The task controls in a linked conversation header and the composer attachment control must not render text labels. Keep unlink, complete, and attach as compact, distinct icon buttons with accessible names and hover titles; regression tests must prevent visible button text from returning.
 
-### Task execution chat is always available
+### <a id="14"></a>14. Task execution chat is always available
 
 *Decision from Jeffrey, 2026-08-28.* The existing execution-chat button in task detail must remain enabled and clickable throughout the task lifecycle, including while its run is queued or running and after it completes. Do not place it inside a disabled `fieldset`: descendant controls remain natively disabled even when CSS restores their pointer events. Keep the button's existing conversation-opening action unchanged.
 
-### Changes view header spacing belongs to conversation chrome, not diff content
+### <a id="15"></a>15. Changes view header spacing belongs to conversation chrome, not diff content
 
 *Correction from Jeffrey, 2026-08-27.* When reducing the Changes view's header panel height, do not compact the workspace or GitHub diff header. Preserve the diff's normal 18px top spacing and native heading margins. Target the surrounding conversation chrome only.
 
-### Sending from Changes returns to the conversation thread
+### <a id="16"></a>16. Sending from Changes returns to the conversation thread
 
 *Decision from Jeffrey, 2026-08-27.* Changes is a review surface. A valid
 composer send from Changes immediately selects Conversation so the submitted
 turn and ensuing streamed reply are visible. Apply this through the shared
 send mutation so the Send button and keyboard submission behave identically.
 
-### Changes composer stays bottom-anchored
+### <a id="17"></a>17. Changes composer stays bottom-anchored
 
 *Decision from Jeffrey, 2026-08-27.* In the desktop Changes review surface,
 the composer stays anchored at the bottom of the console. The changes content
@@ -189,7 +189,7 @@ size only to its intrinsic content and leave the composer immediately after
 the diff. Both review panes use the same single composer instance and state;
 CSS may reposition it but Changes must never render a separate composer.
 
-### Diff review is a wrapped reading surface
+### <a id="18"></a>18. Diff review is a wrapped reading surface
 
 *Decision from Jeffrey, 2026-08-27.* The IDE-style patch pane must wrap long
 lines inside its visible width. Do not offer horizontal scrolling for source
@@ -201,7 +201,7 @@ opaque trailing actions group, not unbordered glyphs or controls that share the
 filename's flex cell. The filename is the only truncating child; editor and
 copy actions keep visible fixed-width tap targets at every viewport.
 
-### Phone conversation chrome collapses into two icon controls
+### <a id="19"></a>19. Phone conversation chrome collapses into two icon controls
 
 *Decision from Jeffrey, 2026-08-26.* Phone conversations are reading-first:
 the full header and composer start collapsed, with one small icon-only control
@@ -216,7 +216,7 @@ rendering on the same `max-width: 820px` and coarse-pointer condition, and
 close their state when that condition stops matching. This prevents a stale or
 overriding desktop style from exposing mobile chrome.
 
-### Phone conversation actions are one compact floating row
+### <a id="20"></a>20. Phone conversation actions are one compact floating row
 
 *Decision from Jeffrey, 2026-08-27.* Keep every conversation action in a
 single unwrapped floating row above the conversation surface. It must not
@@ -299,7 +299,7 @@ expanded phone conversation tray scrolls horizontally on touch; it does not
 ellipsis. Keep the title bounded between the floating review switch and close
 control, with no wrapping or horizontal page scroll.
 
-### Phone composer controls must have an intentional complete layout
+### <a id="21"></a>21. Phone composer controls must have an intentional complete layout
 
 *Correction from Jeffrey, 2026-08-27.* The phone composer sheet must be the
 same full viewport width in Conversation and Changes. Changes may retain its
@@ -312,11 +312,11 @@ it whenever phone chrome is active and the composer sheet is closed.
 
 *Correction from Jeffrey, 2026-08-24.* A responsive control strip cannot assume its desktop child count. The shared-room composer has attachment, model, account, recipient, and send controls. At phone widths, give all five explicit grid areas; do not allow a fifth control to spill into an implicit offscreen grid column. Keep model, account, and recipient visible and separately selectable. Use short visible option labels and a single compact row when it fits. The visible per-message telemetry badge is only `agent · account profile · cost`; model, token counts, requested-vs-actual routing, and other provenance remain in its hover title rather than consuming layout space.
 
-### Phone tray classification controls use an in-app chooser
+### <a id="22"></a>22. Phone tray classification controls use an in-app chooser
 
 *Correction from Jeffrey, 2026-08-29.* Do not open a native `<select>` from the phone conversation tray for execution type or linked-task type. Mobile Safari renders that compact control as an oversized platform popup covering most of the conversation. Keep desktop and ordinary card selects native, but make tray disclosure controls open the shared portal-backed listbox: a bounded two-column / three-row menu with six 44px options, visible selected state, keyboard navigation, Escape and outside-click dismissal, and focus returned to the trigger after selection or cancellation.
 
-### Composer dropdown choices are conversation preferences, not message history
+### <a id="23"></a>23. Composer dropdown choices are conversation preferences, not message history
 
 *Confirmed 2026-08-25.* The model tier, account profile, and recipient controls
 in the shared-room composer must persist immediately on the conversation row.
@@ -326,7 +326,7 @@ then loses the choice. All three fields are saved together through
 `PATCH /api/shared/conversations/:id/preferences`; message history is only the
 legacy fallback for conversations created before these preferences existed.
 
-### A dispatch response must describe the turn after dispatch
+### <a id="24"></a>24. A dispatch response must describe the turn after dispatch
 
 *Confirmed 2026-08-25.* Creating a shared message can synchronously claim its
 queued human turn and start agent replies before the HTTP response returns. The
@@ -337,7 +337,7 @@ send incorrectly makes a follow-up `/interject` request against a completed
 human turn and surfaces `Queued message not found.` on every message.
 
 
-### Execution account status is a compact status surface, not a login-button strip
+### <a id="25"></a>25. Execution account status is a compact status surface, not a login-button strip
 
 *Decision from Jeffrey, 2026-08-24.* The Agent execution panel must show each provider as a readable connection row: provider, signed-in identity/state, and a compact `Switch` or `Sign in` action. Do not render the raw `Provider · signed in/login` button strip or leave profile creation permanently expanded. Provider status must use the CLI's actual output streams: Codex 0.149 reports `Logged in using ChatGPT` on stderr with a successful exit, so stdout-only probing falsely labels a live Codex session as logged out.
 
@@ -347,7 +347,7 @@ human turn and surfaces `Queued message not found.` on every message.
 
 *Follow-up decision from Jeffrey, 2026-08-24.* Green/primary icon actions are not hero CTAs. Send, execute, complete, and equivalent primary actions use the same square footprint as adjacent icon controls (34px on desktop; the established 44px mobile touch-target override where applicable). Implement them as `.icon-button.primary`, not as generic text-button variants with local size overrides.
 
-### Runtime promotion never reloads an already-open browser tab
+### <a id="26"></a>26. Runtime promotion never reloads an already-open browser tab
 
 `promote_runtime` rebuilds and swaps the backend process behind `:5180`, but nothing in the app
 pushes a reload to a tab that was already open before the swap — the tab keeps running whatever JS
@@ -368,7 +368,7 @@ Jeffrey reports a verified fix as missing after this landed, do not assume stale
 path should now self-resolve via the toast, so treat it as a genuinely new bug and re-diagnose the
 code first.
 
-### Task-card status badges: bottom-right corner, styled as prominently as the convo view
+### <a id="27"></a>27. Task-card status badges: bottom-right corner, styled as prominently as the convo view
 
 *Decision from Jeffrey, 2026-08-23.* On task cards (`.queue-item` in `task-queue.tsx`), the status
 badge (`finished`/`in_progress`/`follow_ups`/`needs_attention`/`promoting`/`waiting_promotion` via
@@ -388,14 +388,14 @@ bottom-right whitespace. The in-progress shimmer targets direct card children to
 stacking. Its selector must explicitly preserve the badge's `position: absolute` and raise it
 above the shimmer, or CSS cascade turns the badge back into a grid row.
 
-### Archive cards show dates, not a second completion-status badge
+### <a id="28"></a>28. Archive cards show dates, not a second completion-status badge
 
 *Decision from Jeffrey, 2026-08-24.* Archive is a filter on the task stack. An archived card may
 retain its archive date as muted inline metadata (`Archived <date>`), but it must not render a second
 `Completed` or `Incomplete` badge beside the task's agent-outcome badge (`Finished`, etc.). The task
 outcome is the single visible status badge; preserve dates without treating them as another status.
 
-### Virtualized-list row-height math must budget for the visual gap
+### <a id="29"></a>29. Virtualized-list row-height math must budget for the visual gap
 
 `App.tsx`'s conversation rail is a manually virtualized list: rows are absolutely positioned via
 `transform: translateY()` at an offset computed from `estimateSize()` (and, in the no-virtualizer
@@ -418,7 +418,7 @@ update it together with a card's minimum height, in every offset path. Cover
 this with a browser geometry check over long titles, because jsdom does not
 perform the layout that exposes this failure.
 
-### A queued thread message is live layout, too
+### <a id="30"></a>30. A queued thread message is live layout, too
 
 *Confirmed 2026-08-25.* The conversation thread switches from virtualized,
 absolute-positioned rows to normal document flow while live content can change
@@ -429,7 +429,7 @@ promotion system message before the runner marks it running; treating only
 bubble overlap on desktop. Any status that can be inserted or mutate its
 rendered content before a stable terminal measurement must use live flow.
 
-### A running agent reply needs a visible startup state
+### <a id="31"></a>31. A running agent reply needs a visible startup state
 
 *Confirmed 2026-08-25.* Server dispatch creates the agent reply as `running`
 with an empty body before the first progress chunk arrives. Do not conditionally
@@ -438,7 +438,7 @@ the agent bubble immediately, then replace it with live activity as soon as
 text arrives. This keeps the active stream visible without changing dispatch or
 interjection behavior.
 
-### Codex and Claude share one completion boundary
+### <a id="32"></a>32. Codex and Claude share one completion boundary
 
 *Confirmed 2026-08-25.* The live stream is an operational timeline, not the
 completed response. Codex app-server emits multiple visible agent-message
@@ -449,7 +449,7 @@ message. The shared-room prompt also requires a fresh compact final handoff:
 outcome, relevant changes or decisions, verification, and any blocker—never a
 verbatim progress recap.
 
-### The bounded conversation thread must not virtualize message rows
+### <a id="33"></a>33. The bounded conversation thread must not virtualize message rows
 
 *Confirmed 2026-08-25.* The conversation view intentionally renders only a
 small recent page of messages (five by default). Virtualizing that bounded set
@@ -461,7 +461,7 @@ status. The “Show earlier messages” page limit remains the performance bound
 do not reintroduce virtualized thread rows unless there is a measured need and
 the implementation has no height-cache transition.
 
-### Post-promotion task completion follows the promotion record, not its prose
+### <a id="34"></a>34. Post-promotion task completion follows the promotion record, not its prose
 
 *Confirmed 2026-08-25.* A promotion can combine later queued approvals into an
 already successful release. Those rows use different human-facing copy, so the
@@ -471,13 +471,13 @@ Keep the old success-sentence fallback only for legacy records that predate the
 promotion dispatch target. A failed task-completion request must leave the
 prompt visible with an inline retry path.
 
-## Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
+## <a id="35"></a>35. Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
 
-### Mobile-only controls must be hidden in the base stylesheet
+### <a id="36"></a>36. Mobile-only controls must be hidden in the base stylesheet
 
 *Confirmed 2026-08-27.* A mobile composer button rendered unconditionally in React and only received its fixed bottom-right positioning inside the coarse-pointer media query. On desktop, the query correctly did not match, but the unstyled button still appeared at the left edge. Every mobile-only control needs `display: none` in the base stylesheet and an explicit display rule inside its phone media query. Test both halves: desktop-hidden and phone-visible.
 
-### Restoring a control must not turn it into a large text CTA
+### <a id="37"></a>37. Restoring a control must not turn it into a large text CTA
 
 *Correction from Jeffrey, 2026-08-25.* When restoring a missing agent-run
 cancel control in the shared conversation, keep the original compact icon
@@ -489,13 +489,13 @@ action path, then preserve the established dense header footprint.
 The running-response cancel X belongs in the bubble's top-right corner. It is
 an absolute compact icon control, not a trailing header item or a separate row.
 
-### Conversation titles truncate to one line on phones
+### <a id="38"></a>38. Conversation titles truncate to one line on phones
 
 *Decision from Jeffrey, 2026-08-25.* In the mobile conversation header, keep the
 title to one visual line, ellipsizing overflow. Reserve room for the pinned close
 control so title text never renders underneath it.
 
-### Frequently used mobile conversation controls remain directly visible
+### <a id="39"></a>39. Frequently used mobile conversation controls remain directly visible
 
 *Decision from Jeffrey, 2026-08-25.* Do not move task-linked conversation
 controls into an overflow menu to reclaim mobile reading space. Jeffrey uses
@@ -526,7 +526,7 @@ visual regression matches a style that was verifiably already fixed, check `@med
 duplicate/stale rule targeting the same selector before concluding it's a stale-tab/cache issue —
 `grep -n '<selector>' styles.css` across the whole file, not just the base rule.
 
-### Closing a task on mobile must not skip the stack route in browser history
+### <a id="40"></a>40. Closing a task on mobile must not skip the stack route in browser history
 
 `openPrimaryStack` (`src/client/App.tsx`) is the handler behind the "Attention stack" / "Workbench"
 bottom-nav buttons. When a surface has a last-opened task (`readLastOpenedItem`), it used to jump
@@ -547,7 +547,7 @@ back/close navigation on mobile, even if the desktop split-pane view looks unaff
 calls in this codebase should mirror the visual navigation stack the user actually experiences, not
 just the shortest path to the destination URL.
 
-### A stale rendered route must never remount `SharedWorkspace`
+### <a id="41"></a>41. A stale rendered route must never remount `SharedWorkspace`
 
 Jeffrey reported the same Archive bug five separate times across four "verified and promoted" agent
 fixes (2026-08-24). Every one of those fixes addressed a real but secondary issue — z-index
@@ -591,14 +591,14 @@ Active and Archive at least 44px high. The permanent regression runs the complet
 Chromium mobile emulation and WebKit, proves the second tap sends `view=archive`, retains the archived
 URL and heading, and probes every part of the target while the desktop nav is expanded.
 
-### Expanded desktop navigation must not overlay workspace controls
+### <a id="42"></a>42. Expanded desktop navigation must not overlay workspace controls
 
 *Correction from Jeffrey, 2026-08-24.* Raising the Active/Archive switch above a fixed, expanding
 desktop sidebar preserved pointer access but made the switch visibly float across the navigation rail.
 That is not an acceptable interaction. When the desktop rail expands, give it its own grid column so
 the workspace starts after it; do not solve an overlap by raising the covered control's z-index.
 
-### "A bubble cannot exceed the width of the screen" means its rendered content, not its box
+### <a id="43"></a>43. "A bubble cannot exceed the width of the screen" means its rendered content, not its box
 
 Jeffrey has now had to repeat this constraint twice, and the first fix failed because it was read too
 narrowly. Capping `.shared-message` with `width: min(94%, 640px); min-width: 0; max-width: 100%` bounds
@@ -629,7 +629,7 @@ route ahead of the real app, in the script and never in shipped server code. Whe
 exempt descendants that sit inside their own horizontal scroll container — a code block scrolling
 within the bubble is the intended treatment, and flagging it hides the real offenders.
 
-### System task reordering is distinct from drag-and-drop
+### <a id="44"></a>44. System task reordering is distinct from drag-and-drop
 
 *Correction from Jeffrey, 2026-08-24.* When asking for task-reordering animation, Jeffrey means a
 server/system-driven update to the ranked stack — not motion applied to the dnd-kit interaction.
@@ -648,7 +648,7 @@ teardown frame. Browser coverage must hold the PUT response and assert the card
 is already in its final DOM position; checking resting `transition-property`
 alone cannot catch the stale frame.
 
-### Pagination must not disable reorder handles
+### <a id="45"></a>45. Pagination must not disable reorder handles
 
 *Correction from Jeffrey, 2026-08-24.* The attention stack is paginated in 50-task pages. A user may
 still move a task relative to another task in the loaded page: the queue move API accepts an adjacent
@@ -657,7 +657,7 @@ sortable IDs or turn drag handles into ranks. It makes drag-and-drop disappear p
 large stack. During an in-flight next-page fetch, temporarily disabling a drop is acceptable because
 the loaded boundary is changing; pagination itself is not.
 
-### Workbench drag-and-drop must name and preserve its filtered queue slice
+### <a id="46"></a>46. Workbench drag-and-drop must name and preserve its filtered queue slice
 
 *Confirmed 2026-08-24.* The Workbench task route renders a filtered slice of
 the single canonical queue. Enabling dnd-kit there without sending a
@@ -669,7 +669,7 @@ the Workbench version and the canonical Attention version so a pending global
 proposal cannot later overwrite the move. Cover this with a real pointer drag
 in a mixed queue plus a server assertion for the resulting full order.
 
-### Rendered stack sections, not raw statuses, are the DnD boundaries
+### <a id="47"></a>47. Rendered stack sections, not raw statuses, are the DnD boundaries
 
 *Confirmed 2026-08-24.* The Workbench route's visible Attention section contains
 multiple lifecycle statuses, including `ready`, `backlog`, `blocked`, and
@@ -682,7 +682,7 @@ raw statuses inside the same section remain reorderable. Pointer coverage must
 include a mixed-status Workbench Attention section and assert the resulting
 server order for the exact task ID; identical-status fixtures miss this bug.
 
-### Conversation delete was already a soft-delete with no way back in the UI
+### <a id="48"></a>48. Conversation delete was already a soft-delete with no way back in the UI
 
 *Confirmed 2026-08-24.* `shared_conversations.deleted_at` already exists and
 `DELETE /api/shared/conversations/:id` already sets it — deletion was never
@@ -697,7 +697,7 @@ free. If a future task wants a persistent/longer-lived undo (survives reload,
 long delay), a real trash view reading `deleted_at IS NOT NULL` rows is the
 next step — the soft-delete data already supports it, only the UI is missing.
 
-### Workbench motion: shared tokens exist, and virtualized rows must not carry unconditional enter animations
+### <a id="49"></a>49. Workbench motion: shared tokens exist, and virtualized rows must not carry unconditional enter animations
 
 *Confirmed 2026-08-24.* Motion timing already lives as tokens in
 `src/client/styles.css` (`--motion-fast/standard/emphasized/ease`) plus a global
@@ -719,7 +719,7 @@ in `features/navigation/app.tsx`), never on mount of a virtualized row. Exit
 animations in a virtualized list additionally need the row held in the row model
 until the animation finishes, or `measureElement` fights the collapse.
 
-### Rotating a text-glyph caret wobbles; rotating a border-drawn box does not
+### <a id="50"></a>50. Rotating a text-glyph caret wobbles; rotating a border-drawn box does not
 
 *Confirmed 2026-08-24.* `.task-collapsible > summary::before` used `content: '›'`
 rotated via `transform: rotate()` for the open/close chevron. A glyph's bounding
@@ -731,7 +731,7 @@ same `transform: rotate()` transition now pivots cleanly. Any future rotating-
 icon-via-text-glyph should use this border-box (or an SVG/icon component)
 pattern instead.
 
-### Live agent progress is operational context, not the final reply
+### <a id="51"></a>51. Live agent progress is operational context, not the final reply
 
 *Decision from Jeffrey, 2026-08-25.* In-progress agent messages must use a
 compact activity-feed treatment, visibly distinct from a completed response.
@@ -743,7 +743,7 @@ agent completes. When a streamed text block follows a tool marker, insert a
 block boundary in `agent-runner.ts` so words cannot concatenate (for example,
 `commandTypecheck`).
 
-### A `streaming` class on a CSS grid container breaks a trailing `::after` caret
+### <a id="52"></a>52. A `streaming` class on a CSS grid container breaks a trailing `::after` caret
 
 *Confirmed 2026-08-24.* `agent-message.tsx`'s structured (multi-section)
 response path put the `streaming` class — and therefore the blinking
@@ -756,7 +756,7 @@ instead of the outer grid wrapper. General rule: a trailing inline `::after`
 cursor must live on the innermost flow container, never on an ancestor with
 `display: grid` (or `flex`, which has the same issue).
 
-### Typewriter streaming must reveal complete tokens, not arbitrary character slices
+### <a id="53"></a>53. Typewriter streaming must reveal complete tokens, not arbitrary character slices
 
 *Confirmed 2026-08-24.* The typewriter renderer sliced the incoming response at
 an arbitrary character position. That visibly clipped words and exposed partial
@@ -766,7 +766,7 @@ last completed whitespace-delimited token; render the entire body immediately
 when the run finishes. This preserves the typewriter motion without broken
 prose or transient malformed Markdown.
 
-### Every live-activity-to-speech-bubble conversion starts a typewriter reveal
+### <a id="54"></a>54. Every live-activity-to-speech-bubble conversion starts a typewriter reveal
 
 *Decision from Jeffrey, 2026-08-31.* When an agent run finishes, replacing its
 live activity feed with the completed speech bubble must never display the
@@ -777,7 +777,7 @@ This applies to every completed agent reply, not only synthesis/system messages;
 keep live-stream behavior and already-completed messages loaded from history
 unchanged.
 
-### Growing stream paragraphs keep a stable React key
+### <a id="55"></a>55. Growing stream paragraphs keep a stable React key
 
 *Confirmed 2026-08-29.* Live activity rows were keyed with both their stream
 position and their full paragraph text. Every network chunk changed that text,
@@ -787,7 +787,7 @@ key each row by its absolute stream position so text growth updates the existing
 typewriter instance and preserves its revealed prefix. A regression must assert
 both DOM-node identity and visible-prefix continuity across a growing chunk.
 
-### The 2026-08-24 typewriter fix above was not the whole story: `agent-runner.ts` was also overwriting, not accumulating, the final message body
+### <a id="56"></a>56. The 2026-08-24 typewriter fix above was not the whole story: `agent-runner.ts` was also overwriting, not accumulating, the final message body
 
 *Confirmed 2026-08-24.* After the typewriter word-boundary fix, Jeffrey still saw
 cut-off streamed messages. Root cause was server-side, in
@@ -807,7 +807,7 @@ setter — grep for `= event.final` (or similar single-assignment patterns) as a
 smell whenever a "why did streaming cut off" bug resurfaces after a client-side
 rendering fix already shipped.
 
-### Summarizing a stream must invalidate its virtualized conversation-row measurement
+### <a id="57"></a>57. Summarizing a stream must invalidate its virtualized conversation-row measurement
 
 *Confirmed 2026-08-24.* A live agent message can turn into a multi-section
 completed report in a single poll. The thread virtualizer keeps the stable
@@ -818,7 +818,7 @@ ID, status, or body changes; do not rely solely on the row's ResizeObserver
 for this content-shape transition. The regression must cover running text
 being replaced by a completed structured report without a page reload.
 
-### Do not call a virtualizer-wide `measure()` on every streaming animation frame
+### <a id="58"></a>58. Do not call a virtualizer-wide `measure()` on every streaming animation frame
 
 *Confirmed 2026-08-25.* An attempted mobile streaming-overlap fix called
 TanStack Virtual's `measure()` in `requestAnimationFrame` while an agent
@@ -829,7 +829,7 @@ in normal document flow while its typewriter is active (and resume
 virtualization after completion), or use a targeted row-size update. Never use
 cache-clearing virtualizer measurement as a per-frame animation primitive.
 
-### Dialogs had no entrance animation; toasts had entrance but no exit animation
+### <a id="59"></a>59. Dialogs had no entrance animation; toasts had entrance but no exit animation
 
 *Confirmed 2026-08-24.* `.dialog-backdrop`/`.dialog` rendered instantly with no
 transition — added `dialog-backdrop-in`/`dialog-in` keyframes (fade, plus a
@@ -851,7 +851,7 @@ Every test that asserts a toast is gone after a dismiss now needs an extra
 `vi.advanceTimersByTime(200)` past the moment dismissal is triggered, or the
 assertion runs mid-exit-animation and sees a stale "still present" DOM node.
 
-### A finished Codex reply fragmented into a "Detail" bubble per line, each starting with "Decision:"
+### <a id="60"></a>60. A finished Codex reply fragmented into a "Detail" bubble per line, each starting with "Decision:"
 
 *Confirmed 2026-08-25, root cause corrected same day.* Two separate bugs
 compounded into this symptom — fixing only the frontend split made it worse,
@@ -896,7 +896,7 @@ still persisted every `Decision:` preamble. Filter standalone decision
 preambles while accumulating app-server delta text as well. Both transports
 must keep the preamble in the debugger audit only, never in the reply body.
 
-### Confidence assessment loading must be visibly labeled
+### <a id="61"></a>61. Confidence assessment loading must be visibly labeled
 
 *Confirmed 2026-08-25.* Diff-confidence scoring is an asynchronous model call.
 Before its numeric red-to-green score arrives, never render an unlabeled dark

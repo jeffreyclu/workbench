@@ -1,6 +1,6 @@
-## Integration constraints
+## <a id="7"></a>7. Integration constraints
 
-### One integration mechanism no tunnels
+### <a id="1"></a>1. One integration mechanism no tunnels
 
 *Any Workbench integration must use one mechanism that works in both Claude and Codex and must not depend on a public tunnel IT can block*
 
@@ -49,7 +49,7 @@ results are normalized by the connection broker, and no external mutation capabi
 GitHub Actions job links are resolved by the supervisor into a shared failed-step and log snapshot;
 agents must not fetch the same job independently.
 
-### No personal phone on corporate tailnet
+### <a id="2"></a>2. No personal phone on corporate tailnet
 
 *Jeffrey will not enroll his personal phone in the Writer corporate Tailscale tailnet, so mobile access to local dev servers must use a transport that requires nothing installed on the phone.*
 
@@ -71,7 +71,7 @@ Because that shape is publicly reachable, propose adding an authentication gate 
 service before, or in the same change as, exposing it — Workbench in particular has no
 inbound auth of any kind.
 
-### No new slack apps
+### <a id="3"></a>3. No new slack apps
 
 *Jeffrey cannot create Slack apps in Writer's workspace, so any Slack integration must avoid client IDs, bot tokens, and incoming webhooks.*
 
@@ -93,7 +93,7 @@ The remaining option that needs no app is a Slack Workflow Builder webhook trigg
 Slack UI. Prefer that shape, or an inbound-from-Slack design that piggybacks on tooling
 Writer has already installed.
 
-### Writer PR preview login is basic auth, not SSO
+### <a id="4"></a>4. Writer PR preview login is basic auth, not SSO
 
 *Writer's `writer-app-pr-<N>.dev-deer.qordobadev.com` PR previews sit behind an HTTP basic-auth
 gate in front of the app's own login page — SSO and "sign in with Google" on the preview's login
@@ -119,7 +119,7 @@ Source: Slack threads in `#CSJ8VQSVC` (2026-08-06), `#C080MJCFC1E` (2025-03-20),
 `#C05G3DFK58X` (2026-08-03); Confluence "Preview Environments [Deprecated]" and
 "skynet-preview to PR-preview: migration and setup".
 
-### Check for a local `gh` CLI before claiming no GitHub access
+### <a id="5"></a>5. Check for a local `gh` CLI before claiming no GitHub access
 
 *An agent's session may lack a GitHub MCP tool while still having a fully authenticated `gh` CLI
 available in its Bash shell — check `which gh && gh auth status` before telling Jeffrey GitHub
@@ -139,7 +139,7 @@ language CLIs, etc.) directly rather than inferring its absence from an unrelate
 state. MCP-server authorization and locally-installed authenticated CLIs are independent — one being
 unauthorized says nothing about the other.
 
-### Provider account profiles are isolated and provider-neutral
+### <a id="6"></a>6. Provider account profiles are isolated and provider-neutral
 
 Jeffrey has separate Claude and GPT accounts and requires an account-switching mechanism that works
 for both providers while preserving shared Workbench context and identical run budgets. The runner

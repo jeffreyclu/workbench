@@ -1,13 +1,13 @@
-## Verification and debugging method
+## <a id="20"></a>20. Verification and debugging method
 
-### Status questions never resume older work **(always)**
+### <a id="1"></a>1. Status questions never resume older work **(always)**
 
 A message asking only for status authorizes read-only inspection and an answer. It never carries forward
 permission from an earlier turn to start a service, rerun a command, edit files, or continue a pending
 plan. Keep the user-selected task category unchanged, but start a fresh provider session for a status-only
 turn and state the no-action boundary explicitly so cached provider intent cannot replay.
 
-### Start every agent-debugging investigation with the decision graph **(always)**
+### <a id="2"></a>2. Start every agent-debugging investigation with the decision graph **(always)**
 
 When an agent behaves incorrectly, inspect that turn's decision graph before diagnosing the cause or
 changing code. The graph is the primary evidence for what Workbench selected, what context and memory
@@ -15,7 +15,7 @@ it supplied, which rules fired, and why the agent produced that result. Correlat
 message, activity log, and runtime evidence as needed, but never skip it or substitute a source-only
 hypothesis. This applies to Claude, Codex, Palmyra, and every future provider.
 
-### Every agent has full access to every local repository **(always)**
+### <a id="3"></a>3. Every agent has full access to every local repository **(always)**
 
 The resolved workspace is only an agent's starting directory and a concurrency
 hint. It is never an authorization, filesystem, or Git boundary. Claude, Codex,
@@ -31,7 +31,7 @@ unlinked `writer-monorepo` cleanup conversation to refuse the requested mutation
 entirely. Keep external-service authorization and focused Writer-test rules separate:
 they govern external side effects and test cost, not local repository access.
 
-### Verify in the right repo before asserting state
+### <a id="4"></a>4. Verify in the right repo before asserting state
 
 *This Workbench setup spans multiple repos (workbench, writer-monorepo, fe.wds, fe.web-app) with a shell cwd that can silently reset between tool calls — always confirm which repo a check ran against before asserting git state.*
 
@@ -55,7 +55,7 @@ the same command) rather than trusting an implicit cwd carried over from an earl
 check comes back negative or surprising, treat that as a signal to re-verify the working directory
 before reporting it as fact, not as confirmation of the negative result.
 
-### Verify rationale dont infer it
+### <a id="5"></a>5. Verify rationale dont infer it
 
 *Never infer or assume the \"why\" behind a requested change (e.g. a design update) — verify it against tracked sources before writing it into a spec.*
 
@@ -90,7 +90,7 @@ writing "X is why we're doing Y," there must be an explicit link between X and Y
 source (a comment, a reference, an explicit statement) — not just topical adjacency discovered
 independently. If only adjacency exists, name it as adjacent/unconfirmed, not as the rationale.
 
-### No recovery for untracked file edits
+### <a id="6"></a>6. No recovery for untracked file edits
 
 *Before editing or \"reverting\" an untracked file, check git status first — untracked files have no history to revert to.*
 
@@ -118,7 +118,7 @@ overwriting it destroys the only copy. Say that explicitly rather than
 fabricating a restoration.
 
 
-### Edit as a single tracked worker, and verify from observed output **(always)**
+### <a id="7"></a>7. Edit as a single tracked worker, and verify from observed output **(always)**
 
 On 2026-08-23 Jeffrey said Claude is consistently worse than Codex in his repositories **specifically
 when making edits**, and that Codex is better at surgically adding what he asked for. He asked Claude
@@ -142,7 +142,7 @@ it was not run.
 His standard for a good edit is surgical: change what was asked, interpret the intent behind it, and
 do not widen the change or ship a parallel implementation of something that already exists.
 
-### Close the symptom Jeffrey reported, explicitly
+### <a id="8"></a>8. Close the symptom Jeffrey reported, explicitly
 
 Debugging a Pluto workflow run, Jeffrey reported one symptom: the workflow "didn't abide by its own
 rules — a bunch of steps needed to be completed before the writing step, and that was bypassed every
@@ -161,7 +161,7 @@ verbatim.
   as complete. His observation was correct at the level that mattered even though the narrower
   technical framing said otherwise.
 
-### Confirm root cause against real run data
+### <a id="9"></a>9. Confirm root cause against real run data
 
 Debugging a Pluto defect ("the document starts to get written before the researchers finish reading"),
 a mechanism derived purely from reading the scheduler and compiler source was proposed. Jeffrey pushed
@@ -182,7 +182,7 @@ continue investigating until we find the reason. this is paramount."
 - Treat "this is paramount" as authorization to spend far more investigation effort than the task size
   would normally justify. Do not wrap up early with a partial answer.
 
-### Fix every identified cause, not just the one you ranked highest
+### <a id="10"></a>10. Fix every identified cause, not just the one you ranked highest
 
 Debugging nondeterministic RAG source coverage in Pluto, three independent defects on three pipeline
 stages were diagnosed and presented as options A, B and C in a table with effort estimates. He said
@@ -197,7 +197,7 @@ should have fixed a and c too."**
 - If one cause genuinely should not be fixed — too speculative, too costly, out of scope — say so
   explicitly with the reason, rather than quietly shipping a subset and reporting it as the fix.
 
-### Land approved fixes on a new branch
+### <a id="11"></a>11. Land approved fixes on a new branch
 
 When Jeffrey approves a diagnosis and tells you to implement it, he consistently says "fix it on a new
 branch." Treat it as the standing default rather than something to ask about: after he greenlights a
@@ -210,7 +210,7 @@ fix; and stage the specific files the fix touched (`git add <paths>`) rather tha
 because other agents and background processes write to the same working tree and a broad add silently
 sweeps their in-flight edits into your commit.
 
-### Prefer proven, named methods over bespoke heuristics **(always)**
+### <a id="12"></a>12. Prefer proven, named methods over bespoke heuristics **(always)**
 
 When a custom "source-coverage floor" was proposed to fix a RAG retrieval defect in Pluto, Jeffrey
 replied: "this seems like an esoteric fix. what is a proven method to actually solve this problem?" He
@@ -230,7 +230,7 @@ prescribes.
   know the standard approach. Answer with the real technique and its trade-offs rather than defending
   the code already written.
 
-### Trace a guardrail's origin before changing it
+### <a id="13"></a>13. Trace a guardrail's origin before changing it
 
 Reviewing a diff that raised `MAX_MAX_RESULTS` from 20 to 40 to fix a failing RAG test, Jeffrey's
 reaction was not "does this fix the test" but "the old value must have been set for a reason — why was
@@ -242,7 +242,7 @@ against before proposing or accepting a new value. Present the change as "the or
 purpose was X; that purpose is still preserved because Y" rather than "raising the number makes the
 test pass."
 
-### Check a diff against the original scope before reporting it done
+### <a id="14"></a>14. Check a diff against the original scope before reporting it done
 
 On the Pluto RAG-guardrail task, a brief specified three layered pieces: a hard token-budget cap, a
 three-tier eval system (deterministic component contracts, frozen-evidence generation, a live-agent
@@ -270,7 +270,7 @@ leakage. His verdict: "you fucked up."
   to hit next time: ask "does this diff satisfy every clause of the original brief?" before reporting
   done, not after being asked.
 
-### Reset incomplete work before rebuilding it
+### <a id="15"></a>15. Reset incomplete work before rebuilding it
 
 On 2026-08-24, after the Pluto RAG guardrail/eval diff was shown to be incomplete against its stated
 scope, Jeffrey directed: "let's clear the current dif and start fresh." When that instruction is
@@ -279,7 +279,7 @@ set and verify the branch is clean. Do not salvage partial scaffolding or resume
 it. The clean branch is the starting point for a new, fully scoped design; it does not authorize live
 bench runs or provider spending.
 
-### Cite real evidence for every claim, not just the rationale
+### <a id="16"></a>16. Cite real evidence for every claim, not just the rationale
 
 On a Wells Fargo SteerCo connector-feasibility task, an initial answer gave a vendor-by-vendor
 feasibility verdict (Aprimo, Red Oak, Bloomberg, etc.) grounded in one real code citation but with
@@ -296,7 +296,7 @@ checking for. A confident-sounding table with no citations reads as fabrication 
 underlying claims happen to be true; state plainly which claims are sourced and which are still
 inferred/unverified rather than presenting both the same way.
 
-### Node toolchain: nvm, not mise
+### <a id="17"></a>17. Node toolchain: nvm, not mise
 
 Jeffrey manages Node with **nvm** plus the official nodejs.org `.pkg` installer. Offered mise — which
 would have matched `writer-monorepo/mise.toml` exactly — he declined it and asked specifically for nvm.
@@ -308,7 +308,7 @@ versions are **not** applied automatically — matching the pinned node version 
 python 3.12, and uv has to happen by hand. Flag that gap rather than assuming his environment matches
 the repo's declaration.
 
-### Never conclude "no AI signal is available" — Workbench can run a model in-process
+### <a id="18"></a>18. Never conclude "no AI signal is available" — Workbench can run a model in-process
 
 Told that a diff had no AI confidence score to display, Jeffrey pushed back flatly: *"what do you mean
 there's no AI confidence score? i don't believe that."* He was right, and the reasoning error is worth
@@ -329,7 +329,7 @@ for an existing mechanism first — in Workbench specifically, assume a model ca
 proven otherwise. And when a heuristic is offered as a stand-in for a model judgment, say so explicitly
 instead of letting it be read as the real thing.
 
-## Remove the divergence instead of patching one side of it
+## <a id="19"></a>19. Remove the divergence instead of patching one side of it
 
 On 2026-08-31 (CON-194 connectors V2), a bug where the "Connected" section only reflected the first
 page of profiles was first fixed by making the unsearched list eagerly page itself out, so that it

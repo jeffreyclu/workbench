@@ -1,6 +1,6 @@
-## Engineering standards
+## <a id="22"></a>22. Engineering standards
 
-### Loading states must be skeletons, not spinners or late-arriving content
+### <a id="1"></a>1. Loading states must be skeletons, not spinners or late-arriving content
 
 *Jeffrey's standing preference for how Workbench renders async loading, given after spinner/text loading states caused visible layout thrash.*
 
@@ -30,7 +30,7 @@ skeleton must inherit or deliberately reproduce the loaded UI's container width,
 height, surfaces, borders, radius, spacing, and narrow-viewport behavior. Do not use a generic
 shimmer row inside a component whose loaded CSS is card-, panel-, or composer-shaped.
 
-### Frontend implementation standards
+### <a id="2"></a>2. Frontend implementation standards
 
 *Jeffrey's standing rules for how frontend code should be written — layer separation, preferred stack, plan-before-code, and full acceptance-criteria test coverage.*
 
@@ -87,7 +87,7 @@ a reader can find the view, the logic, and the data access without searching.
 When acceptance criteria are provided, they must be 100% represented in tests. Jeffrey stated this
 as an absolute, so report the criterion-to-test mapping rather than asserting coverage.
 
-### Code review method
+### <a id="3"></a>3. Code review method
 
 *How Jeffrey wants code reviews done and who does them — the frontend-reviewer agent is the sole authoritative reviewer and only entry point; read the tasking first, review through fixed quality lenses, no test/app execution, label every point blocking or non-blocking.*
 
@@ -269,7 +269,7 @@ surrounding code for a GitHub PR is to fetch the diff and the specific files the
 read-only through `gh` (`gh pr diff`, and the contents API pinned to the merge or head commit) and
 stage them on disk for it to read.
 
-### Design access gate
+### <a id="4"></a>4. Design access gate
 
 *Design-driven tasks are blocked at intake until the assigned engineer can open the Figma designs directly — never implement from a link, description, or screenshot.*
 
@@ -297,7 +297,7 @@ unavailable and only a screenshot exists, say plainly that the layout was approx
 screenshot and is unverified against Figma, instead of asserting parity. Asserting an unverified
 match costs Jeffrey a full review round trip every time.
 
-### Never let a server test spawn the real codex/claude CLI
+### <a id="5"></a>5. Never let a server test spawn the real codex/claude CLI
 
 `src/server/agent-runner.ts` really `spawn()`s the `codex`/`claude` binaries on `PATH` — there is no
 test-mode flag that swaps in a stub. `agent-runner.test.ts` handles this correctly with a
@@ -317,7 +317,7 @@ that writes to a spawned child's `stdin` needs a `child.stdin.on('error', () => 
 there is an expected race when the child is killed just before the write lands, not a real failure,
 and leaving it unhandled fails the whole process even though vitest still reports every test green.
 
-### When a task is blocked on an exhausted third-party account balance, stop probing and cut the code-level cost driver instead
+### <a id="6"></a>6. When a task is blocked on an exhausted third-party account balance, stop probing and cut the code-level cost driver instead
 
 On 2026-08-24, a Pluto-Alpha stability-check task (repeat a live-agent query 3–5 times) got parked
 mid-run when the app's Anthropic account hit "credit balance too low." Jeffrey supplied usage
@@ -346,11 +346,11 @@ not from blocking a legitimate test run after an arbitrary number of calls.
 Do not cite account credit as the remaining blocker for the q21 stability task; verify the actual
 Pluto runtime and the persisted trace/citation evidence instead.
 
-### Claude autocompaction accepts `auto` or 100k–1M tokens
+### <a id="7"></a>7. Claude autocompaction accepts `auto` or 100k–1M tokens
 
 On 2026-08-24, setting Workbench's Claude launcher to `--autocompact 50000` made every run fail immediately: the installed Claude CLI only accepts `auto` or a numeric value from 100k through 1M. Keep the runner at `100k` (the minimum numeric setting), with a regression assertion in `agent-runner.test.ts`; never lower it to a bare `50000`.
 
-### (always) Never fire billed live-agent eval runs on your own initiative
+### <a id="8"></a>8. (always) Never fire billed live-agent eval runs on your own initiative
 
 Immediately after the layered-eval work above landed, an agent started four back-to-back live
 `--tier canary` q21 repeats without asking. Jeffrey's reaction: **"ok stop just RUNNING EVAL BENCH
@@ -375,7 +375,7 @@ the spend you are about to incur, it does not. On 2026-08-24, Jeffrey stopped an
 repeat attempt after three completed billed calls; no further billed q21 call is authorized until he
 explicitly approves a newly stated bounded run.
 
-### Pluto RAG runtime spend is bounded before dispatch, not merely counted afterward
+### <a id="9"></a>9. Pluto RAG runtime spend is bounded before dispatch, not merely counted afterward
 
 The 2026-08-24 RAG runaway fix established a separate production invariant from the eval-tier rule:
 every `/api/agent-v2` run owns one shared token ledger across the Research Agent, producer rounds, and
@@ -386,7 +386,7 @@ failed/cancelled calls release it. Optional reranking skips to deterministic RRF
 reservation is refused. Never regress this to a spent-only, post-response counter: that can observe an
 overspend but cannot prevent it, and parallel work can pass the same stale headroom check.
 
-### Claude cache traffic is a first-class Insight metric
+### <a id="10"></a>10. Claude cache traffic is a first-class Insight metric
 
 On 2026-08-24, Jeffrey supplied a Claude `/usage` screenshot for recent work: an Opus session reported
 **1.7K fresh input, 57.5M cache-read input, 2.0M cache-write input, and 184.4K output** ($53.08 of
@@ -409,7 +409,7 @@ not put them in Insights token totals or label their `input_tokens` as fresh inp
 unknown. Surface the number excluded so a missing split is visible rather than silently guessed. An
 explicit reported zero is complete telemetry and remains eligible.
 
-### Claude stream usage must be deduplicated by provider request
+### <a id="11"></a>11. Claude stream usage must be deduplicated by provider request
 
 Claude's stream can repeat an `assistant` usage payload once per content block (for example thinking,
 text, and tool use) for one actual provider request. Those replicas share `requestId` and message ID.
@@ -419,7 +419,7 @@ manufactured 1M-token run failures from about 155K tokens of final observed traf
 budget/cost circuit breaker must run after this deduplication, or it will terminate healthy work based
 on presentation duplication instead of provider consumption.
 
-### Workbench runs use one context, not a token kill switch
+### <a id="12"></a>12. Workbench runs use one context, not a token kill switch
 
 On 2026-08-24, Jeffrey rejected the per-run Claude token/cost cap after it
 terminated useful work in seconds. Do not reintroduce it as a default safety
@@ -459,7 +459,7 @@ manual cancellation, bounded prompt/retrieval/tool output, and Claude's
 non-fatal provider autocompaction remain in force; they are not arbitrary
 completion caps.
 
-### Cache-read reduction: dual-agent dispatch stays, other levers are the approved path
+### <a id="13"></a>13. Cache-read reduction: dual-agent dispatch stays, other levers are the approved path
 
 On 2026-08-25, with cache-read at 521.9M tokens (30:1 over fresh input) across
 Claude and Codex, Jeffrey ruled that running both agents on one request is a
@@ -474,7 +474,7 @@ prompt-injected RAG budget was cut from 6,000/420/1,500 chars
 (`PROMPT_MEMORY_CANDIDATE_LIMIT = 400`) is unchanged since that only bounds the
 DB query, not what gets injected into the cached prompt.
 
-### Codex session accounting: `input_tokens` includes cache reads
+### <a id="14"></a>14. Codex session accounting: `input_tokens` includes cache reads
 
 On 2026-08-24, Jeffrey's seven-day Codex session-log aggregate reported 637,606,464
 `input_tokens`, 619,460,480 `cached_input_tokens`, 0 cache writes, and 1,646,031 output tokens.
@@ -484,7 +484,7 @@ traffic**. Never add the first two figures when reporting total traffic or estim
 does not separately report cache writes in these local token-count events; zero is an unavailable
 breakdown, not evidence that no cache was written.
 
-### Usage calibration is an agent-owned local command, with one provider boundary
+### <a id="15"></a>15. Usage calibration is an agent-owned local command, with one provider boundary
 
 On 2026-08-24, Jeffrey asked that usage calibration become an easy command agents can run without
 asking him to collect local token totals. `npm run usage:calibrate` is the canonical command: it
@@ -497,7 +497,7 @@ ISO-week ceiling. Neither number may be silently recorded as a weekly calibratio
 ongoing local measurement and should run the command when asked to calibrate; an interactive Claude
 `/usage` observation is still required to recalibrate Claude's weekly ceiling.
 
-### Commits must never carry an agent Co-Authored-By trailer
+### <a id="16"></a>16. Commits must never carry an agent Co-Authored-By trailer
 
 Jeffrey's standing rule (2026-08-24): every git commit must show him as sole author, with no
 `Co-Authored-By`/`Co-authored-by` trailer for Claude, Codex, or any other assistant. Claude Code
@@ -511,7 +511,7 @@ rewritten with `git filter-branch --msg-filter` (strip the trailer line + traili
 force-pushed **only when the branch is unmerged, single-author, and not shared with other active
 collaborators** — treat merged branches or shared branches as out of scope for a rewrite.
 
-### A dominant activity-log entry can be a bug, not a usage signal — verify before "strengthening" it
+### <a id="17"></a>17. A dominant activity-log entry can be a bug, not a usage signal — verify before "strengthening" it
 
 On 2026-08-24, asked to find Jeffrey's most-frequent action and strengthen that path, the top entry
 in `audit_log` by a wide margin — `POST /api/shared/conversations/:id/read` at 75% of all mutating
@@ -530,7 +530,7 @@ effects on discrete signals (message count, status) rather than continuously-cha
 the continuous dependency for effects that genuinely need per-tick reaction (e.g. auto-scroll).
 See `docs/activity-log-frequency-analysis.md` for the full analysis.
 
-### `.gitignore` directory patterns must be anchored to the repo root
+### <a id="18"></a>18. `.gitignore` directory patterns must be anchored to the repo root
 
 On 2026-08-25, the unanchored pattern `data/` in Workbench's root `.gitignore` (intended only for the
 top-level runtime-state directory `./data`) also matched `src/client/data/`, a real source directory.
@@ -546,7 +546,7 @@ every directory with that name anywhere in the tree. Before adding or reviewing 
 -name <name>`); if it does and the rule is only meant for one location, anchor it. This is a standing
 review point for any future `.gitignore` change, not a one-off fix.
 
-### The conversation dropdown is the only authority for task category
+### <a id="19"></a>19. The conversation dropdown is the only authority for task category
 
 *Superseded by Jeffrey, 2026-09-08.* Every conversation has a category selected
 in its dropdown; there is no unselected state. Workbench must send and persist
@@ -556,7 +556,7 @@ turn-grounding supervisor must never reclassify it. For legacy queued messages
 that predate a persisted category, use the linked task's stored category or the
 dropdown default (`execute`) rather than inferring from prose.
 
-### Conversation history is evidence; one resolved turn objective is the instruction source
+### <a id="20"></a>20. Conversation history is evidence; one resolved turn objective is the instruction source
 
 On 2026-08-28, repeated Claude and Codex runs spent dozens of tool calls re-investigating simple
 requests because Workbench supplied a compacted transcript and shared brief without identifying
@@ -580,7 +580,7 @@ start only when the request actually reaches the model—not while it waits behi
 work must preserve these properties: latest correction wins, agent narration never becomes user intent,
 Ask Both has parity, continuations are instant, and retries cannot drift across turns.
 
-## Scoping boundaries in specs are reasons, not bans (2026-09-01)
+## <a id="21"></a>21. Scoping boundaries in specs are reasons, not bans (2026-09-01)
 
 While refining CON-226 (publishing a generated Connector Gateway client package), I wrote into the
 tech spec that the shared package "must not contain React, TanStack Query, Zod, forms, component

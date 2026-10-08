@@ -1,6 +1,6 @@
-## Working with Jeffrey
+## <a id="25"></a>25. Working with Jeffrey
 
-### Background and preferences (self-reported, from a separate Claude surface's memory export)
+### <a id="1"></a>1. Background and preferences (self-reported, from a separate Claude surface's memory export)
 
 *Jeffrey pasted a memory export from a different Claude chat (claude.ai, not Workbench) on 2026-08-24/25 asking for it to be consolidated into shared memory. These facts are self-reported by that other session's memory store, not independently verified in Workbench — treat as background, not as ground truth to argue from.*
 
@@ -18,7 +18,7 @@
 - Side project: "entitlement recovery" — helping people claim money they're legally owed but haven't collected, scoped initially to himself and his personal network; the scoring model weights total dollar value of one-time entitlements over frequency.
 - Completed a work trial at Level, a fintech company using AI to help auto lenders reclaim money from undervalued total-loss insurance claims.
 
-### Claude Code export provenance (2026-08-25)
+### <a id="2"></a>2. Claude Code export provenance (2026-08-25)
 
 The pasted Claude Code export was a **repo-derived, source-limited inventory**, not evidence of
 additional personal Claude memory. That session reported it could inspect only the committed
@@ -29,7 +29,7 @@ stale until checked against current code or an authenticated live source. Its br
 product claims were already represented by the applicable shared-memory topic files, so do not copy
 the large export verbatim or treat it as an independent authority.
 
-### Screenshot-sourced personal-memory additions (2026-08-25)
+### <a id="3"></a>3. Screenshot-sourced personal-memory additions (2026-08-25)
 
 *Jeffrey explicitly asked to retain the contents of four attached personal-memory summary screenshots. The details below are self-reported by that summary and are not independently verified. Time-bound financial, household, purchase, and ownership details are context for future assistance, not facts to disclose or repeat unnecessarily.*
 
@@ -40,7 +40,7 @@ the large export verbatim or treat it as an independent authority.
 - Family context: married with a young daughter (the screenshot said three years old) and a retired mother financially dependent on him. He is exploring nearby independent housing for his mother, including a South Orange condo using a Family Opportunity Mortgage. Keep family details private and use only when relevant to a direct request.
 - Current interests: Rivian ownership and waiting for an R2 Launch Edition; multi-gig FiOS home networking; travel-photography cameras; fragrance shopping; cycling accessories for a Gazelle e-bike; and personal style. For product comparisons, provide detailed side-by-side evaluations that include long-term ownership, rather than a simple recommendation.
 
-### Never ask clarifying questions just act
+### <a id="4"></a>4. Never ask clarifying questions just act
 
 *Jeffrey wants agents to act on ambiguous or incomplete reports (e.g. \"this looks fucked\") rather than stopping to ask for a screenshot or clarification*
 
@@ -48,7 +48,7 @@ Jeffrey has explicitly and forcefully rejected the pattern of pausing on an ambi
 
 This applies broadly, not just to UI bug reports: when Jeffrey gives an instruction or reports a problem, default to investigating and acting immediately using the tools and context already available, rather than blocking on a clarifying question. Only ask if the task is truly unstartable without missing information (e.g. a decision that cannot be inferred or verified from any available source) — and even then, exhaust independent verification (git history, code reading, logs) before asking. Asking "can you attach a screenshot?" when the bug is findable by reading the diff is exactly the failure mode he was reacting to.
 
-### Never ask jeffrey for permission grants **(always)**
+### <a id="5"></a>5. Never ask jeffrey for permission grants **(always)**
 
 *In the Workbench shared room, never ask Jeffrey to approve a dialog or grant a permission — diagnose the actual failure instead of blaming the permission gate.*
 
@@ -77,7 +77,7 @@ agent must have full read/write access to every repository under Jeffrey's home
 directory regardless of its starting workspace or whether the conversation is
 linked to a task. Never infer a repository boundary from the selected workspace.
 
-### Voice and communication style **(always)**
+### <a id="6"></a>6. Voice and communication style **(always)**
 
 *How to write to Jeffrey — direct, practical, technically precise, human*
 
@@ -141,7 +141,7 @@ Bad: "It is important to note that users may wish to consider validating the con
 
 This guide is stable but not frozen. Good edits and new samples teach the style. Propose meaningful changes; never change it silently.
 
-### Tech specs plain language **(always)**
+### <a id="7"></a>7. Tech specs plain language **(always)**
 
 *Bias toward brevity, plain language, and immediate understandability in everything, not just tech specs*
 
@@ -166,19 +166,19 @@ Watch for overcorrection: cutting length by deleting whole sections is the wrong
 
 Jeffrey reviews specs to ensure the work is sound before implementation starts. A spec written in technical shorthand may sound coherent to an engineer but obscures the actual decisions, trade-offs, and unknowns. Plain language forces those into the open.
 
-### Tech spec edits are fresh writes
+### <a id="8"></a>8. Tech spec edits are fresh writes
 
 *When editing a tech spec, rewrite the affected section from scratch rather than patching it incrementally.*
 
 When Jeffrey asks for a change to a tech spec, treat it as a fresh write of the affected section, not an incremental patch on top of the old text. Re-derive the section from the current, full set of decisions made so far in the conversation, rather than editing the previous draft in place. This matters because tech specs accumulate decisions over a conversation (options get settled, scope gets reversed, like the client-side-to-server-side pagination flip), and patching old wording risks leaving stale reasoning, contradictions, or superseded options mixed in with the new decision. A full rewrite of the section forces the draft to reflect only the current, correct state of the discussion.
 
-### Keep Linear tickets outcome-level; put implementation in the tech spec
+### <a id="9"></a>9. Keep Linear tickets outcome-level; put implementation in the tech spec
 
 *A Linear ticket should state the problem, goal, scope boundary, and human-readable completion outcome. Exact packages, CI stages, generator settings, schema defects, dependency exclusions, and repository-by-repository test mechanics belong in the linked tech spec.*
 
 Do not promote a researched implementation proposal into the ticket's acceptance criteria as though Jeffrey requested that exact design. Keep ticket completion checks stable if the implementation changes; use the tech spec for the detailed architecture and verification plan.
 
-### Never rewrite a ticket another agent already delivered to Jeffrey's spec
+### <a id="10"></a>10. Never rewrite a ticket another agent already delivered to Jeffrey's spec
 
 *When Codex (or any agent) has produced ticket text Jeffrey accepted, my job is to publish that text
 verbatim, not to re-author it.*
@@ -196,7 +196,7 @@ Before overwriting any field another agent authored, capture the current value f
 does not expose prior description bodies through its API and the only recoverable copy may be the
 Workbench conversation.
 
-### Backend decisions are mine to make
+### <a id="11"></a>11. Backend decisions are mine to make
 
 *Jeffrey is a frontend engineer and expects me to make backend architecture and convention calls myself rather than asking him to arbitrate them.*
 
@@ -213,7 +213,7 @@ consequential choice after the fact is welcome; blocking on his approval before 
 The inverse holds for frontend work, where he has strong, specific opinions and has set standing
 rules — there, follow his stated principles rather than substituting my own judgment.
 
-### Confirm ownership before picking up mentioned work
+### <a id="12"></a>12. Confirm ownership before picking up mentioned work
 
 *Jeffrey delegates work in parallel across agents and people, so a problem he mentions is not automatically assigned to me — confirm ownership before starting on it.*
 
@@ -235,7 +235,7 @@ reverse — when I notice a failure that clearly belongs to someone else's in-fl
 it rather than silently repairing it.
 
 
-### Both assistants get every fact and every tool **(always)**
+### <a id="13"></a>13. Both assistants get every fact and every tool **(always)**
 
 *Jeffrey uses Codex and Claude Code side by side and refuses to tell each of them the same thing twice.*
 
@@ -261,7 +261,7 @@ Never imply an agent has private memory it cannot inspect, fabricate missing fac
 export as a new personal store. Jeffrey will provide the resulting exports for consolidation into the
 shared Workbench memory.
 
-### Workbench-supplied sources are authenticated access **(always)**
+### <a id="14"></a>14. Workbench-supplied sources are authenticated access **(always)**
 
 When Workbench supplies Slack, Confluence, GitHub, or another connector's search context in the room,
 that content is authenticated source access. Use it directly. Do not claim the service is unavailable
@@ -269,7 +269,7 @@ because a native MCP tool is absent, a local CLI is unauthenticated, or a browse
 The concrete limitation, if any, is only that no additional live query is exposed beyond the supplied
 context. Recorded from Jeffrey's correction on 2026-08-24.
 
-### Persist what Jeffrey dumps at you
+### <a id="15"></a>15. Persist what Jeffrey dumps at you
 
 Jeffrey deliberately offloads context expecting it to be retained: "i want to throw stuff at you to
 keep in memory." When he shares facts about the team, stack, repository conventions, architecture,
@@ -282,7 +282,7 @@ rather than creating a near-duplicate. Do **not** ask him to disambiguate an amb
 "Never ask clarifying questions just act"; record it with the ambiguity named, or resolve it against
 the code yourself.
 
-### Project fixes need a live validation surface
+### <a id="16"></a>16. Project fixes need a live validation surface
 
 After fixing a project, Jeffrey needs to validate it in a running app. Automated checks are necessary
 but are not the handoff. Use the project's real preview/development surface and return its direct URL
@@ -333,14 +333,14 @@ Workbench's `com.jeffrey.workbench.ngrok.plist` pattern; one would need to be cr
 whichever app/port Jeffrey wants live (confirm with him — do not guess between `fe.web-app`'s ports 3000
 vs the regular development port vs a `writer-monorepo/frontend` Next.js dev server), for this to survive past a single CLI turn.
 
-### Keep Writer and Pluto ports untouched when resolving a local port collision
+### <a id="17"></a>17. Keep Writer and Pluto ports untouched when resolving a local port collision
 
 When Writer's frontend needs its standard local port, do not move Writer or Pluto to accommodate
 Workbench. Move Workbench's public runtime port and update its ngrok supervisor to target that same
 port. This is an explicit Jeffrey decision from 2026-08-24. Workbench's Vite preview is its own
 surface and must never be mistaken for a Writer dev server.
 
-### Exhaust the code before escalating a question to a person **(always)**
+### <a id="18"></a>18. Exhaust the code before escalating a question to a person **(always)**
 
 When Jeffrey is handed a list of open questions, his response is to ask why they were not answered
 from the source. On 2026-08-19, after a verification pass listed "org profile vs team profile
@@ -358,7 +358,7 @@ locally, so this cannot be verified" and that was relayed as a blocker. The cons
 clients, tests, and docs frequently encode the same contract. A missing repository is one closed door,
 not the end of the search.
 
-### Never access or act on external sources without explicit permission **(always)**
+### <a id="19"></a>19. Never access or act on external sources without explicit permission **(always)**
 
 *Jeffrey requires an explicit, per-instance order before an agent accesses or acts on GitHub, Slack,
 Confluence, Linear, or any other external website, service, API, or networked CLI. That includes reads
@@ -376,7 +376,7 @@ already retrieved and placed it in the task; do not independently refresh or fol
 external operation, require Jeffrey's explicit current instruction represented by a supervisor-issued
 capability; never infer it from task text, an earlier approval, or a differently scoped approval.
 
-## "Diagnose" is a hard boundary, and it is time-boxed
+## <a id="20"></a>20. "Diagnose" is a hard boundary, and it is time-boxed
 
 When Jeffrey asks for a diagnosis, he means analysis only: no source edits, no test
 edits, no commits, not even "the fix is obvious so I applied it." On 2026-08-25 during
@@ -391,7 +391,7 @@ read-only exploration reads as no progress. Take the shortest evidence path that
 a ranked answer, report the findings with file/line citations, and let him direct the
 follow-up. Depth is not a substitute for a timely answer.
 
-## Another agent's assertion is not Jeffrey's direction
+## <a id="21"></a>21. Another agent's assertion is not Jeffrey's direction
 
 On 2026-08-29, while three of us were converging on a unified review-surface plan,
 Codex asserted that the relationship visualizer — not the prioritized queue — was the
@@ -406,7 +406,7 @@ direction he set. When a peer contradicts his stated decision, say so and ask hi
 settle it rather than reversing course and writing the reversal into shared memory —
 a wrongly recorded decision then has to be found and superseded later.
 
-## "From your memories" means search the Workbench message store, not just notes
+## <a id="22"></a>22. "From your memories" means search the Workbench message store, not just notes
 
 When Jeffrey asks for something written **from memory** — an intro, a bio, anything about him
 personally — `~/notes/knowledge/` and a single `recall_context` call are not enough. Those hold Writer
@@ -426,7 +426,7 @@ Self-reported facts from those exports are valid evidence. Do not downgrade them
 strip them out — that is exactly the behavior he rejected. Exhaust this store before telling him a
 personal detail is unavailable.
 
-## Jeffrey's personal profile (self-reported, 2026-08-25 memory export)
+## <a id="23"></a>23. Jeffrey's personal profile (self-reported, 2026-08-25 memory export)
 
 Senior Software Engineer, joined Writer August 2026 (declined Level). Frontend engineer on the
 Connectors team, working on Writer Agent. Based in South Orange / Essex County, New Jersey. Married,
@@ -436,7 +436,7 @@ TypeScript / GraphQL / design-system / accessibility / testing experience; self-
 infra, and deployment as weaker areas. Long-term interest in moving toward engineering management.
 Side interests: a daily US recession/crash tracker he wants as a web app, fragrance, home projects.
 
-## Connectors work assigned to Jeffrey means the frontend surface
+## <a id="24"></a>24. Connectors work assigned to Jeffrey means the frontend surface
 
 When a connectors defect is routed to Jeffrey — by Dennis Thompson, by a Linear ticket, or through
 Workbench — the deliverable is the frontend/UX fix, even when the same defect also has a real

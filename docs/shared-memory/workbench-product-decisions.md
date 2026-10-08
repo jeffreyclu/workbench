@@ -1,6 +1,6 @@
-## Workbench product decisions
+## <a id="83"></a>83. Workbench product decisions
 
-### Application data uses WebSockets only
+### <a id="1"></a>1. Application data uses WebSockets only
 
 *Decision from Jeffrey, 2026-09-22; corrected after the invalidation-only implementation was found.*
 The browser makes no REST requests for Workbench application data. Initial reads, cache misses,
@@ -20,13 +20,13 @@ Cached data remains for the browser session. Route remounts, elapsed time, focus
 not refresh signals. Marking a conversation read updates rail metadata only and never reloads its
 messages, diffs, or task details.
 
-### Outcome-rating collection is retired
+### <a id="2"></a>2. Outcome-rating collection is retired
 
 *Decision from Jeffrey, 2026-09-18.* Workbench no longer asks for a rating after completing a task
 or archiving a conversation. Do not render a blocking outcome prompt, expose rating endpoints, or
 read or write decision-tree rating snapshots. The feature served its purpose and must stay removed.
 
-### MCPJam is Workbench automation, not a terminal workflow
+### <a id="3"></a>3. MCPJam is Workbench automation, not a terminal workflow
 
 *Decision from Jeffrey, 2026-09-18.* Jeffrey must never need to run MCPJam commands manually.
 Keep the full MCPJam compatibility gate in every runtime promotion, run it automatically once per
@@ -35,7 +35,7 @@ compatibility, tool probes, protocol checks, and recent runs directly in the Ins
 Promotion must keep all 50 tool probes while running independent probes with bounded concurrency so
 the safety gate does not turn every release into a long serial wait.
 
-### Insights is tabbed, never one stacked dashboard
+### <a id="4"></a>4. Insights is tabbed, never one stacked dashboard
 
 *Decision from Jeffrey, 2026-09-18.* Insights must not stack operational diagnostics, agent quality,
 usage, and outcome metrics into one dense page. Keep four focused tabs — **Overview**, **Agents**,
@@ -43,7 +43,7 @@ usage, and outcome metrics into one dense page. Keep four focused tabs — **Ove
 The time-window selector applies to Overview, Agents, and Usage; hide it on System, where memory and
 MCP health are current-state diagnostics rather than historical metrics.
 
-### Notifications belong under Settings
+### <a id="5"></a>5. Notifications belong under Settings
 
 *Decision from Jeffrey, 2026-09-01.* Settings is a navigation destination. Notification preferences
 belong inside Settings and must not appear as their own top-level navigation item.
@@ -53,7 +53,7 @@ preference allow it. This applies while Workbench is focused as well as while it
 The live local runtime delivers the alert through macOS `osascript`, matching the system notification
 Jeffrey verified manually; the browser Notification API is a fallback, not the primary transport.
 
-### Conversation forks start from only the latest exchange
+### <a id="6"></a>6. Conversation forks start from only the latest exchange
 
 *Decision from Jeffrey, 2026-08-31.* Forking a conversation creates a standalone
 conversation with exactly two messages: Jeffrey's most recent message and the
@@ -61,11 +61,11 @@ most recent Codex, Claude, or Palmyra reply after it. Do not copy earlier messag
 messages, shared context, or conversation metadata into the fork. If the latest
 Jeffrey message has no assistant reply yet, do not create a partial fork.
 
-### Workbench tracks tokens, never cost
+### <a id="7"></a>7. Workbench tracks tokens, never cost
 
 *Decision from Jeffrey, 2026-08-26.* Remove every cost metric, price table, estimate, provider-cost collector, API field, and UI surface from Workbench. Token counts are the only usage metric. Do not backfill, clear, or migrate historical database cost columns; released schema remains for compatibility, but application code must not read or write those fields.
 
-### Open diffs stay stable; updates require an explicit refresh
+### <a id="8"></a>8. Open diffs stay stable; updates require an explicit refresh
 
 *Decision from Jeffrey, 2026-08-25; transport updated 2026-09-21.* During an
 active task, Workbench detects a newer local workspace revision from realtime
@@ -75,7 +75,7 @@ revision is detected, show an orange **Refresh changes** button; only that
 explicit action loads the new patch. This follows GitHub's review behavior and
 keeps the live conversation/activity stream separate from the review surface.
 
-### Changes tab is actionable only when a diff exists
+### <a id="9"></a>9. Changes tab is actionable only when a diff exists
 
 *Decision from Jeffrey, 2026-08-25.* In a task-linked conversation, keep the
 **Changes** tab visible but disable it until Workbench has confirmed at least
@@ -83,7 +83,7 @@ one local workspace or linked GitHub pull-request diff contains changed files.
 Leave it disabled when both are empty or unavailable; it must not open an empty
 review surface.
 
-### Workspace diff history is an immutable review record
+### <a id="10"></a>10. Workspace diff history is an immutable review record
 
 *Decision from Jeffrey, 2026-08-26.* Every distinct local workspace diff
 opened in Workbench is persisted as an immutable task- or conversation-scoped
@@ -99,7 +99,7 @@ immutable snapshot, and automatically open the latest non-empty record when
 the current workspace is clean. Do not infer conversation ownership from
 nearby commit times or branch order.
 
-### Changes can commit and push the reviewed workspace
+### <a id="11"></a>11. Changes can commit and push the reviewed workspace
 
 *Decision from Jeffrey, 2026-08-26.* The local-workspace Changes pane includes
 one **Commit & push** control. It stages the reviewed workspace, commits using
@@ -111,14 +111,14 @@ retry **Push N commits** action. A publish request must carry the displayed
 diff revision; reject it when the workspace changed until the reviewer refreshes
 the snapshot.
 
-### Diff review uses one compact layout on desktop and phone
+### <a id="12"></a>12. Diff review uses one compact layout on desktop and phone
 
 *Decision from Jeffrey, 2026-08-25.* Local workspace and GitHub pull-request
 diffs use the same layout at every viewport: a compact horizontally scrollable
 file rail above a full-width selected patch. Do not restore the desktop
 side-by-side file sidebar; the patch is the primary review surface.
 
-### Artifact comments live on the shared page
+### <a id="13"></a>13. Artifact comments live on the shared page
 
 *Decision from Jeffrey, 2026-08-25.* Comments belong on the public artifact page
 where a coworker reads the artifact, not in the authenticated Workbench library.
@@ -133,7 +133,7 @@ rail. Store a deterministic page-local text range with each comment so the threa
 remains associated with the reviewed text across reads of that immutable artifact
 version.
 
-### Browser chrome signals actionable conversation work
+### <a id="14"></a>14. Browser chrome signals actionable conversation work
 
 *Decision implemented 2026-08-25.*
 
@@ -145,7 +145,7 @@ count refreshes through authenticated shared WebSocket invalidation only.
 Desktop notifications remain unimplemented because they
 require an explicit opt-in permission UX.
 
-### Interject steers the active run; it must not create a parallel reply
+### <a id="15"></a>15. Interject steers the active run; it must not create a parallel reply
 
 *Decision corrected by Jeffrey, 2026-08-25.*
 
@@ -155,14 +155,14 @@ second/parallel agent reply. Cancellation remains an explicit, separate
 action. The prior implementation that allowed busy agents was rejected because
 it visibly opened a parallel thread instead of steering the live one.
 
-### The composer has one Send action; Queue is not a control
+### <a id="16"></a>16. The composer has one Send action; Queue is not a control
 
 *Decision from Jeffrey, 2026-08-25, superseding the earlier Queue-control
 decision.* Remove the composer **Queue** button. **Send** creates the normal
 next-turn message. Interject remains an explicit action on an already queued
 message.
 
-### Parallel agent replies remain individually retryable
+### <a id="17"></a>17. Parallel agent replies remain individually retryable
 
 *Decision from Jeffrey, 2026-08-25; reconfirmed and superseding an earlier same-day instruction.*
 
@@ -178,7 +178,7 @@ running, so **do not couple these actions** — Cancel, Interject, and Retry mus
 agent reply independently. Any in-flight implementation work toward atomic paired-group semantics
 for these controls should be dropped in favor of the existing per-reply behavior described above.
 
-### Task attachments are part of pre-execution task context
+### <a id="18"></a>18. Task attachments are part of pre-execution task context
 
 *Decision from Jeffrey, 2026-08-25.*
 
@@ -187,17 +187,17 @@ Attachments are durable task context: show them while creating and editing a tas
 store them with the task, and include their safe, local paths in every resulting
 agent execution prompt. This is distinct from conversation-message attachments.
 
-### Angriest day is the calendar day with the most curses, not a rolling window
+### <a id="19"></a>19. Angriest day is the calendar day with the most curses, not a rolling window
 
 On 2026-08-25, Jeffrey first asked for a rolling-24-hour reading, then corrected that on the same day: **Angriest day must show the calendar day with the highest curse count**, not a 24-hour rolling window and not a "last 24h" label. `summarizeCursing` computes `angriestDay: { day, count } | null` as the max entry of `byDay` (ties broken by earliest day); the Insights card renders it as `YYYY-MM-DD · count`. Do not reintroduce a rolling-window interpretation for this metric.
 
-### Insights needs six time-frame options
+### <a id="20"></a>20. Insights needs six time-frame options
 
 *Decision from Jeffrey, 2026-08-28; corrected later that day.* Insights must offer exactly: **Last 15 minutes**, **Last hour**, **Last day**, **7 days**, **30 days**, and **All Time**. The new options extend, rather than replace, the existing 7-day and 30-day ranges. Keep all six choices when adding or revising Insights filters and calculations.
 
 *Mobile correction from Jeffrey, 2026-08-29.* On phone layouts, expose those six Insights time frames through one dropdown instead of the expanded segmented-button panel. Desktop keeps the segmented control.
 
-### Awaiting status and new-conversation account default
+### <a id="21"></a>21. Awaiting status and new-conversation account default
 
 *Decision from Jeffrey, 2026-08-24.*
 
@@ -209,7 +209,7 @@ Genuinely new, unlinked conversations default to the provider `default` account
 profile, never `personal`. Existing conversations continue restoring the last
 selected profile from their own message history.
 
-### Usage calibration stays out of the Workbench UI
+### <a id="22"></a>22. Usage calibration stays out of the Workbench UI
 
 *Decision confirmed from Jeffrey's 2026-08-23 direction to remove the calibration UI.*
 
@@ -219,7 +219,7 @@ semantics, and Codex's live `rateLimit.usedPercent` is a short rate-limit window
 ceiling observation. Keep the cards visually consistent while showing each provider's truthful
 usage data. Do not add a Codex form merely because the calibration API supports that provider.
 
-### Celebrate task completion and taskless conversation archiving
+### <a id="23"></a>23. Celebrate task completion and taskless conversation archiving
 
 *Decision from Jeffrey, 2026-08-24.*
 
@@ -230,7 +230,7 @@ Archiving a conversation that *is* linked to a task does not celebrate — that 
 also archives the task, which isn't a completion. The animation is DOM/CSS-based (no
 new dependency), respects `prefers-reduced-motion`, and self-removes after ~1.6s.
 
-### Memory search is default context, not an optional tool
+### <a id="24"></a>24. Memory search is default context, not an optional tool
 
 *Decision from Jeffrey, 2026-08-23.*
 
@@ -263,7 +263,7 @@ having been recorded back into Workbench; this is an ingestion-coverage gap,
 not evidence of a different retrieval algorithm or a Workbench-only ranking
 path.
 
-### Global search opens as an overlay and exposes result caps
+### <a id="25"></a>25. Global search opens as an overlay and exposes result caps
 
 *Decision from Jeffrey, 2026-08-25.* **Search everything** opens from its
 search icon into a centered overlay, with the search field at the top and
@@ -272,7 +272,7 @@ clipped or sit behind the workspace. Hybrid-memory search must never silently
 truncate its visible result cap; state how many results are shown and provide
 an explicit way to load the next set when more ranked matches exist.
 
-### Mobile conversation chrome collapses behind small toggle buttons
+### <a id="26"></a>26. Mobile conversation chrome collapses behind small toggle buttons
 
 *Decision from Jeffrey, 2026-08-26, superseding both the original
 disclosure-controls decision and the scroll-driven auto-collapse decision
@@ -284,7 +284,7 @@ practice. Do not render full-width, text-labeled **Conversation details** or
 **Compose/Show composer** buttons; they are unacceptable. The header and
 composer default to collapsed on phone layouts to maximize thread space.
 
-### Mobile composer action sits at the bottom-right
+### <a id="27"></a>27. Mobile composer action sits at the bottom-right
 
 *Clarification from Jeffrey, 2026-08-27.* The floating composer button and
 bottom-sheet grab handle are phone-only controls. Do not show either in a
@@ -301,7 +301,7 @@ The mobile conversation controls are hidden entirely at desktop widths.
 
 *Clarification from Jeffrey, 2026-08-27.* The collapsed mobile conversation-tray opener is a wide, centered, opaque icon-only pill (76×44px), not a small square. It must be easy to tap while preserving the compact 32px controls inside the expanded tray.
 
-### Mobile conversation action bar survives title collapse
+### <a id="28"></a>28. Mobile conversation action bar survives title collapse
 
 *Correction from Jeffrey, 2026-08-27.* The floating phone conversation action
 bar contains the conversation actions and remains available while compact. The
@@ -309,7 +309,7 @@ small header control only hides or shows the conversation title and metadata;
 it must not hide the action bar. Leave the Conversation/Changes toggle alone
 until it is separately decided.
 
-### Phone changes review uses sequential decision navigation
+### <a id="29"></a>29. Phone changes review uses sequential decision navigation
 
 *Decision from Jeffrey, 2026-08-28.* On phones, replace the horizontally
 scrollable review-decision queue with a compact top navigator: previous and
@@ -326,7 +326,7 @@ backdrop; keep the selected patch and sequential navigator visible behind it.
 phone-specific decision experience. Remove the sequential navigator and modal;
 the relationship-prioritized desktop queue is the authoritative review flow.
 
-### Relationship complexity determines review order
+### <a id="30"></a>30. Relationship complexity determines review order
 
 *Decision from Jeffrey, 2026-08-29.* Use the code diagram's relationships to
 order review decisions. Pending code with more relationships is reviewed first;
@@ -361,7 +361,7 @@ in the click frame while the database write completes behind them. Saving a
 verdict must not rescan repositories or refetch rows the write already returned;
 on persistence failure, roll back and reopen the failed decision with its error.
 
-### Code review is an automation-first attention stack
+### <a id="31"></a>31. Code review is an automation-first attention stack
 
 *Decision from Jeffrey, 2026-08-29.* Treat each logical code block as a discrete
 review task in an attention stack. A Git diff hunk is only a transport boundary,
@@ -405,7 +405,7 @@ they escalate. Queue selection controls which critical path the visualizer
 shows; the map helps reason about that selected path but does not replace the
 queue as the review workflow.
 
-### Review Director owns the whole review queue
+### <a id="32"></a>32. Review Director owns the whole review queue
 
 *Decision from Jeffrey, 2026-09-17.* Code review has one supervisor, named
 **Review Director**, responsible for the complete queue rather than separate
@@ -457,7 +457,7 @@ room beside the analysis. Decision titles describe the concrete code flow being
 added, removed, extended, or updated; risk signals remain separate metadata and
 must never be spliced into the title as if they were the changed behavior.
 
-### Mobile composer closes as a bottom sheet
+### <a id="33"></a>33. Mobile composer closes as a bottom sheet
 
 *Decision from Jeffrey, 2026-08-27.* When expanded on phones, the composer is
 a bottom sheet with a centered grab handle. Tap the handle or swipe it down to
@@ -466,7 +466,7 @@ show a separate close icon while the sheet is open, because it overlaps the
 composer controls. The bottom-right pen appears only while the composer is
 closed.
 
-### Agent conversations are visual, not text walls
+### <a id="34"></a>34. Agent conversations are visual, not text walls
 
 *Decision from Jeffrey, 2026-08-23.*
 
@@ -494,7 +494,7 @@ status remains semantic.
 Keep the compact response-detail splits added for long agent replies. They should be neutral nested
 surfaces with a restrained green heading, not persona-colored cards or a separate visual system.
 
-### Agent debugger exposes actual decisions and tools
+### <a id="35"></a>35. Agent debugger exposes actual decisions and tools
 
 *Decision from Jeffrey, 2026-08-25.* The agent debugger is for the decisions an
 agent makes and the tools it calls in each agent stream. Dispatch metadata
@@ -514,7 +514,7 @@ decision must be visibly nested beneath that decision at its indentation level.
 Raw details stay in the fixed details panel and are revealed by hover or
 keyboard focus; do not render an Inspect control or make a call clickable.
 
-### Restore the last-opened item in each primary surface
+### <a id="36"></a>36. Restore the last-opened item in each primary surface
 
 *Decision from Jeffrey, 2026-08-23.*
 
@@ -523,7 +523,7 @@ open most recently for that surface. Do not default to a generic first item when
 selection exists. Persist these selections independently: opening an item in one surface must not
 replace the remembered item for either of the other two.
 
-### Archive is a stack filter, not a primary destination
+### <a id="37"></a>37. Archive is a stack filter, not a primary destination
 
 *Decision from Jeffrey, 2026-08-24.*
 
@@ -538,7 +538,7 @@ filters, not two views over the same global archive.
 Their tab counts must use those same scoped totals immediately on initial render. Do not show the
 global archive count and replace it only after the archive list loads.
 
-### Conversation composer defaults continue the current conversation
+### <a id="38"></a>38. Conversation composer defaults continue the current conversation
 
 *Decision from Jeffrey, 2026-08-24.*
 
@@ -554,7 +554,7 @@ Do not show the composer until that fallback is resolved; otherwise the temporar
 Ask both value looks like the conversation was reset. Ask both is the fallback
 only when neither saved preferences nor message history records a choice.
 
-### Empty conversations expose execution type before the first reply
+### <a id="39"></a>39. Empty conversations expose execution type before the first reply
 
 *Decision from Jeffrey, 2026-08-29.*
 
@@ -567,7 +567,7 @@ Task-linked conversations use the task-type robot instead. That control must
 remain available in the mobile conversation header; mobile parity applies to
 both standalone and task-linked conversations.
 
-### Creating a conversation opens it immediately
+### <a id="40"></a>40. Creating a conversation opens it immediately
 
 *Decision from Jeffrey, 2026-08-25.*
 
@@ -576,7 +576,7 @@ closing the mobile conversation rail so its composer is visible. Disable the
 control while the create request is pending; one tap must never look like a
 no-op or produce duplicate empty conversations.
 
-### Completing or archiving a conversation returns to its stack
+### <a id="41"></a>41. Completing or archiving a conversation returns to its stack
 
 *Decision from Jeffrey, 2026-08-25.*
 
@@ -586,13 +586,13 @@ conversation stack. Do not auto-open the first remaining conversation, even if
 that first card is in **Pinned for you**. The next conversation opens only from
 an explicit card selection or creating a new conversation.
 
-### Project color is one system
+### <a id="42"></a>42. Project color is one system
 
 *Jeffrey corrected this on 2026-08-23 after repeated partial fixes.*
 
 Project color is a visible identity, not a decorative dot. A named project must use one shared theme for its task-card rail/tint, its task-card dot, and any linked conversation marker. Ownership, workflow state, and agent outcome may have their own labeled badges, but must not replace the project color with an unrelated card rail.
 
-### Realtime transport
+### <a id="43"></a>43. Realtime transport
 
 *Jeffrey explicitly chose WebSockets for Workbench realtime updates on 2026-08-23.*
 
@@ -614,7 +614,7 @@ the task or conversation the user is currently viewing. The active surface
 already provides the relevant context; avoid duplicating that update as an
 interruptive notification. Toasts remain appropriate for updates elsewhere.
 
-### Project color is one system
+### <a id="44"></a>44. Project color is one system
 
 *Project identity uses the existing task-card color everywhere it appears.*
 
@@ -629,7 +629,7 @@ looked different from the task-card's 6px marker even when both computed the sam
 Use `ProjectColorDot` for both surfaces; do not add conversation-specific marker chrome or
 dim the marker through a parent opacity rule.
 
-### Task and conversation stacks share one card hierarchy
+### <a id="45"></a>45. Task and conversation stacks share one card hierarchy
 
 *Decision from Jeffrey, 2026-08-24.*
 
@@ -673,7 +673,7 @@ control hierarchy: put the linked-task return arrow on the left only when a link
 keep the close X at the top right, and center the conversation action controls in a floating pill.
 Leave the Conversation/Changes toggle unchanged until it is separately decided.
 
-### Workbench is a mobile target
+### <a id="46"></a>46. Workbench is a mobile target
 
 *Jeffrey uses Workbench from his phone every day, so mobile layout and a stable shareable URL are first-class requirements rather than nice-to-haves.*
 
@@ -710,7 +710,7 @@ conversation. The rule generalizes: switching a filter or a tab *within* a
 drawer is browsing and must leave it open; selecting the item the drawer exists
 to select is a commit and may close it.
 
-### Agent identity and account routing must be observable
+### <a id="47"></a>47. Agent identity and account routing must be observable
 
 *Correction from Jeffrey, 2026-08-24.*
 
@@ -726,7 +726,7 @@ selection, profile editing, and Execute in one row whenever the panel has room.
 At narrow widths, wrap the controls into compact rows; do not turn each control
 into a separate full-width row. Decision from Jeffrey, 2026-08-24.
 
-### Suppress toasts for the task/conversation already open
+### <a id="48"></a>48. Suppress toasts for the task/conversation already open
 
 *Decision from Jeffrey, 2026-08-24.* Do not show a toast for an update to the
 task or conversation the user is already viewing — the active view itself is
@@ -737,7 +737,7 @@ redundant toast is skipped. Implemented in `App`
 target route (`/tasks/:id` or `/conversations/:id`) against the currently
 viewed task/conversation before deciding whether to toast.
 
-### Shared-room prompt token minimization
+### <a id="49"></a>49. Shared-room prompt token minimization
 
 *Decision from Jeffrey, 2026-08-24/25, executed 2026-08-25.* Durable shared
 facts must never be dropped from prompts (mandatory constraint,
@@ -873,7 +873,7 @@ single-topic query cannot collapse to one result solely because RRF scores
 fall below an arbitrary ratio. The combined policy is budget-bounded and
 deduplicated; it is not a fixed total-result cap.
 
-### Agent cancellation must be visible and authoritative
+### <a id="50"></a>50. Agent cancellation must be visible and authoritative
 
 *Decision from Jeffrey, 2026-08-25.* Active conversation replies need an
 explicit, touch-safe **Cancel** control — not a tiny unlabeled close icon.
@@ -882,7 +882,7 @@ protocol, so a runner owned by another process receives the cancellation
 request and terminates its CLI process tree instead of merely changing the
 message's displayed status.
 
-### Interject steers the active provider turn; it never forks or cancels
+### <a id="51"></a>51. Interject steers the active provider turn; it never forks or cancels
 
 *Decision from Jeffrey, 2026-08-25.* Interject is live input to every matching
 active agent turn. It must preserve the existing stream and reply bubble, and
@@ -936,7 +936,7 @@ can redirect or extend either provider after it completed the requested work.
 Scope and verification limits belong in the initial provider-neutral execution
 contract; Codex and Claude follow the same rule.
 
-### In-progress "thinking" activity is a log, not a finished report
+### <a id="52"></a>52. In-progress "thinking" activity is a log, not a finished report
 
 *Fix from Claude, 2026-08-25.* The huge-circle-and-missing-space bug Jeffrey
 flagged in a screenshot had two separate root causes, both in the live
@@ -961,7 +961,7 @@ a finished reply — dimmer color, monospace voice, dashed section border — vi
 a new `.agent-progress` class, so a live activity log never looks like the
 polished final Brief/Detail report it will be replaced by.
 
-### Fix: retrying one double-thread reply no longer blocks its sibling's retry
+### <a id="53"></a>53. Fix: retrying one double-thread reply no longer blocks its sibling's retry
 
 *Fix from Claude, 2026-08-25, per Jeffrey's decision above that Cancel/
 Interject/Retry act on each agent reply independently.* Root cause of the
@@ -980,7 +980,7 @@ correct there. Regression test:
 `src/server/app.test.ts` — "retrying one of two independent agent threads on
 the same task does not block the other".
 
-### Status: artifact comments — removed
+### <a id="54"></a>54. Status: artifact comments — removed
 
 *Decision from Jeffrey, 2026-08-25.* Artifact commenting is removed completely,
 including the public-page layer and the Artifacts-page UI. Do not restore it
@@ -1010,7 +1010,7 @@ glance. `compactTokenCount` was exported from `src/client/formatters.ts` to
 back the cache-reuse figure. Verified: `tsc --noEmit` clean; full
 `vitest run` 897/897 passing; production build clean.
 
-### Pinned-task reminder re-fires every 30 minutes, not once/day
+### <a id="55"></a>55. Pinned-task reminder re-fires every 30 minutes, not once/day
 
 *Decision from Jeffrey, 2026-08-25.* The pinned-task toast in
 `src/client/features/navigation/app.tsx` previously gated on a
@@ -1030,7 +1030,7 @@ toast gate without issuing an HTTP request. Socket failures stay disconnected
 and reconnect through the shared WebSocket backoff; they never start HTTPS
 query polling.
 
-### Agent debugger only shows recorded rationale
+### <a id="56"></a>56. Agent debugger only shows recorded rationale
 
 *Decision from Jeffrey, 2026-08-25; clarified the same day.* The decision-tree
 debugger must never invent a rationale. Show `Why:` only when the provider or
@@ -1052,7 +1052,7 @@ instead of reserving a desktop sidebar.
 Decision records are association data, not standalone visible rows. Codex and
 Claude use the same renderer and the same explicit-rationale-only rule.
 
-### RAG memory index now also ingests the shared ~/notes knowledge base
+### <a id="57"></a>57. RAG memory index now also ingests the shared ~/notes knowledge base
 
 *Fix from Jeffrey, 2026-08-25.* Root cause of "Workbench topics retrieve much
 better than non-Workbench work": `collectMemoryDocuments`
@@ -1079,7 +1079,7 @@ to Workbench or `~/notes` remains unindexed by design. Verified: `tsc
 --noEmit` clean; `vitest run src/server/memory-index.test.ts` 15/15 passing;
 backfill + live retrieval confirmed against the running server on :5180.
 
-### Offsite backup pushes to GitHub silently stopped since 2026-08-23
+### <a id="58"></a>58. Offsite backup pushes to GitHub silently stopped since 2026-08-23
 
 *Diagnosed by Claude, 2026-08-25.* Jeffrey noticed the last edit in
 `jeffreyclu/workbench-backups` was "2 days ago." Root cause: local SQLite
@@ -1109,7 +1109,7 @@ succeeded, cloning back and running `cat part* | gzip -t` and reassembling
 into a `.db` confirmed a valid, queryable SQLite file. Restore procedure
 (`docs/backup-management.md`) updated to
 `cat latest.db.gz.part* > latest.db.gz && gzip -dk latest.db.gz`.
-### Finished Codex streams do not turn paragraph breaks into detail bubbles
+### <a id="59"></a>59. Finished Codex streams do not turn paragraph breaks into detail bubbles
 
 *Decision from Jeffrey, 2026-08-25.* When a Codex stream completes, a long
 blank-line-separated response (including the agent-debugger `Decision:`
@@ -1124,7 +1124,7 @@ contains only one response section. The one-card case is labeled `Detail`.
 This does not reintroduce the stream regression: decision preambles stay out
 of the completed body, and multi-block replies remain capped to a small number
 of cards rather than one card per streamed line.
-### RAG memory retrieval: tiering plus a rank floor, both fixes together
+### <a id="60"></a>60. RAG memory retrieval: tiering plus a rank floor, both fixes together
 
 *Decision from Jeffrey, 2026-08-25 ("hit it")* on the earlier synthesized
 Codex+Claude proposal: implement both of two orthogonal fixes to
@@ -1172,7 +1172,7 @@ history's additive tier instead of silently filtering it back into the global
 budget. `agent-runner.test.ts` covers a low-scoring task-local decision kept
 alongside the global rank-floor matches.
 
-## 2026-08-26: agent-runner reuse policy — hybrid, ship pool + conversation-scoped sessions first
+## <a id="61"></a>61. 2026-08-26: agent-runner reuse policy — hybrid, ship pool + conversation-scoped sessions first
 
 Jeffrey approved (in shared room) the hybrid policy Claude/Codex proposed for
 the per-request cold-start problem: reuse persistent/resumable sessions only
@@ -1220,7 +1220,7 @@ relying on it if resume appears to silently no-op.
 Option 2 (warm process pool per agent+cwd) is now built and shipped — see the
 2026-08-26 update below for final status.
 
-### Code review lives in the conversation
+### <a id="62"></a>62. Code review lives in the conversation
 
 *Decision from Jeffrey, 2026-08-26, superseding the PR-only scope.* The
 conversation's linked task always exposes a named **Changes** review control.
@@ -1239,7 +1239,7 @@ so the diff remains the dominant surface. Fetch the local diff only when
 Changes is opened; retain the GitHub diff's existing on-demand authenticated
 path. Do not hide this workflow in task detail.
 
-### Changes is conversation-first and may span repositories and branches
+### <a id="63"></a>63. Changes is conversation-first and may span repositories and branches
 
 *Decision from Jeffrey, 2026-09-16.* Opening **Changes** must prioritize and
 display every change set that belongs to that conversation. A full-stack task
@@ -1311,7 +1311,7 @@ pre-existing and unrelated — reproduced identically with the fix stashed
 out). Tracked on work item `f762adb1`, description updated to reflect DONE on
 both scope items.
 
-### Claude continuation prompts are deltas, not replayed context
+### <a id="64"></a>64. Claude continuation prompts are deltas, not replayed context
 
 *Decision from Jeffrey, 2026-08-26.* Once an execute run has a persisted
 Claude session ID, `--resume` already supplies the prior task and conversation
@@ -1327,7 +1327,7 @@ static channel here.
 
 *Decision from Jeffrey, 2026-08-26.* A confidence bubble in a code diff is an interactive details control, not just a score. Its details show the model's concise visible-code reasoning and a **Follow up** action. Follow up must carry the exact logical diff block, file location, confidence, and reasoning into the conversation draft so the next agent turn has the original code context. Use the existing message draft and canonical send path; do not invent a fake file upload or a separate backend persistence model for this context.
 
-### The relationship map is a selective helper for critical paths
+### <a id="65"></a>65. The relationship map is a selective helper for critical paths
 
 *Decision from Jeffrey, 2026-08-29. Supersedes the same-day claim that the
 visualizer is the primary reasoning surface — that claim was wrong and Jeffrey
@@ -1338,7 +1338,7 @@ critical parts of a procedure rather than for every step. Do not restructure the
 review surface so the map is the spine, and do not make the queue a derived
 ordering of camera positions.
 
-### Palmyra is a first-class provider with no Workbench usage caps
+### <a id="66"></a>66. Palmyra is a first-class provider with no Workbench usage caps
 
 *Decision from Jeffrey, 2026-09-03.* Palmyra belongs beside Claude/Opus as a
 first-class Workbench conversation provider, not as a model tier or a
@@ -1358,7 +1358,7 @@ force for those direct Palmyra turns.
 This explicit-selection rule includes a task's first execution: Auto balances
 only between Codex and Claude and must never assign Palmyra.
 
-### Palmyra live activity is replaced by a synthesized final answer
+### <a id="67"></a>67. Palmyra live activity is replaced by a synthesized final answer
 
 *Decision from Jeffrey, 2026-09-03.* Palmyra's `Decision:` messages, streamed
 text, and tool-use audit belong to the running activity view only. When the
@@ -1366,7 +1366,7 @@ turn completes, both task-backed and standalone conversation messages must be
 replaced with one clean terminal answer that synthesizes the outcome. The
 completed message must not retain or replay the accumulated live activity log.
 
-### All three agents have Workbench capability parity
+### <a id="68"></a>68. All three agents have Workbench capability parity
 
 *Decision from Jeffrey, 2026-09-03.* Codex, Claude/Opus, and Palmyra must have
 the same Workbench capabilities across conversations, task execution, durable
@@ -1377,7 +1377,7 @@ differ, but choosing Palmyra must not silently remove a Workbench capability
 or add a locally invented token, turn-count, or fixed total wall-clock ceiling
 while useful provider activity continues.
 
-### Workbench orchestration must not resemble user-authored prompt injection
+### <a id="69"></a>69. Workbench orchestration must not resemble user-authored prompt injection
 
 *Decision from observed Claude failure, 2026-09-03.* Dynamic turn grounding and
 repeated-requirement notices are trusted Workbench orchestration metadata, but
@@ -1389,7 +1389,7 @@ remain untrusted evidence. If Claude rejects Workbench's own envelope as prompt
 injection, discard that provider session and retry the same request once with
 Claude in a clean session; do not silently replace Claude with Codex.
 
-### Runtime promotion waits only for Workbench-scoped active agents
+### <a id="70"></a>70. Runtime promotion waits only for Workbench-scoped active agents
 
 *Decision from observed Claude failure, 2026-09-03; corrected by Jeffrey on
 2026-09-22.* A promotion waits for Workbench-scoped agent work before replacing
@@ -1407,7 +1407,7 @@ whole graph. Risk, priority, review state, and tokens spent are overlay layers o
 that view. But the map is built on demand for escalated blocks; low-priority or
 mechanically settled blocks never pay its analysis or rendering cost.
 
-### Final agent responses use three plain-English sections
+### <a id="71"></a>71. Final agent responses use three plain-English sections
 
 *Decision from Jeffrey, 2026-09-08, superseding the 2026-09-04 single-paragraph
 rule.* Every Claude, Codex, Palmyra, and synthesis final response must render as
@@ -1434,7 +1434,7 @@ editor turn. Validation and editing are internal; never show “Draft rejected�
 to Jeffrey. A truly unstructured draft is converted locally before its final
 three-section answer replaces live activity; no formatting status is shown.
 
-### Active memory lives on disk; closed history is retrieved from the database
+### <a id="72"></a>72. Active memory lives on disk; closed history is retrieved from the database
 
 *Decision from Jeffrey, 2026-09-08.* Every active conversation has a rebuildable
 short-term memory file under `data/short-term-memory/`. All agents receive a
@@ -1461,7 +1461,7 @@ Never replace the count with a vague state label such as `Active`. Older replies
 whose historical count cannot be reconstructed retain an explicit unknown mark
 rather than fabricating a number, but their badge remains clickable.
 
-### Dual-agent synthesis is a conversation-supervisor invariant
+### <a id="73"></a>73. Dual-agent synthesis is a conversation-supervisor invariant
 
 Correction from Jeffrey, 2026-09-16: synthesis must not have separate chat and
 task-execution paths. Every Codex-and-Claude pair belongs to one durable
@@ -1509,7 +1509,7 @@ retry is still long, publish the complete result instead of failing the turn or
 showing Jeffrey a supervisor-policy error. Missing review passes and other
 substantive failures remain blocking.
 
-### The knowledge graph is a derived SQLite index, never a second source of truth
+### <a id="74"></a>74. The knowledge graph is a derived SQLite index, never a second source of truth
 
 *Decision from Jeffrey, 2026-09-09; corrected 2026-09-18.* Workbench's canonical
 task, project, conversation, message, activity, run, and artifact rows remain
@@ -1546,7 +1546,7 @@ trigger and relationship target, runs a live read-only traversal, and lists
 recent replies with their direct and graph-expanded retrieval paths. A deployed
 graph is not considered observable until these checks are visible to Jeffrey.
 
-### Operational audit data is physically separate from memory
+### <a id="75"></a>75. Operational audit data is physically separate from memory
 
 *Correction from Jeffrey, 2026-09-18.* API, tool, file-access, supervisor, and
 external-call audit events are operational records, not memories. New writes
@@ -1564,14 +1564,14 @@ event loop. Conversation message reads use a dedicated
 diagnostics and stream events, plus the newest five diff snapshots per
 scope/repository and every snapshot with a recorded review decision.
 
-### Response-formatting mechanics stay internal
+### <a id="76"></a>76. Response-formatting mechanics stay internal
 
 *Correction from Jeffrey, 2026-09-08.* Formatting is internal runtime state and
 must never be fabricated into the response's `Context` section. The
 deterministic formatter keeps the agent's saved result and uses
 `No additional context.` when the draft supplies none.
 
-### Explicit Linear creation must execute through Workbench
+### <a id="77"></a>77. Explicit Linear creation must execute through Workbench
 
 *Decision from Jeffrey, 2026-09-16.* When Jeffrey explicitly asks an agent to
 create Linear tickets, Workbench must issue the external-action capability and
@@ -1613,7 +1613,7 @@ push the named branch required by that pull request. Natural forms such as
 “open another draft PR” are complete commands; agents must not demand a second
 push or PR-creation permission prompt.
 
-### External-action commands produce enforced execution capabilities
+### <a id="78"></a>78. External-action commands produce enforced execution capabilities
 
 *Correction from Jeffrey, 2026-09-16.* Workbench must treat Jeffrey's explicit
 current-turn command to mutate an external system as the authorization. The
@@ -1644,7 +1644,7 @@ labeled or blocked as a full-suite run. An actual unscoped runner remains
 blocked, while a runner given an explicit `.test.*` or `.spec.*` file remains
 allowed.
 
-### The code relationship map is a zoomable domain map (2026-09-11)
+### <a id="79"></a>79. The code relationship map is a zoomable domain map (2026-09-11)
 
 *Decision from Jeffrey.* Node area reflects the amount of changed code in the
 semantic block. Relationships are direct radiating lines, never orthogonal
@@ -1653,7 +1653,7 @@ packages and emphasizes cross-folder and cross-package coupling. Node color is
 semantic: UI, types/contracts, tests, data/storage, server/service, or general
 logic. The map must support easy pan and zoom as a real vector canvas.
 
-### Long-running finite commands are disk-backed Workbench jobs (2026-09-16)
+### <a id="80"></a>80. Long-running finite commands are disk-backed Workbench jobs (2026-09-16)
 
 *Decision from Jeffrey.* Benchmarks, builds, and tests that can exceed a provider
 shell timeout must not restart from zero when an agent turn is retried. Workbench
@@ -1670,7 +1670,7 @@ retains the log afterward. This exception is for finite work only; dev servers,
 watchers, and other indefinite processes still require their repository's
 tracked lifecycle launcher.
 
-### External evidence is supervisor-owned conversation truth (2026-09-18)
+### <a id="81"></a>81. External evidence is supervisor-owned conversation truth (2026-09-18)
 
 *Decision from Jeffrey.* Agents must not independently fetch the same pull
 request, URL, connected-source search, or telemetry query. Before fan-out, the
@@ -1690,7 +1690,7 @@ agents' decision graphs. Authentication, model inference, health checks, and
 external mutations are transport/control operations rather than shareable
 evidence and are not cached as evidence.
 
-### MCPJam is the deterministic MCP release gate (2026-09-18)
+### <a id="82"></a>82. MCPJam is the deterministic MCP release gate (2026-09-18)
 
 *Decision from Jeffrey.* Workbench's MCP server is checked through MCPJam locally, in GitHub CI, and
 against the exact candidate API during runtime promotion. The mandatory gate covers server health,

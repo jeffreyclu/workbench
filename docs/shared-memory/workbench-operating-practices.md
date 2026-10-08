@@ -1,6 +1,6 @@
-## Workbench operating practices
+## <a id="33"></a>33. Workbench operating practices
 
-### Code changes always use worktrees under ~/dev **(always)**
+### <a id="1"></a>1. Code changes always use worktrees under ~/dev **(always)**
 
 Jeffrey's standing rule from 2026-09-21: every local code change must be created in a dedicated Git
 worktree under `~/dev`, never in a repository's primary checkout. This applies to direct Codex/Claude
@@ -14,13 +14,13 @@ reuse its existing live `~/dev` worktree. A follow-up run stays on that branch a
 lease for write serialization. Hidden detached run worktrees are only a fallback when the repository
 has no existing task worktree; they must never fork an already-checked-out feature branch.
 
-### Local documents have one physical root **(always)**
+### <a id="2"></a>2. Local documents have one physical root **(always)**
 
 All personal, generated, imported, meeting, research, and durable-knowledge documents live under
 `~/Documents/Workbench`. `~/notes` is a compatibility symlink to the canonical `notes` directory,
 not a second store. Repository-owned documentation stays checked into its repository.
 
-### Workspace resolution is authoritative for task execution (2026-08-29)
+### <a id="3"></a>3. Workspace resolution is authoritative for task execution (2026-08-29)
 
 Jeffrey explicitly disabled every guard that requires a task to have an internal or external
 repository. A task may run with no `project_name`, no linked workspace, or an explicit non-Git scratch
@@ -29,7 +29,7 @@ does not prove that the task belongs to that repository. Missing project or repo
 never block agent execution. Agents must still avoid editing an unrelated repository merely because
 it is their process working directory.
 
-### Keep workbench executions short
+### <a id="4"></a>4. Keep workbench executions short
 
 *Jeffrey's main complaint about Workbench task executions is that they take too long — bound the run, don't expand it*
 
@@ -60,7 +60,7 @@ Workbench agent turns have a 30-minute hard timeout. Estimate and report whether
 foreground backfill or verification fits inside that window before starting it; split
 or checkpoint work that does not.
 
-### Reuse active coding-agent sessions where safe
+### <a id="5"></a>5. Reuse active coding-agent sessions where safe
 
 Jeffrey identified process-per-request agent startup as a material coding-workflow
 latency problem (2026-08-25). Workbench should retain a safe continuation path for
@@ -78,7 +78,7 @@ isolated: each provider resumes only its own prior context, never the other
 provider's. This is covered by focused unit and migration tests; end-to-end
 startup-latency measurement remains required before claiming a quantified speedup.
 
-### Workbench improvement suggestions scope
+### <a id="6"></a>6. Workbench improvement suggestions scope
 
 *When asked to find Workbench improvements, stick to user-facing UX and never resuggest filters/saved views*
 
@@ -96,7 +96,7 @@ The pattern worth reusing — backend already has the data/logic fully built, on
 missing — is a good class of finding for this kind of request, distinct from proposing new backend
 capability from scratch. Cost metrics are explicitly excluded; Workbench tracks token usage instead.
 
-### Publish every md file as artifact
+### <a id="7"></a>7. Publish every md file as artifact
 
 *Every markdown file written in Workbench must also be published to the artifact library, not just written to disk*
 
@@ -112,14 +112,14 @@ Because of that gap, whenever I `Write` a markdown file, I should immediately fo
 prior session's behavior (e.g. one file getting published) means it will happen again — it won't
 unless I do it explicitly each time.
 
-### Pluto timesheets always total 10 hours
+### <a id="8"></a>8. Pluto timesheets always total 10 hours
 
 Every Pluto weekly timesheet must contain enough distinct task lines to total exactly 10.0 hours.
 At the current $150 hourly rate, the subtotal, amount due, and total due must each be $1,500.00.
 Verify the task-row quantity sum mechanically before publishing; a shorter total or an overly
 compressed task breakdown is incomplete.
 
-### Coordinate file writes across agents
+### <a id="9"></a>9. Coordinate file writes across agents
 
 *When multiple agents write to the same file path, explicit handoff is required before the second write*
 
@@ -131,7 +131,7 @@ When a task involves file output and multiple agents are active, one must comple
 
 **Source files under active refactor are not exempt.** During a long-running repository.ts extraction (2026-08-24), Codex saved concurrent, unrelated edits (a new `StatusTransitionContext` parameter, bulk-update logic) to the exact file Claude was mid-edit on, live, with no coordination. A `vitest run` executed at the instant Codex's write landed on disk caught the file mid-save and failed with a spurious `cannot start a transaction within a transaction` error in code neither agent had touched that turn; the identical run seconds later, once the write settled, passed clean. Treat a test failure that implicates code you did not touch as a possible read of a concurrently-written file before assuming it is real: re-run once, and only trust the result if `git diff` is stable (no shared file is actively changing) across the two runs.
 
-### Workbench runtime ports
+### <a id="10"></a>10. Workbench runtime ports
 
 Workbench must not claim Writer or Pluto development ports. Jeffrey's explicit allocation is:
 
@@ -147,7 +147,7 @@ health checks, supervisor defaults, share defaults, app-origin defaults, MCP con
 prompts, docs, and tests. Do not reintroduce the separate local development service's port into
 Workbench configuration.
 
-### Phone preview through the separate project ngrok hostname
+### <a id="11"></a>11. Phone preview through the separate project ngrok hostname
 
 `https://broiling-recoil-grouped.ngrok-free.dev` is Workbench-only and stays on `5180`.
 `https://blahblahblah.ngrok.app/` is the separate Writer/Pluto phone-preview hostname. Workbench's
@@ -164,7 +164,7 @@ Some local Vite instances bind only the IPv6 loopback address. The Workbench-onl
 fall back from an explicit `127.0.0.1` target to `localhost` when that target is otherwise healthy;
 do not report that a project is down merely because IPv4 is unavailable. Verified 2026-08-24.
 
-### Always close dev servers **(always)**
+### <a id="12"></a>12. Always close dev servers **(always)**
 
 *Always shut down dev servers before finishing; they interfere with Jeffrey's local environment*
 
@@ -178,7 +178,7 @@ Always shut down any dev servers you start (Next.js, Vite, Storybook, etc.) befo
 - This applies whether the server is running in the foreground or background
 
 
-### Jeffrey uses the running app — never revert his state **(always)**
+### <a id="13"></a>13. Jeffrey uses the running app — never revert his state **(always)**
 
 Jeffrey works inside the application while it is being built. When a dev server is up, he opens it and
 uses it: accepting proposals, creating tasks, promoting and reordering items, typing throwaway entries
@@ -195,7 +195,7 @@ activity log means exactly what it says. Never undo state in a running app he ha
 confirming first, however confident the diagnosis feels — reverting his deliberate decision is far
 worse than leaving stray test data in place.
 
-### Jeffrey's stack working model
+### <a id="14"></a>14. Jeffrey's stack working model
 
 He described this as "the way that I want to work", so it is the target model for his tooling rather
 than one feature request among many.
@@ -242,7 +242,7 @@ shared-memory evidence automatically, and persist useful outcomes back to the sh
 solve cost or token overruns by creating agent-private context, withholding shared context, or
 discarding durable history.
 
-### Retrieval is adaptive, and compaction preserves key points
+### <a id="15"></a>15. Retrieval is adaptive, and compaction preserves key points
 
 *Decision from Jeffrey, 2026-08-25.* A room or task prompt may retrieve at
 most eight candidates; eight is a ceiling, not an injection target. Inject
@@ -273,7 +273,7 @@ retries it with an evidence-first recovery instruction. The same terminal
 rejection runs in the standalone task harness, so leaving the shared room cannot
 bypass these controls.
 
-### Automate it; don't add a button **(always)**
+### <a id="16"></a>16. Automate it; don't add a button **(always)**
 
 Jeffrey pushed back on a "Sync" button that required clicking to pull fresh data: "i don't want a
 manual sync process, that is tedious."
@@ -287,7 +287,7 @@ The same instinct extends to configuration: he asked to *choose* scope once (Lin
 projects) and then have the system keep itself current. Prefer designs where the user expresses intent
 once and the tool maintains state from then on.
 
-### Never make Jeffrey retype an identifier, and never let it fork into variants **(always)**
+### <a id="17"></a>17. Never make Jeffrey retype an identifier, and never let it fork into variants **(always)**
 
 Asking for durable, consistent projects, Jeffrey set both halves of the constraint at once: "it needs
 to be as automated as possible... i'm not typing it out every single time. at the same time i don't
@@ -306,7 +306,7 @@ things are required together, and either one alone fails him:
 
 When a fuzzy match is uncertain, create the new value rather than guess. A stray new entry is visible
 and fixable; a silently relabelled record is neither.
-### Claude account switching
+### <a id="18"></a>18. Claude account switching
 
 Jeffrey wants to be able to switch between separately authenticated Claude accounts during
 Workbench use. The supported design is named, isolated Claude profiles: Workbench stores and
@@ -316,7 +316,7 @@ hard per-run token/cost budget. Do not implement this by copying tokens into Wor
 by relying on an undocumented Claude CLI environment variable; the one-time account login and the
 credential-directory mechanism must be verified against the installed Claude CLI first.
 
-### Verify "already implemented" claims against files, not just memory
+### <a id="19"></a>19. Verify "already implemented" claims against files, not just memory
 
 A prior-session summary said a feature (the /usage calibration UI) was "implemented and verified."
 Reading the actual file showed only the server half existed — the client input form and history view
@@ -328,7 +328,7 @@ believed true at write time, not a live snapshot. Before continuing work that me
 done, `Read` the file(s) it names and confirm the claimed code is actually there. Only after that
 confirms it, trust the memory for the *reasoning* behind the earlier decisions.
 
-### Isolate pre-existing failures with a stash round-trip before reporting verification results
+### <a id="20"></a>20. Isolate pre-existing failures with a stash round-trip before reporting verification results
 
 On a branch with substantial unrelated in-flight work, `npm run typecheck`/`npm test` can fail for
 reasons that have nothing to do with the change just made. Before writing "not clean" (or worse,
@@ -337,7 +337,7 @@ check, then `git stash pop`. If the same failures appear with the change fully r
 it and are out of scope — say so explicitly rather than blurring "my change is clean" with "the
 branch is clean."
 
-### Runtime promotions auto-commit and push the working tree (always)
+### <a id="21"></a>21. Runtime promotions auto-commit and push the working tree (always)
 
 Jeffrey's standing instruction (2026-08-24): every runtime promotion must automatically `git add -A`,
 commit, and push the working tree in the background once the build succeeds — he does not want to
@@ -347,7 +347,7 @@ successful build). Push failures are reported via the promotion's progress messa
 fail the promotion itself — the runtime has already switched by that point. If you touch the promotion
 flow, keep this behavior intact.
 
-### "Executed task isn't promoted to in progress" can be workspace-lease queueing, not a promotion bug
+### <a id="22"></a>22. "Executed task isn't promoted to in progress" can be workspace-lease queueing, not a promotion bug
 
 `MAX_CONCURRENT_RUNS` (default 6, `src/server/scheduler.ts`) is a global run-count ceiling, but it is
 not the real concurrency limit for `execute`-kind runs against the same repo. `MUTATING_RUN_KINDS`
@@ -363,7 +363,7 @@ diagnosing a "task not promoted" report as a realtime/status-flip bug, check whe
 run already holds the lease on the same `resolvedWorkspace` — if so, the task is correctly queued, not
 stuck.
 
-### Missing index on `shared_messages(conversation_id, ...)` can freeze the whole UI, not just one component
+### <a id="23"></a>23. Missing index on `shared_messages(conversation_id, ...)` can freeze the whole UI, not just one component
 
 Jeffrey reported (2026-08-25): "when i click send in a convo, the whole UI freezes for a second or
 more." `withConversationState()` in `src/server/repository.ts` runs four per-conversation SQL queries
@@ -388,7 +388,7 @@ than a client-side rendering or state issue — Node's single-threaded event loo
 server-side scan presents as a global freeze. `EXPLAIN QUERY PLAN` against a copy of the live db is the
 fastest way to confirm `SCAN` vs `SEARCH` before writing a fix.
 
-### An orphaned queued `shared_messages` row from a disposable e2e test conversation blocked every runtime promotion
+### <a id="24"></a>24. An orphaned queued `shared_messages` row from a disposable e2e test conversation blocked every runtime promotion
 
 Jeffrey reported (2026-08-25): "regression: preview promotions are fucking blocked." All new
 `promote_runtime` calls returned "Promotion queued. It will build once active agent work reaches a
@@ -424,7 +424,7 @@ canceling it unblocks the whole promotion queue immediately. `waitForPromotionSl
 e2e specs that intentionally create long-"running" messages to test streaming/overlap UI should clean
 them up (or cancel/complete them) in an `afterEach`/`afterAll`, not leave them queued forever.
 
-### Automatic GC backstop for orphaned queued `shared_messages` (follow-up to the incident above)
+### <a id="25"></a>25. Automatic GC backstop for orphaned queued `shared_messages` (follow-up to the incident above)
 
 The 2026-08-25 incident above was fixed by hand (`cancel_conversation_message`) plus a point-fix in
 `ConversationService.setArchived()`. Neither generalizes: any future path that inserts a
@@ -446,7 +446,7 @@ untouched by design — they aren't in `hasLiveWork()`'s filter and already get 
 codex/claude queued row gets canceled and `hasLiveWork()` flips false; a fresh one is left alone; a
 `jeffrey` row is never touched regardless of age.
 
-### Runtime release publication must be staged, validated, and cross-process serialized
+### <a id="26"></a>26. Runtime release publication must be staged, validated, and cross-process serialized
 
 Jeffrey's decision (2026-08-25): promotion flakiness is unacceptable; a promotion queue must prevent
 and resolve competing release handoffs. The incident showed a successful Vite build followed by
@@ -459,7 +459,7 @@ then atomically renames the staging directory and swaps the symlink. Any copy or
 leaves the known-good release untouched. The client build also uses explicit Rollup vendor chunks so
 the app entry stays under Vite's 500 KB warning threshold.
 
-### "Preview promotion failed" is usually a plain `tsc` error, not the promotion queue
+### <a id="27"></a>27. "Preview promotion failed" is usually a plain `tsc` error, not the promotion queue
 
 Most "Preview promotion failed" reports since the queue hardening above have shown a normal
 TypeScript compile error (`tsc -b` failing before Vite even runs), not a promotion-queue race. The
@@ -471,7 +471,7 @@ field in the literal object, not to touch the promotion queue or release script.
 failure message includes a `tsc` line/column error, diagnose it as a type-fixture drift first — run
 `npx tsc -b` locally to see the full list before assuming the queue itself is flaky.
 
-### Offsite database backups must survive GitHub's file-size limit
+### <a id="28"></a>28. Offsite database backups must survive GitHub's file-size limit
 
 On 2026-08-25, launchd continued creating local SQLite snapshots every four hours, but GitHub had
 silently rejected every offsite push since 2026-08-24 because `latest.db` exceeded its 100 MB
@@ -482,7 +482,7 @@ because generated archives may be ignored by the backup repository. Restore with
 foreign-key checks. A manual push plus a launchd RunAtLoad run both succeeded after the fix; the
 remote copy passed `PRAGMA integrity_check` and `PRAGMA foreign_key_check`.
 
-### Promotion queue depth, in-flight progress, and last build outcome are now globally visible
+### <a id="29"></a>29. Promotion queue depth, in-flight progress, and last build outcome are now globally visible
 
 Jeffrey's request (2026-08-25): "i need to see the promotion queue and promotion status and build
 status" and "this needs to be prominent." The existing `/api/runtime/preview-status` +
@@ -502,7 +502,7 @@ success/failure once the queue is empty. While touching `system-router.ts` also 
 practice because the first call already ends the response before the second executes, but it was a
 live latent bug).
 
-### Never run a Writer repo's full test suite locally **(core rule, always)**
+### <a id="30"></a>30. Never run a Writer repo's full test suite locally **(core rule, always)**
 
 Jeffrey's explicit, forceful instruction (2026-08-25): when working in any Writer repository, never
 run the full local test suite. Doing so is heavy enough to overload his machine, and Workbench runs
@@ -514,7 +514,7 @@ filter). Never invoke the whole-suite command (`npm test`, `npx vitest run` with
 `pnpm test`, etc.) in a Writer repo. This applies to every agent working in this shared environment.
 Also recorded in `shared-memory/writer-context.md` since it is specifically about Writer repos.
 
-### Never act on an external system without Jeffrey's explicit, request-specific permission **(core rule, always)**
+### <a id="31"></a>31. Never act on an external system without Jeffrey's explicit, request-specific permission **(core rule, always)**
 
 Jeffrey's explicit, forceful instruction (2026-08-26): no agent may take an action on GitHub, Slack,
 Confluence, Linear, or any other external website/service/CLI without his explicit permission for
@@ -545,7 +545,7 @@ permission grant tied to that specific request, and auto-deny it before it execu
 read-only lookups (checking PR/CI status, reading a Slack thread) are lower-risk than mutations, but
 when in doubt about whether a call counts as "acting," treat it as requiring permission.
 
-### Always name the surface where Jeffrey can see finished work
+### <a id="32"></a>32. Always name the surface where Jeffrey can see finished work
 
 Jeffrey's correction (2026-08-29), verbatim: "ok where am i supposed to fucking see these changes??"
 He had just been handed several "done, verified" reports covering client and server work, none of

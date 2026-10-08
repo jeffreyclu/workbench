@@ -1,4 +1,4 @@
-## Migration log
+## <a id="1"></a>1. Migration log
 
 - 2026-08-23: 27 files from Claude's Workbench-scoped private memory directory migrated verbatim into
   this file.

@@ -1,6 +1,6 @@
-## Writer context
+## <a id="15"></a>15. Writer context
 
-### Never run a full test suite locally in a Writer repository **(always)**
+### <a id="1"></a>1. Never run a full test suite locally in a Writer repository **(always)**
 
 **Never run the full local test suite in any Writer repository.** It can exhaust Jeffrey's
 computer and take Workbench down with it. This includes broad commands such as `npm test`,
@@ -12,7 +12,7 @@ substituting a full-suite run.
 
 Source: Jeffrey, 2026-08-25. Absolute safety rule.
 
-### No pluto in writer context **(always)**
+### <a id="2"></a>2. No pluto in writer context **(always)**
 
 *Never reference PLUTO in anything related to Writer work*
 
@@ -20,7 +20,7 @@ Jeffrey has drawn a hard boundary: PLUTO must never be referenced when discussin
 
 This applies to every Writer-related output — task summaries, weekly recaps, tech specs, code review notes, onboarding notes, and any other Workbench artifact touching Writer or the connectors team's work. Do not mention PLUTO, draw comparisons to it, or pull it in as context, even if it seems relevant or shows up in retrieved history. If PLUTO-related material surfaces in a search or shared brief while doing Writer work, omit it rather than summarizing or referencing it.
 
-### Jeffrey is on connectors team
+### <a id="3"></a>3. Jeffrey is on connectors team
 
 *Jeffrey is a member of the connectors team himself, not an external party to consult*
 
@@ -35,7 +35,7 @@ This came up sharply in review of the `manage-connectors-v2.html` tech spec's se
 where a security-check item told Jeffrey to go confirm something with "the connectors team" —
 he pointed out he *is* the connectors team.
 
-### Mcp backend design documented
+### <a id="4"></a>4. Mcp backend design documented
 
 *MCP backend architecture documented in shared knowledge*
 
@@ -50,7 +50,7 @@ Key points:
 
 The doc itself doesn't address CG specifics (like why `enabled` is missing from CG responses — it exists in the DB but CG hasn't mapped it yet).
 
-### Jeffrey ai plan tiers
+### <a id="5"></a>5. Jeffrey ai plan tiers
 
 *Jeffrey's Claude and Codex subscription tiers, which set the ceiling for any usage-budget math*
 
@@ -69,7 +69,7 @@ The practical design lesson he drove out of this: never hard-code a provider's u
 as a value that can be updated, because his plans change on a known schedule and a hard-coded ceiling
 would silently spend the wrong amount.
 
-### Career planning meeting prep
+### <a id="6"></a>6. Career planning meeting prep
 
 *Pre-notes for Staff promotion discussion with manager*
 
@@ -117,7 +117,7 @@ This surfaces the actual gap. Everything before it is context.
 
 **You closed a blocker by reading source others treated as unreachable.** The org-tool-ceiling question was staged as an escalation to the CG owners; you read the backend through the GitHub API and resolved it instead.
 
-### Jeffrey's local development workflow (writer-monorepo)
+### <a id="7"></a>7. Jeffrey's local development workflow (writer-monorepo)
 
 Jeffrey works as a **frontend engineer**. His normal local setup runs only the Next.js frontend
 (`cd frontend && pnpm dev`) pointed at the **deployed dev backend**, not a local one. In
@@ -135,7 +135,7 @@ local backend services only as an explicitly-labeled fallback, after exhausting 
 The local backend is still fine for *diagnosis* — using it as a control to isolate whether a failure is
 frontend- or backend-side is fine, as long as the delivered fix restores the proxied configuration.
 
-### Legacy custom connector surface ownership
+### <a id="8"></a>8. Legacy custom connector surface ownership
 
 The organization-level Create Connector workflow at
 `/aistudio/organization/:organizationId/connectors` is implemented in the legacy `fe.web-app` repository,
@@ -144,15 +144,15 @@ not `writer-monorepo`. Its OpenAPI authentication picker is in
 the MCP variant is `MCPConfigureStep.tsx` beside it. This was verified from the reported production UI and
 local source on 2026-08-24.
 
-### Manage Connectors search includes profile labels
+### <a id="9"></a>9. Manage Connectors search includes profile labels
 
 **Verified by static source inspection on 2026-08-24; not runtime-tested.** The Writer Agent Manage Connectors search at `frontend/src/components/agents/manage-tabs/connectors-tab.tsx` filters loaded rows by canonical connector name, connector display name, profile label/name (`config.name`), and description. The table displays the connector display name separately from `config.name`; the latter is the profile label. Treat a report that a profile label cannot be found in this UI as a likely deployed-version, data-shape, or runtime issue—not intended behavior—until reproduced.
 
-### Manage Connectors profile-fetch deduplication (CON-186)
+### <a id="10"></a>10. Manage Connectors profile-fetch deduplication (CON-186)
 
 **Verified from source and focused regression tests on 2026-08-26.** When Connector Gateway fetches multiple Manage Connectors pages concurrently, every call must pass the shared TanStack Query `QueryClient` to `fetchUnifiedUserProfilesPage`. The shared query key then coalesces the `profiles/my` request, so it is fetched once rather than once per page. `actionagentmanageconnectorsv2` is a default-off structural/UI-rewrite gate only; it must never switch this cache-sharing behavior on or off. The regression coverage exercises both gate states.
 
-### Manage Connectors must never auto-drain pages **(always)**
+### <a id="11"></a>11. Manage Connectors must never auto-drain pages **(always)**
 
 Jeffrey's standing rule, stated on 2026-08-27 while directing the Manage Connectors V2 projection work:
 *"we are definitely not autodraining. no unnecessary fetches anywhere, please."* Pagination in the
@@ -164,7 +164,7 @@ and discarded, which is why Connector Gateway mode gates the legacy agent-config
 query or an effect that triggers one, the default expectation is that it fetches only what the user is
 actually looking at.
 
-### Treat terminology in Jeffrey's meeting notes as phonetic
+### <a id="12"></a>12. Treat terminology in Jeffrey's meeting notes as phonetic
 
 Jeffrey writes meeting notes by typing what he hears in the moment. He confirmed this on 2026-08-19
 about the term "Agent Studio": *"no idea, i just typed what i heard."* The notes are a faithful record
@@ -180,7 +180,7 @@ When a term cannot be confirmed in code, say so and attribute it to the meeting 
 it as an established name. Asking Jeffrey to confirm the term is not productive — he is reporting what
 he heard, not what he knows.
 
-### Writer terminology: confirmed acronym set
+### <a id="13"></a>13. Writer terminology: confirmed acronym set
 
 Researched in Slack and Confluence and reconciled with `writer-monorepo` on 2026-08-25. Use these
 expansions consistently: **AIS** = AI Studio; **WA** = Writer Agent (historically Action Agent);
@@ -207,7 +207,7 @@ against Confluence redirects to an Atlassian SSO login it cannot complete, so ve
 "researched in Confluence/Slack" against what a given session could actually reach before trusting
 them.
 
-### Never run the full test suite locally in a Writer repo **(always)**
+### <a id="14"></a>14. Never run the full test suite locally in a Writer repo **(always)**
 
 *Running a Writer repo's full local test suite overloads Jeffrey's machine and takes Workbench down with it*
 

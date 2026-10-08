@@ -33,6 +33,7 @@
     "mcp:inspect": "tsx scripts/mcpjam-inspect.ts",
     "mcp:inspect:stop": "mcpjam --no-telemetry inspector stop",
     "memory:index": "tsx scripts/index-memory.ts",
+    "lint:memory": "tsx scripts/lint-memory-citations.ts",
     "discovery:scan": "tsx scripts/discover.ts --force",
     "backup:run": "tsx scripts/backup.ts",
     "backup:install": "zsh scripts/install-backup-schedule.sh",
