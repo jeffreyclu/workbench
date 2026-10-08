@@ -149,6 +149,7 @@ const baseSchemaStatements = [
       ,fallback_reason TEXT
       ,cancel_requested INTEGER NOT NULL DEFAULT 0
       ,cancel_requested_at TEXT
+      ,prompt_size_json TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_agent_runs_item
@@ -2424,6 +2425,15 @@ const schemaMigrations: readonly Migration[] = [
     apply(database) {
       const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
       if (!columns.some((column) => column.name === 'waiting_reason')) database.exec('ALTER TABLE agent_runs ADD COLUMN waiting_reason TEXT;');
+    },
+  },
+  {
+    // Prompt accounting belongs to the run that was actually dispatched. Keep
+    // the section map together so new categories do not require schema churn.
+    id: '085_agent_run_prompt_size',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'prompt_size_json')) database.exec('ALTER TABLE agent_runs ADD COLUMN prompt_size_json TEXT;');
     },
   },
 ];

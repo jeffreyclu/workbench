@@ -1765,8 +1765,8 @@ export class WorkItemRepository {
       const childByPlanIndex = new Map(selectedIndexes.map((planIndex, position) => [planIndex, children[position]!.id]));
       let droppedEdges = 0;
       selectedTasks.forEach((task, position) => {
-        const blockerIds = task.dependsOn.flatMap((blocker) => childByPlanIndex.has(blocker) ? [childByPlanIndex.get(blocker)!] : []);
-        droppedEdges += task.dependsOn.length - blockerIds.length;
+        const blockerIds = (task.dependsOn ?? []).flatMap((blocker) => childByPlanIndex.has(blocker) ? [childByPlanIndex.get(blocker)!] : []);
+        droppedEdges += (task.dependsOn ?? []).length - blockerIds.length;
         if (blockerIds.length) this.replaceDependencyRows(children[position]!.id, blockerIds);
       });
       const stack = parent.stack;

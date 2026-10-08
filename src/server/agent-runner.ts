@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
-import { DEFAULT_ACCOUNT_PROFILE, plannedTaskDependencyError, type AgentRun, type AgentStreamEvent, type WorkItem } from '../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, plannedTaskDependencyError, type AgentRun, type AgentRunPromptSize, type AgentStreamEvent, type WorkItem } from '../shared/contracts.js';
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
@@ -460,6 +460,56 @@ function personaFor(item: WorkItem, run: AgentRun): string {
           : run.kind === 'analysis'
             ? CODEBASE_ANALYST_PERSONA
             : IMPLEMENTATION_PLANNER_PERSONA;
+}
+
+type PromptContentSize = Omit<AgentRunPromptSize, 'totalChars' | 'systemContractChars'>;
+
+const emptyPromptContentSize = (): PromptContentSize => ({
+  personaChars: 0,
+  taskDescriptionChars: 0,
+  strategyChars: 0,
+  conversationHistoryChars: 0,
+  shortTermMemoryChars: 0,
+  durablePrefetchChars: 0,
+  connectionContextChars: 0,
+  repoRoutingBlockChars: 0,
+});
+
+/** Partitions the exact provider payload; fixed orchestration text is the
+ * residual after counting the named variable sections. */
+export function measurePromptSize(prompt: string, sections: Partial<PromptContentSize> = {}, additionalSystemChars = 0): AgentRunPromptSize {
+  const content = { ...emptyPromptContentSize(), ...sections };
+  const totalChars = prompt.length + additionalSystemChars;
+  const contentChars = Object.values(content).reduce((sum, chars) => sum + chars, 0);
+  return { totalChars, systemContractChars: Math.max(0, totalChars - contentChars), ...content };
+}
+
+export function taskPromptContentSize(
+  item: WorkItem,
+  run: AgentRun,
+  shortTermContext: string,
+  memoryContext: string,
+  executionWorkspaces: readonly RunWorkspaceBinding[] = [],
+  resumed = false,
+): PromptContentSize {
+  const attachments = item.attachments?.length
+    ? item.attachments.map((file) => `- ${file.name} (${file.mimeType}, ${file.size} bytes): ${file.path}`).join('\n')
+    : 'None.';
+  const taskParts = [
+    compactPromptSection(item.title, 300),
+    ...(resumed ? [] : [compactPromptSection(item.description || 'No additional context.', 3_000)]),
+    compactPromptSection(run.instructions || (resumed ? 'Continue the requested work and report the observed result.' : 'Use your judgment and return a concise, actionable result.'), 1_500),
+    attachments,
+  ];
+  return {
+    ...emptyPromptContentSize(),
+    personaChars: personaFor(item, run).length,
+    taskDescriptionChars: taskParts.reduce((sum, part) => sum + part.length, 0),
+    strategyChars: compactPromptSection(item.strategy || 'No strategy yet.', 1_500).length,
+    shortTermMemoryChars: compactPromptSection(shortTermContext || 'No active conversation memory yet.', 2_400).length,
+    durablePrefetchChars: memoryContext.length,
+    repoRoutingBlockChars: repositoryRoutingPrompt(item, listCandidateWorkspaces(), executionWorkspaces).length,
+  };
 }
 
 export function buildPrompt(item: WorkItem, run: AgentRun, sharedContext = '', externalActionContract = EXTERNAL_ACTION_CONTRACT, memoryContext = '', executionWorkspaces: readonly RunWorkspaceBinding[] = []): string {
@@ -2212,6 +2262,12 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       ? buildResumedPrompt(item, run, externalActionContract, memoryContext, shortTermContext, workspaceBindings)
       : buildPrompt(item, run, sharedContext, externalActionContract, memoryContext, workspaceBindings);
     const prompt = [basePrompt, evidencePromptBlock(pullRequestEvidence), reviewHarness ? reviewHarnessPrompt(reviewHarness) : ''].filter(Boolean).join('\n\n');
+    const promptSize = measurePromptSize(
+      prompt,
+      taskPromptContentSize(item, run, resumesSession ? shortTermContext : sharedContext, memoryContext, workspaceBindings, resumesSession),
+      run.agent === 'claude' ? RUNNER_SYSTEM_CONTRACT.length : 0,
+    );
+    repository.updateRun(run.id, { promptSize });
     repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, run.agent, 'prompt', {
       promptChars: prompt.length,
       taskChars: item.description.length,

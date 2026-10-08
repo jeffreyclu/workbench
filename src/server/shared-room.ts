@@ -3,13 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, SUPERVISOR_EVIDENCE_REASON_PREFIX, defaultAccountProfileForTask, type AgentRun, type AgentStreamEvent, type GitHubPullRequestDiff, type SharedMessage, type WorkItem, type WorkspaceDiff } from '../shared/contracts.js';
-import { addUsage, AgentTerminalWarningError, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, measurePromptSize, mcpTraceEventForProviderItem, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, taskPromptContentSize, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
+import { addUsage, AgentTerminalWarningError, agentEnvironmentForWorkspace, cacheContinuationPrompt, CODEX_WORKBENCH_MCP_ARGS, EXECUTION_FIDELITY_CONTRACT, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, buildPrompt, cancelAgentRun, checkpointActivityDetail, claudeScopeRecoveryPrompt, classificationForKind, classifyExternalActionAuthorization, externalActionAttempted, externalActionContractForAuthorization, hasUnsupportedCapabilityDenial, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, judgeExecutionProfile, measurePromptSize, mcpTraceEventForProviderItem, modelFor, MUTATING_RUN_KINDS, registerActiveAgentProcess, resolveAgents, resolveWorkingDirectory, runAgentCommandWithFallback, shouldCheckpointSession, shouldContinueCacheHandoff, taskPromptContentSize, warmAgentCommand, type AgentInputSteering, type AgentUsage, type ExecutionProfile, type ExternalActionAuthorization } from './agent-runner.js';
 import { WorkItemRepository } from './repository.js';
 import { contextForPrompt } from './connection-broker.js';
 import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
-import { agentAccountEnv } from './agent-security.js';
+import { createExternalActionProcessGuard, observeExternalActionRefusals, recordExternalActionRefusal, type ExternalActionProcessGuard } from './external-action-command-guard.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
 import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
 import { groundTurn } from './turn-grounding-ai.js';
@@ -373,13 +373,15 @@ function codexAppServerCommand(): string {
   return process.env.CODEX_BIN?.trim() || 'codex';
 }
 
-function spawnCodexAppServer(cwd: string, accountProfile: string) {
+// ec13a8cb LEGACY-AFFECTING: steerable Codex app-server turns now use the
+// provisioned git/gh guard and skip pooled processes when a grant is attached.
+function spawnCodexAppServer(cwd: string, accountProfile: string, externalActionGuard?: ExternalActionProcessGuard) {
   return spawn(codexAppServerCommand(), CODEX_APP_SERVER_ARGS, {
     cwd,
     // Codex refuses to start an HTTP MCP server whose configured bearer-token
     // environment variable is absent. Workbench trusts its loopback peer, so
     // this is an intentionally non-secret marker, not Jeffrey's UI token.
-    env: { ...agentAccountEnv('codex', accountProfile), WORKBENCH_LOCAL_MCP_TOKEN: 'loopback' },
+    env: { ...agentEnvironmentForWorkspace('codex', accountProfile, cwd, externalActionGuard), WORKBENCH_LOCAL_MCP_TOKEN: 'loopback' },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   });
@@ -443,14 +445,14 @@ export function warmSharedRoomCodex(cwd: string, accountProfile = DEFAULT_ACCOUN
 }
 
 /** Codex's app-server is the provider protocol that supports turn/steer. */
-function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, _mutating = false, requiredWorkbenchTools: readonly string[] = []): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number; cacheHandoffRequested: boolean; terminalWarning?: string | null }> {
+function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, _mutating = false, requiredWorkbenchTools: readonly string[] = [], externalActionGuard?: ExternalActionProcessGuard): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number; cacheHandoffRequested: boolean; terminalWarning?: string | null }> {
   return new Promise((resolveOutput, reject) => {
     const command = codexAppServerCommand();
-    const claimed = claimWarmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile);
-    const child = claimed ?? spawnCodexAppServer(cwd, accountProfile);
+    const claimed = externalActionGuard ? null : claimWarmProcess('codex', cwd, command, CODEX_APP_SERVER_ARGS, accountProfile);
+    const child = claimed ?? spawnCodexAppServer(cwd, accountProfile, externalActionGuard);
     const unregisterProcess = registerActiveAgentProcess(child);
     const initialized = Boolean(claimed);
-    if (!process.env.VITEST) warmSharedRoomCodex(cwd, accountProfile);
+    if (!process.env.VITEST && !externalActionGuard) warmSharedRoomCodex(cwd, accountProfile);
     let buffered = ''; let output = ''; let liveOutput = ''; let threadId = ''; let turnId = ''; let sequence = 0; let settled = false;
     let workbenchMcpReady = false; let toolInventoryRequestId: number | null = null; let toolInventoryVerified = requiredWorkbenchTools.length === 0; let turnStartRequested = false;
     let usage: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
@@ -709,7 +711,7 @@ function runSteerableCodexSegment(prompt: string, cwd: string, signal: AbortSign
   });
 }
 
-export async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false, expiredThreadPrompt?: string, requiredWorkbenchTools: readonly string[] = []): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number }> {
+export async function runSteerableCodex(prompt: string, cwd: string, signal: AbortSignal, onProgress: (body: string) => void, onReady: (steer: ActiveReplySteering) => void, onEvent: (event: { kind: 'decision' | 'tool' | 'file_read' | 'file_write'; detail: string }) => void, onUsage: (usage: AgentUsage) => void, resumeThreadId?: string | null, accountProfile = DEFAULT_ACCOUNT_PROFILE, mutating = false, expiredThreadPrompt?: string, requiredWorkbenchTools: readonly string[] = [], externalActionGuard?: ExternalActionProcessGuard): Promise<{ output: string; threadId: string; usage: AgentUsage; peakContextTokens: number }> {
   let segmentPrompt = prompt;
   let segmentResume = resumeThreadId;
   let aggregate: AgentUsage = { inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null };
@@ -728,7 +730,7 @@ export async function runSteerableCodex(prompt: string, cwd: string, signal: Abo
       }, onReady, onEvent, (usage) => {
         const aggregateUsage = addUsage(before, usage);
         onUsage(aggregateUsage);
-      }, segmentResume, accountProfile, mutating, requiredWorkbenchTools);
+      }, segmentResume, accountProfile, mutating, requiredWorkbenchTools, externalActionGuard);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof CodexProviderStallError && !lifecycleRecoveryUsed && !signal.aborted) {
@@ -1563,6 +1565,8 @@ export async function replyInSharedRoom(
     return;
   }
   const controller = new AbortController();
+  let externalActionGuard: ExternalActionProcessGuard | undefined;
+  let stopExternalActionObserver: (() => void) | undefined;
   let leaseOwnershipLost = false;
   const leaseHeartbeat = setInterval(() => {
     try {
@@ -1764,6 +1768,12 @@ export async function replyInSharedRoom(
       preflightWorkbenchTools,
     });
     const externalActionContract = externalActionContractForAuthorization(externalAuthorization);
+    externalActionGuard = createExternalActionProcessGuard(externalAuthorization);
+    stopExternalActionObserver = observeExternalActionRefusals(externalActionGuard, (refusal) => {
+      if (runId) recordExternalActionRefusal(repository, { id: runId, messageId, agent }, refusal);
+      else repository.addAgentStreamEvents(messageId, null, [{ kind: 'tool', detail: refusal.detail }]);
+      publishRealtimeMessagesEvent(target.conversationId);
+    });
     const requiredWorkbenchTools = externalAuthorization.granted ? externalAuthorization.capability.requiredWorkbenchTools : [];
     const lineageDecision = linkedItem && linkedRun
       ? await verifyAuthoritativeMutationLineage(repository, linkedItem, externalAuthorization, sourceCwd, linkedRun)
@@ -1858,7 +1868,7 @@ export async function replyInSharedRoom(
           repository.updateSharedMessage(messageId, telemetry);
           if (runId) { repository.updateRun(runId, telemetry); repository.addAgentRunDiagnostic(runId, messageId, 'codex', 'usage', telemetry); }
         });
-      }, resumeThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')), expiredThreadPrompt, requiredWorkbenchTools)
+      }, resumeThreadId, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, Boolean(runId && MUTATING_RUN_KINDS.has(repository.getRun(runId)?.kind ?? 'analysis')), expiredThreadPrompt, requiredWorkbenchTools, externalActionGuard)
         .then(({ output, threadId, usage, peakContextTokens }) => ({ output, codexThreadId: threadId, agent: 'codex' as const, usage, peakContextTokens, fallbackFrom: null, fallbackReason: null }));
     const palmyraImages = [...thread].reverse().find((message) => message.author === 'jeffrey')?.attachments ?? [];
     const runPalmyraReply = (palmyraPrompt: string, previousMessages = palmyraContext, imageAttachments = palmyraImages) => runPalmyraAgent({
@@ -1869,6 +1879,7 @@ export async function replyInSharedRoom(
       previousMessages,
       imageAttachments,
       requiredWorkbenchTools,
+      externalActionGuard,
       onProgress: (partial) => {
         if (controller.signal.aborted) return;
         updateLiveSharedBody(repository, messageId, partial, target.conversationId, runId);
@@ -1917,7 +1928,7 @@ export async function replyInSharedRoom(
       registerActiveReplySteering(messageId, steer);
       void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
     } : undefined,
-    resumeProviderId ?? undefined, true, false, undefined, claudeScopeRecoveryPrompt(freshPrompt, cwd));
+    resumeProviderId ?? undefined, true, false, undefined, claudeScopeRecoveryPrompt(freshPrompt, cwd), externalActionGuard);
     } catch (error) {
       if (agent === 'claude' && !isPairedReply && isAgentCapacityError(error)) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -1944,7 +1955,7 @@ export async function replyInSharedRoom(
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
         registerActiveReplySteering(messageId, steer);
         void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
-      }, undefined, false, false);
+      }, undefined, false, false, undefined, undefined, externalActionGuard);
       }
     }
     const turnEvents = () => repository.listAgentStreamEvents(target.conversationId).filter((event) => event.messageId === messageId);
@@ -1972,7 +1983,7 @@ export async function replyInSharedRoom(
         })))), runKind, target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
           registerActiveReplySteering(messageId, steer);
           void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
-        }, result.sessionId ?? undefined, false, false, result.usage, full);
+        }, result.sessionId ?? undefined, false, false, result.usage, full, externalActionGuard);
       }
       const resumeThreadId = result.agent === 'codex' ? result.codexThreadId : undefined;
       const full = `${freshPrompt}\n\n${requirement}`;
@@ -2010,7 +2021,7 @@ export async function replyInSharedRoom(
       })))), runId ? repository.getRun(runId)?.kind ?? 'analysis' : 'analysis', target.accountProfile ?? DEFAULT_ACCOUNT_PROFILE, undefined, (steer) => {
         registerActiveReplySteering(messageId, steer);
         void deliverPendingSharedInterjections(repository, messageId).catch(() => { /* Owner polling retries while the reply is live. */ });
-      }, undefined, false, false);
+      }, undefined, false, false, undefined, undefined, externalActionGuard);
       if (hasRejectedWorkbenchPromptEnvelope(recovered.output)) throw new Error(reason);
       result = recovered;
     }
@@ -2125,6 +2136,7 @@ export async function replyInSharedRoom(
     });
     if (runId) repository.updateRun(runId, { status: 'failed', error: errorMessage, completedAt: new Date().toISOString(), ...(terminalCheckpoint ? { output: terminalCheckpoint } : {}) });
   } finally {
+    stopExternalActionObserver?.();
     clearInterval(leaseHeartbeat);
     clearInterval(interjectionPoll);
     activeReplies.delete(messageId);

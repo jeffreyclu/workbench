@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
-import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type AgentRunReviewHandoff } from '../../shared/contracts.js';
+import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type AgentRunPromptSize, type AgentRunReviewHandoff } from '../../shared/contracts.js';
 import { resolveCost } from '../model-pricing.js';
 import { WORKBENCH_PROJECT_KEY } from '../../shared/project-name.js';
 import type { UnitOfWork } from '../unit-of-work.js';
@@ -30,6 +30,7 @@ export interface RunPatch {
   waitingReason?: string | null;
   attempt?: number;
   resolvedWorkspace?: string | null;
+  promptSize?: AgentRunPromptSize | null;
 }
 
 function mapReviewHandoffRow(row: Record<string, string | null>): AgentRunReviewHandoff | null {
@@ -78,6 +79,7 @@ function mapRunRow(row: Record<string, string | null>): AgentRun {
     waitingReason: row.waiting_reason ?? null,
     resolvedWorkspace: row.resolved_workspace ?? null,
     origin: (row.origin ?? 'manual') as AgentRun['origin'],
+    promptSize: row.prompt_size_json ? JSON.parse(row.prompt_size_json) as AgentRunPromptSize : null,
     reviewHandoff: mapReviewHandoffRow(row),
   };
 }
@@ -230,6 +232,7 @@ export class RunRepository {
       ['input_tokens', changes.inputTokens], ['cache_creation_input_tokens', changes.cacheCreationInputTokens], ['cache_read_input_tokens', changes.cacheReadInputTokens], ['output_tokens', changes.outputTokens], ['fallback_from', changes.fallbackFrom], ['fallback_reason', changes.fallbackReason],
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
       ['next_attempt_at', changes.nextAttemptAt], ['waiting_reason', changes.waitingReason], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
+      ['prompt_size_json', changes.promptSize === undefined ? undefined : changes.promptSize === null ? null : JSON.stringify(changes.promptSize)],
     ]);
     return [
       ...[...columns].filter((entry): entry is [string, string | number | null] => entry[1] !== undefined),

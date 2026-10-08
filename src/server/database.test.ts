@@ -98,6 +98,7 @@ const EXPECTED_MIGRATIONS = [
   '082_agent_stream_event_traces',
   '083_remove_session_feedback',
   '084_agent_run_waiting_reason',
+  '085_agent_run_prompt_size',
 ];
 
 describe('openDatabase', () => {
@@ -128,6 +129,21 @@ describe('openDatabase', () => {
     const second = openDatabase(path);
     expect(second.prepare('SELECT count(*) AS count FROM schema_migrations').get()).toEqual({ count: EXPECTED_MIGRATIONS.length });
     second.close();
+  });
+
+  it('adds prompt accounting when upgrading from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE agent_runs DROP COLUMN prompt_size_json;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '085_agent_run_prompt_size'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+    expect(columns.map(({ name }) => name)).toContain('prompt_size_json');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '085_agent_run_prompt_size'").get()).toBeTruthy();
+    upgraded.close();
   });
 
   it('moves audit reads and writes to a separate database while importing legacy rows', () => {
