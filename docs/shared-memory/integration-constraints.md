@@ -174,3 +174,16 @@ most recent recorded profile so Jeffrey can see and change the next turn's accou
 CLI's `default` profile — never the named `personal` profile, including in the Workbench project. This is
 separate from task dispatch's project-scoped fallback and from an existing conversation restoring its last
 recorded profile.
+
+### <a id="7"></a>7. Only Claude can enforce the worktree rule with a hook; Codex cannot (2026-10-08)
+
+Claude Code now denies Edit, Write and NotebookEdit under a primary checkout through a `PreToolUse`
+hook (`~/.claude/hooks/worktree-guard.sh`, registered in `~/.claude/settings.json` next to the
+existing cc-status hooks). The primary checkouts are listed in `~/.claude/hooks/worktree-guard.conf`,
+not in the script. Worktrees such as `~/dev/<repo>-<suffix>` and `~/dev/.workbench-worktrees` are
+allowed, and read-only tools are never affected.
+
+**Gap:** as of 2026-10-08 Codex has no equivalent hook mechanism. It only has command prefix rules in
+`~/.codex/rules`, which match shell commands, not file edits. Interactive Codex sessions therefore
+rely on the written worktree rule alone. Workbench-dispatched runs of either provider still get
+worktrees from `run-worktree.ts`. Do not claim Codex is enforced until Codex ships a pre-edit hook.
