@@ -17,6 +17,7 @@ import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isManagedRun
 import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
+import { appendWorkLog } from './work-log.js';
 import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
 import { evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
 import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
@@ -2550,6 +2551,19 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }
     repository.addActivity(item.id, result.agent, 'progress', `Completed ${run.kind}.`);
     startReviewAutoScore(repository, run, sourceWorkspace ?? workspace ?? null);
+    // A chronology line must never fail the run that earned it.
+    try {
+      if (!process.env.VITEST) appendWorkLog({
+        run,
+        events: observedRunEvents,
+        repoPath: workspaceBindings[0]?.sourceWorkspace ?? sourceWorkspace ?? workspace ?? null,
+        summary: buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt).summary,
+        output,
+        completedAt,
+      });
+    } catch (error) {
+      console.error('Work log append failed:', error instanceof Error ? error.message : error);
+    }
     publishRealtimeEvent('work-items', 'shared', 'insights');
     publishRealtimeNotification(executionPlan
       ? { tone: 'info', message: 'Agent has follow-ups for review', description: item.title, duration: 0, action: { label: 'Review suggestions', route: run.conversationId ? `/conversations/${run.conversationId}` : `/tasks/${item.id}` } }
