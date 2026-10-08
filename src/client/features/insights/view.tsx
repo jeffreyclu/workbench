@@ -7,6 +7,7 @@ import type { InsightsTimeframe, RunInsights, RunInsightsAgentFit, RunInsightsBy
 import { MemoryDiagnosticsPanel } from './memory-diagnostics';
 import { McpQualityPanel } from './mcp-quality';
 import { KnowledgeDriftPanel } from './knowledge-drift';
+import { KnowledgeUsagePanel } from './knowledge-usage';
 import { Tabs } from '../../components/tabs/tabs';
 import { readInsightsTab, writeInsightsTab, type InsightsTab } from '../../lib/preferences';
 
@@ -178,6 +179,7 @@ export function InsightsView() {
   const queryClient = useQueryClient();
   const knowledgeDrift = useQuery({ queryKey: ['knowledge-drift'], queryFn: api.getKnowledgeDrift, enabled: selectedTab === 'system' });
   const recheckKnowledgeDrift = useMutation({ mutationFn: api.recheckKnowledgeDrift, onSuccess: (report) => queryClient.setQueryData(['knowledge-drift'], report) });
+  const knowledgeUsage = useQuery({ queryKey: ['knowledge-usage'], queryFn: api.getKnowledgeUsage, enabled: selectedTab === 'system' });
   const mcpQuality = useQuery({ queryKey: ['mcp-quality'], queryFn: api.getMcpQualityHistory, enabled: selectedTab === 'system' });
   const data = insights.data;
   const selectTab = (tab: InsightsTab) => {
@@ -221,6 +223,12 @@ export function InsightsView() {
               onRecheck={() => recheckKnowledgeDrift.mutate()}
               rechecking={recheckKnowledgeDrift.isPending}
               recheckFailed={recheckKnowledgeDrift.isError}
+            />
+            <KnowledgeUsagePanel
+              data={knowledgeUsage.data}
+              loading={knowledgeUsage.isLoading}
+              error={knowledgeUsage.isError}
+              onRetry={() => { void knowledgeUsage.refetch(); }}
             />
             <McpQualityPanel
               data={mcpQuality.data}

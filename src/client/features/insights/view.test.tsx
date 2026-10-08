@@ -32,6 +32,7 @@ function stubInsightsFetch(insightsPayload: unknown, memoryPayload: unknown = he
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
     const url = String(input);
     const payload = url.includes('/api/system/knowledge-drift') ? null
+      : url.includes('/api/insights/memory/knowledge') ? { generatedAt: '2026-10-08T12:00:00.000Z', windowDays: 14, notice: 'These counts show what is being found. They are never used to prune or archive knowledge.', topRetrieved: [], topCited: [], topFiles: [], gaps: [] }
       : url.includes('/api/insights/memory') ? memoryPayload
       : url.includes('/api/insights/mcp-quality') ? mcpPayload
         : insightsPayload;

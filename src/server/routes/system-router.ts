@@ -87,6 +87,9 @@ export function createSystemRouter({ repository, database }: RouteContext) {
     const limit = z.coerce.number().int().min(1).max(1_000).catch(200).parse(request.query.limit);
     response.json({ entries: repository.listMemoryEntryUsage(limit) });
   });
+  router.get('/api/insights/memory/knowledge', (_request, response) => {
+    response.json(repository.getKnowledgeUsage());
+  });
   router.get('/api/insights/mcp-quality', (_request, response) => {
     response.json({ ...readMcpQualityHistory(), automation: getMcpQualityAutomationStatus() });
   });

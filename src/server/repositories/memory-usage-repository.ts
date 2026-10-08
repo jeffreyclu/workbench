@@ -105,6 +105,12 @@ export class MemoryUsageRepository {
     });
   }
 
+  /** Retrieval counts per entry since an ISO timestamp. */
+  countRetrievalsSince(since: string): Array<{ entryId: string; retrievals: number }> {
+    const rows = this.database.prepare('SELECT entry_id, COUNT(*) AS retrievals FROM memory_retrievals WHERE created_at >= ? GROUP BY entry_id').all(since) as Array<{ entry_id: string; retrievals: number }>;
+    return rows.map((row) => ({ entryId: row.entry_id, retrievals: Number(row.retrievals) }));
+  }
+
   /** Retrieval and citation counts per entry, most used first. */
   listEntryUsage(limit = 200): MemoryEntryUsage[] {
     const safeLimit = Math.max(1, Math.min(1_000, limit));

@@ -17,6 +17,7 @@ import { SourceConnectionRepository } from './repositories/source-connection-rep
 import { DiscoveryRepository } from './repositories/discovery-repository.js';
 import { ConversationRepository } from './repositories/conversation-repository.js';
 import { TabCountRepository } from './repositories/tab-count-repository.js';
+import { buildKnowledgeUsage, knowledgeFileOfEntry, KNOWLEDGE_GAP_WINDOW_DAYS, type KnowledgeUsageReport } from '../shared/knowledge-usage.js';
 import { MemoryUsageRepository, memoryEntryId, type MemoryEntryUsage, type MemoryRetrievalChannel, type MemoryRetrievalEntry, type MemoryUsageContext } from './repositories/memory-usage-repository.js';
 import { resolveCost } from './model-pricing.js';
 import { RunRepository, type RunPatch } from './repositories/run-repository.js';
@@ -914,6 +915,37 @@ export class WorkItemRepository {
 
   listMemoryEntryUsage(limit?: number): MemoryEntryUsage[] {
     return this.memoryUsage.listEntryUsage(limit);
+  }
+
+  /**
+   * Ranks knowledge entries and files by retrievals and citations, and lists
+   * projects with recent runs whose matching knowledge file was not retrieved
+   * in the same window. Read-only; never an input to pruning.
+   */
+  getKnowledgeUsage(now = new Date().toISOString()): KnowledgeUsageReport {
+    const since = new Date(Date.parse(now) - KNOWLEDGE_GAP_WINDOW_DAYS * 86_400_000).toISOString();
+    const recentRetrievalsByFile = new Map<string, number>();
+    for (const row of this.memoryUsage.countRetrievalsSince(since)) {
+      const file = knowledgeFileOfEntry(row.entryId);
+      if (file) recentRetrievalsByFile.set(file, (recentRetrievalsByFile.get(file) ?? 0) + row.retrievals);
+    }
+    const documentIds = this.database.prepare("SELECT source_id FROM memory_documents WHERE source = 'doc'").all() as Array<{ source_id: string }>;
+    const knownFiles = [...new Set(documentIds.map((row) => knowledgeFileOfEntry(`doc:${row.source_id}`)).filter((file): file is string => file !== null))];
+    const activeProjects = this.database.prepare(`
+      SELECT COALESCE(p.name, w.project_name) AS project, COUNT(*) AS runs
+      FROM agent_runs r
+      JOIN work_items w ON w.id = r.work_item_id
+      LEFT JOIN projects p ON p.key = w.project_key
+      WHERE r.created_at >= ? AND COALESCE(p.name, w.project_name) IS NOT NULL AND TRIM(COALESCE(p.name, w.project_name)) != ''
+      GROUP BY COALESCE(p.name, w.project_name)
+    `).all(since) as Array<{ project: string; runs: number }>;
+    return buildKnowledgeUsage({
+      now,
+      usage: this.memoryUsage.listEntryUsage(1_000),
+      knownFiles,
+      recentRetrievalsByFile,
+      activeProjects: activeProjects.map((row) => ({ project: row.project, runs: Number(row.runs) })),
+    });
   }
 
   listQueuedConversationIds(): string[] {
