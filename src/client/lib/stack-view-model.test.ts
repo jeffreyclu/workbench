@@ -14,8 +14,9 @@ describe('createTaskStackViewModel', () => {
   it('uses the same status sections and ordering for attention and Workbench scopes', () => {
     const items = [item('pinned', 'pinned'), item('attention', 'ready'), item('canceled', 'canceled'), item('progress', 'in_progress')];
 
-    const attention = createTaskStackViewModel(items, 'attention');
-    const workbench = createTaskStackViewModel(items, 'workbench');
+    const totals = { progress: 1, attention: 2, pinned: 1 };
+    const attention = createTaskStackViewModel(items, 'attention', totals);
+    const workbench = createTaskStackViewModel(items, 'workbench', totals);
 
     expect(workbench).toEqual(attention);
     expect(attention.rows.filter((row) => row.type === 'header').map((row) => [row.label, row.count])).toEqual([
@@ -26,11 +27,17 @@ describe('createTaskStackViewModel', () => {
     expect(attention.items.map((entry) => entry.id)).toEqual(['progress', 'attention', 'canceled', 'pinned']);
   });
 
+  it('shows no header number without server totals', () => {
+    const rows = createTaskStackViewModel([item('progress', 'in_progress')], 'workbench').rows;
+
+    expect(rows.filter((row) => row.type === 'header').map((row) => row.count)).toEqual([undefined, undefined]);
+  });
+
   it('keeps the empty pinned section visible as a standing destination', () => {
     const rows = createTaskStackViewModel([], 'workbench').rows;
 
     expect(rows).toEqual([
-      { type: 'header', id: 'pinned-header', label: 'Pinned for you', count: 0, group: 'pinned' },
+      { type: 'header', id: 'pinned-header', label: 'Pinned for you', count: undefined, group: 'pinned' },
     ]);
   });
 });

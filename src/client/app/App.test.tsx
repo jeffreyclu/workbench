@@ -170,8 +170,8 @@ describe('primary navigation', () => {
       const url = String(input);
       const body = url.startsWith('/api/work-items?')
         ? { items: [pinnedItem], nextCursor: null, totalCount: 1, proposal: null }
-        : url.includes('/api/work-items/counts')
-          ? { active: 1, workbench: 0, archive: 0 }
+        : url === '/api/tab-counts'
+          ? { attention: { active: 1, archive: 0, groups: { progress: 0, attention: 0, pinned: 1 } }, workbench: { active: 0, archive: 0, groups: { progress: 0, attention: 0, pinned: 0 } }, conversations: { active: 0, archive: 0 } }
           : url.includes('/api/shared/conversations')
             ? { conversations: [] }
             : { messages: [] };
@@ -365,7 +365,8 @@ describe('shared room', () => {
       return header as HTMLElement;
     });
     expect(attentionHeader.textContent).toContain('Attention stack');
-    expect(attentionHeader.querySelector('.optically-centered-count > .optically-centered-number')).toHaveTextContent('1');
+    // Loaded pages undercount, so a conversation section header shows its label without a number.
+    expect(attentionHeader.querySelector('.optically-centered-count')).toBeNull();
   });
 
   it('renders an interjection inside the matching live agent stream', async () => {
@@ -590,7 +591,9 @@ describe('shared room', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><SharedWorkspace initialConversationId={conversationId} /></QueryClientProvider>);
 
-    expect(await screen.findByText('Claude · sonnet (standard) · personal · 1 in · 1 out · 2.0s · fallback from codex (quota)')).toBeTruthy();
+    expect(await screen.findByText('Claude · sonnet (standard) · personal · 1 in · 1 out · fallback from codex (quota)')).toBeTruthy();
+    // The duration is its own timer beside the badge, not part of the badge text.
+    expect(screen.getByLabelText('Run took 2s')).toBeTruthy();
   });
 
   it('keeps the approved-awaiting-promotion badge on the conversation card while promotion runs', async () => {
@@ -1794,12 +1797,12 @@ describe('shared room', () => {
     await act(async () => { await client.invalidateQueries({ queryKey: ['shared-messages', conversationId] }); });
     expect(pollCount).toBeGreaterThan(fetchesBeforeUpdate);
     expect(scrollTo).not.toHaveBeenCalled();
-    const jumpToLatest = await screen.findByRole('button', { name: /New activity · Jump to latest/i });
+    const jumpToLatest = await screen.findByRole('button', { name: /new updates? · Jump to latest/i });
     expect(jumpToLatest.parentElement).toHaveClass('conversation-thread-pane');
 
     fireEvent.click(jumpToLatest);
     expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'smooth' });
-    expect(screen.queryByRole('button', { name: /New activity · Jump to latest/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /new updates? · Jump to latest/i })).toBeNull();
     expect(scrollIntoView).not.toHaveBeenCalled();
     if (scrollToDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollTo', scrollToDescriptor);
     else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
@@ -2835,9 +2838,9 @@ describe('primary nav hover rail', () => {
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
     expect(document.querySelector('#primary-nav')?.textContent).not.toContain('Archive');
-    fireEvent.click(screen.getByRole('button', { name: /archive/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /archive/i }));
     expect(await screen.findByRole('heading', { name: 'Attention stack' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /archive/i }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('tab', { name: /archive/i }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('shows each archive filter count before its archived list loads', async () => {
@@ -2853,9 +2856,9 @@ describe('primary nav hover rail', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
-    expect(await screen.findByRole('button', { name: 'Archive 2' })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: 'Archive 2' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Workbench 0' }));
-    expect(await screen.findByRole('button', { name: 'Archive 4' })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: 'Archive 4' })).toBeTruthy();
   });
 
   it('keeps secondary destinations behind the mobile More control', async () => {
@@ -2879,7 +2882,7 @@ describe('primary nav hover rail', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
 
-    await screen.findByRole('button', { name: /archive/i });
+    await screen.findByRole('tab', { name: /archive/i });
     expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
   });
 });
@@ -3054,7 +3057,7 @@ describe('addressable navigation', () => {
     expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
     expect(window.location.pathname).toBe('/workbench');
 
-    fireEvent.click(screen.getByRole('button', { name: /archive/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /archive/i }));
     expect(await screen.findByRole('heading', { name: 'Workbench focus' })).toBeTruthy();
     expect(window.location.pathname).toBe('/workbench/archive');
 
