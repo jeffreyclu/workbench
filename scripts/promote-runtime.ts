@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { get as httpGet } from 'node:http';
 import { runtimeSourceFingerprint } from '../src/server/runtime-preview.js';
 import { markRuntimePromotionPending, publishRuntimeRelease } from '../src/server/runtime-release.js';
-import { promotionMustWaitForAgents } from '../src/server/runtime-promotion.js';
+import { promotionMustWaitForAgents, switchMustWaitForAgents } from '../src/server/runtime-promotion.js';
 import { auditDatabasePath } from '../src/server/audit-database.js';
 import { runMcpJamGate } from './mcpjam-check.js';
 
@@ -40,17 +40,17 @@ function activeAgentWork(): Promise<boolean | null> {
   });
 }
 
-async function waitForAgentIdle(): Promise<void> {
+async function waitForAgentIdle(message = 'Waiting for active Workbench agent work to finish before building the release…'): Promise<void> {
   let reported = false;
   for (;;) {
     const active = await activeAgentWork();
     // No live runtime is normal for the first installation. A responding live
     // runtime must drain Workbench-scoped work before build/preflight replaces
     // its backend. An agent working in another repository remains independent.
-    if (active !== true) return;
+    if (!switchMustWaitForAgents(active)) return;
     if (!reported) {
       reported = true;
-      console.log('Waiting for active Workbench agent work to finish before building the release…');
+      console.log(message);
     }
     await new Promise<void>((resolveWait) => setTimeout(resolveWait, 1_000));
   }
@@ -185,6 +185,9 @@ const build = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run'
 if (build.status !== 0) throw new Error(`Runtime build failed with exit code ${build.status ?? 1}.`);
 
 await preflightCandidate();
+// Work can start during the build and preflight window. Switching now would
+// interrupt it, so wait for the runtime to drain again immediately before.
+await waitForAgentIdle('Workbench agent work became active during the build; waiting for it to finish before switching…');
 publishRuntimeRelease(root, releaseId, runtimeSourceFingerprint(root), databasePath);
 markRuntimePromotionPending(root, releaseId);
 console.log(`Promoted Workbench runtime ${releaseId}. The stable gateway will switch to it after its health check.`);

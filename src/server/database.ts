@@ -133,7 +133,7 @@ const baseSchemaStatements = [
       instructions TEXT NOT NULL DEFAULT '',
       output TEXT NOT NULL DEFAULT '',
       error TEXT NOT NULL DEFAULT '',
-      failure_kind TEXT CHECK (failure_kind IN ('provider_refusal')),
+      failure_kind TEXT CHECK (failure_kind IN ('provider_refusal', 'runtime_promoted')),
       started_at TEXT,
       completed_at TEXT,
       created_at TEXT NOT NULL,
@@ -2695,6 +2695,29 @@ const schemaMigrations: readonly Migration[] = [
           PRIMARY KEY (provider, session_id, prompt_id, kind)
         );
       `);
+    },
+  },
+  {
+    // A run interrupted by a runtime promotion whose worktree is gone fails with
+    // its own durable kind. SQLite cannot alter a CHECK in place, so widen the
+    // recorded constraint text; the stored rows are unchanged and valid.
+    id: '098_agent_run_failure_kind_runtime_promoted',
+    apply(database) {
+      const row = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'").get() as { sql: string } | undefined;
+      const narrow = "failure_kind IN ('provider_refusal')";
+      if (!row?.sql.includes(narrow)) return;
+      const version = (database.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version;
+      // The documented procedure for changing only a constraint, which node:sqlite
+      // blocks unless defensive mode is lifted for these statements.
+      database.enableDefensive(false);
+      try {
+        database.exec('PRAGMA writable_schema = ON;');
+        database.prepare("UPDATE sqlite_master SET sql = replace(sql, ?, ?) WHERE type = 'table' AND name = 'agent_runs'")
+          .run(narrow, "failure_kind IN ('provider_refusal', 'runtime_promoted')");
+        database.exec(`PRAGMA schema_version = ${version + 1}; PRAGMA writable_schema = OFF;`);
+      } finally {
+        database.enableDefensive(true);
+      }
     },
   },
 ];

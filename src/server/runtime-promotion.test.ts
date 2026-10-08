@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isRuntimeApproval, promotionMustWaitForAgents } from './runtime-promotion.js';
+import { isRuntimeApproval, promotionMustWaitForAgents, switchMustWaitForAgents } from './runtime-promotion.js';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
 
@@ -76,5 +76,13 @@ describe('runtime drain state', () => {
     expect(repository.claimSharedMessage(promotion.id, ownerId, 60_000)).toBe(true);
     expect(repository.hasPromotionBlockingWork(ownerId)).toBe(false);
     database.close();
+  });
+});
+
+describe('pre-switch re-check', () => {
+  it('waits when work became active during the build and switches otherwise', () => {
+    expect(switchMustWaitForAgents(true)).toBe(true);
+    expect(switchMustWaitForAgents(false)).toBe(false);
+    expect(switchMustWaitForAgents(null)).toBe(false);
   });
 });

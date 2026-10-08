@@ -13,6 +13,7 @@ import { createExternalActionProcessGuard, externalActionGuardEnvironment, obser
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
+import { RUNTIME_PROMOTED_WAITING_REASON } from './repositories/run-repository.js';
 import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isManagedRunWorktree, isolatedRunWorkspaces, runWorktreeChangeStats, type ChangedFileStat, type RunWorkspaceBinding } from './run-worktree.js';
 import { buildAgentRunReviewHandoff, observedFiles, type ObservedRunEvent } from './review-handoff.js';
 import { classifyReviewDispatch } from './review-dispatch.js';
@@ -2174,7 +2175,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   repository.updateRun(run.id, { startedAt });
   repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'agent_runner' });
   repository.moveForAttention(item.id, 'bottom', `${run.agent} started ${run.kind}.`);
-  repository.addActivity(item.id, run.agent, 'progress', `Started ${run.kind}.`);
+  repository.addActivity(item.id, run.agent, 'progress', run.waitingReason === RUNTIME_PROMOTED_WAITING_REASON
+    ? `Resumed ${run.kind} after the runtime promotion (fresh attempt in the same worktree).`
+    : `Started ${run.kind}.`);
   // The request that kicked off this run already returned (executeAgentRun
   // runs fire-and-forget), and the audit middleware's realtime event fired
   // before this status flip happened. Without a second event here, the

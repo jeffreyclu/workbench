@@ -355,9 +355,50 @@ describe('WorkItemRepository', () => {
     repository.claimRun(run.id, 'runtime-a', 60_000);
     repository.claimSharedMessage(message.id, 'runtime-a', 60_000);
 
-    expect(repository.interruptOwnedWork('runtime-a', 'Runtime promoted.')).toEqual({ runIds: [run.id], messageIds: [message.id] });
+    expect(repository.interruptOwnedWork('runtime-a', 'Runtime promoted.')).toEqual({ runIds: [run.id], messageIds: [message.id], requeuedRunIds: [], failedRunIds: [run.id] });
     expect(repository.getRun(run.id)).toMatchObject({ status: 'failed', error: 'Runtime promoted.' });
     expect(repository.getSharedMessageById(message.id)).toMatchObject({ status: 'failed', error: 'Runtime promoted.' });
+  });
+
+  it('re-queues a per-run process interrupted by a promotion and lets the next runtime pick it up', () => {
+    const item = repository.create({ title: 'Survive promotion', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
+    repository.claimRun(run.id, 'runtime-a', 60_000);
+    repository.updateRun(run.id, { resolvedWorkspace: '/tmp/worktree-present' });
+
+    const result = repository.interruptOwnedWork('runtime-a', 'Runtime promoted.', { workspaceMissing: () => false, resumeDelayMs: 0 });
+
+    expect(result).toMatchObject({ requeuedRunIds: [run.id], failedRunIds: [] });
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'queued', error: '', failureKind: null, waitingReason: 'runtime promoted; resuming' });
+    expect(repository.dueWork().runIds).toContain(run.id);
+    // The scheduler's waiting-reason sync must keep the reason until the run starts.
+    expect(repository.getRun(run.id)?.waitingReason).toBe('runtime promoted; resuming');
+    expect(repository.claimRun(run.id, 'runtime-b', 60_000)).toBe(true);
+    repository.dueWork();
+    expect(repository.getRun(run.id)?.waitingReason).toBeNull();
+  });
+
+  it('delays the resume so the retiring runtime cannot re-claim the run', () => {
+    const item = repository.create({ title: 'Delay resume', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
+    repository.claimRun(run.id, 'runtime-a', 60_000);
+
+    repository.interruptOwnedWork('runtime-a', 'Runtime promoted.', { workspaceMissing: () => false });
+
+    expect(repository.dueWork().runIds).not.toContain(run.id);
+  });
+
+  it('fails an interrupted run with runtime_promoted when its worktree is gone', () => {
+    const item = repository.create({ title: 'Lost worktree', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
+    repository.claimRun(run.id, 'runtime-a', 60_000);
+    repository.updateRun(run.id, { resolvedWorkspace: '/tmp/worktree-gone' });
+
+    const result = repository.interruptOwnedWork('runtime-a', 'Runtime promoted.', { workspaceMissing: () => true });
+
+    expect(result).toMatchObject({ requeuedRunIds: [], failedRunIds: [run.id] });
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'failed', failureKind: 'runtime_promoted' });
+    expect(repository.getRun(run.id)?.error).toContain('Retry the run');
   });
 
   it('keeps fresh input, cache writes, cache reads, and output distinct in terminal-run insights', () => {

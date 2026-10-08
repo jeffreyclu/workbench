@@ -8,6 +8,9 @@ import type { AgentRunReviewDispatch } from '../../shared/review-dispatch.js';
 import type { ReviewLensLedgers } from '../../shared/review-harness.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
+/** Why a run interrupted by a runtime promotion waits for the next runtime. */
+export const RUNTIME_PROMOTED_WAITING_REASON = 'runtime promoted; resuming';
+
 export interface RunPatch {
   agent?: AgentRun['agent'];
   status?: AgentRun['status'];
@@ -546,6 +549,7 @@ export class RunRepository {
       UPDATE agent_runs SET waiting_reason = NULL
       WHERE waiting_reason IS NOT NULL
         AND NOT (status = 'running' AND waiting_reason LIKE 'waiting for the session%')
+        AND NOT (status = 'queued' AND waiting_reason = '${RUNTIME_PROMOTED_WAITING_REASON}')
         AND (status != 'queued' OR (${OPEN_PREREQUISITE_COUNT}) = 0)
     `).run();
   }

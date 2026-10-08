@@ -1,7 +1,9 @@
 import type { AgentRun, InsightsTimeframe, RunInsights, SharedMessage } from '../../shared/contracts.js';
 import type { WorkbenchDatabase } from '../database.js';
 import type { UnitOfWork } from '../unit-of-work.js';
-import { RunRepository } from '../repositories/run-repository.js';
+import { existsSync } from 'node:fs';
+import { isManagedRunWorktree } from '../run-worktree.js';
+import { RunRepository, RUNTIME_PROMOTED_WAITING_REASON } from '../repositories/run-repository.js';
 import type { TelemetryRepository } from '../repositories/telemetry-repository.js';
 import { summarizeCursing } from '../profanity.js';
 import { estimateCostUsd } from '../model-pricing.js';
@@ -187,20 +189,49 @@ export class ExecutionService {
   /**
    * A controlled runtime promotion intentionally terminates this process. Do
    * not leave its owned work marked live until lease recovery: that blocks the
-   * queue and falsely tells Jeffrey an agent is still working. Execute runs
-   * are never replayed automatically, so make the interruption explicit.
+   * queue and falsely tells Jeffrey an agent is still working.
+   *
+   * A per-run process (no linked chat message) is not a failure: it is
+   * re-queued as "runtime promoted; resuming" and the next runtime's scheduler
+   * starts a fresh attempt in the same run worktree. The restart is delayed
+   * past this process's exit so the retiring scheduler cannot re-claim it.
+   * Only a run whose isolated worktree is gone fails, with an explicit kind.
+   * Runs linked to a chat message and the messages themselves keep failing
+   * here; their recovery belongs to the session-turn path.
    */
-  interruptOwnedWork(ownerId: string, reason: string): { runIds: string[]; messageIds: string[] } {
+  interruptOwnedWork(
+    ownerId: string,
+    reason: string,
+    options: { workspaceMissing?: (path: string) => boolean; resumeDelayMs?: number } = {},
+  ): { runIds: string[]; messageIds: string[]; requeuedRunIds: string[]; failedRunIds: string[] } {
+    const workspaceMissing = options.workspaceMissing ?? ((path: string) => isManagedRunWorktree(path) && !existsSync(path));
     return this.unitOfWork.transaction(() => {
       const now = new Date().toISOString();
-      const runIds = (this.database.prepare(`SELECT id FROM agent_runs WHERE status = 'running' AND owner_id = ?`).all(ownerId) as Array<{ id: string }>).map(({ id }) => id);
+      const resumeAt = new Date(Date.now() + (options.resumeDelayMs ?? 15_000)).toISOString();
+      const runs = this.database.prepare(`SELECT id, message_id, resolved_workspace FROM agent_runs WHERE status = 'running' AND owner_id = ?`)
+        .all(ownerId) as Array<{ id: string; message_id: string | null; resolved_workspace: string | null }>;
       const messageIds = (this.database.prepare(`SELECT id FROM shared_messages
         WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude', 'palmyra')`).all(ownerId) as Array<{ id: string }>).map(({ id }) => id);
-      if (runIds.length) this.database.prepare(`UPDATE agent_runs SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL
-        WHERE status = 'running' AND owner_id = ?`).run(reason, now, ownerId);
+      const requeuedRunIds: string[] = [];
+      const failedRunIds: string[] = [];
+      for (const run of runs) {
+        if (run.message_id) {
+          failedRunIds.push(run.id);
+          this.database.prepare(`UPDATE agent_runs SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL WHERE id = ? AND status = 'running' AND owner_id = ?`).run(reason, now, run.id, ownerId);
+        } else if (run.resolved_workspace && workspaceMissing(run.resolved_workspace)) {
+          failedRunIds.push(run.id);
+          this.database.prepare(`UPDATE agent_runs SET status = 'failed', failure_kind = 'runtime_promoted', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL WHERE id = ? AND status = 'running' AND owner_id = ?`)
+            .run(`Workbench runtime promoted and this run's worktree ${run.resolved_workspace} no longer exists, so it could not resume. Retry the run to start it fresh.`, now, run.id, ownerId);
+        } else {
+          requeuedRunIds.push(run.id);
+          this.database.prepare(`UPDATE agent_runs SET status = 'queued', error = '', failure_kind = NULL, started_at = NULL, completed_at = NULL,
+            owner_id = NULL, lease_expires_at = NULL, next_attempt_at = ?, waiting_reason = ? WHERE id = ? AND status = 'running' AND owner_id = ?`)
+            .run(resumeAt, RUNTIME_PROMOTED_WAITING_REASON, run.id, ownerId);
+        }
+      }
       if (messageIds.length) this.database.prepare(`UPDATE shared_messages SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL
         WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude', 'palmyra')`).run(reason, now, ownerId);
-      return { runIds, messageIds };
+      return { runIds: runs.map(({ id }) => id), messageIds, requeuedRunIds, failedRunIds };
     });
   }
 

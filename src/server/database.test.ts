@@ -111,6 +111,7 @@ const EXPECTED_MIGRATIONS = [
   '095_agent_sessions',
   '096_terminal_session_imports',
   '097_terminal_hook_events',
+  '098_agent_run_failure_kind_runtime_promoted',
 ];
 
 describe('openDatabase', () => {
@@ -521,6 +522,24 @@ describe('openDatabase', () => {
     const upgraded = openDatabase(path);
     const tables = (upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'terminal_hook_%' ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name);
     expect(tables).toEqual(['terminal_hook_events', 'terminal_hook_sessions']);
+    upgraded.close();
+  });
+
+  it('allows runtime_promoted failure kinds when upgrading from 097', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.enableDefensive(false);
+    current.exec('PRAGMA writable_schema = ON;');
+    current.prepare("UPDATE sqlite_master SET sql = replace(sql, ?, ?) WHERE name = 'agent_runs'").run("'provider_refusal', 'runtime_promoted'", "'provider_refusal'");
+    current.exec(`PRAGMA schema_version = ${(current.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version + 1}; PRAGMA writable_schema = OFF;`);
+    current.enableDefensive(true);
+    current.prepare("DELETE FROM schema_migrations WHERE id = '098_agent_run_failure_kind_runtime_promoted'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect((upgraded.prepare("SELECT sql FROM sqlite_master WHERE name = 'agent_runs'").get() as { sql: string }).sql).toContain("'runtime_promoted'");
+    expect(upgraded.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: 'ok' });
     upgraded.close();
   });
 

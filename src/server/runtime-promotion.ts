@@ -11,6 +11,13 @@ export function promotionMustWaitForAgents(status: { runtimeWorkActive?: unknown
   return status.runtimeWorkActive === true;
 }
 
+/** The live runtime's answer just before the switch. Work that started during
+ * the build/preflight window must drain first; an unreachable runtime
+ * (null) is the first installation and has nothing to protect. */
+export function switchMustWaitForAgents(activeWork: boolean | null): boolean {
+  return activeWork === true;
+}
+
 export function isRuntimeApproval(message: string): boolean {
   return /^\s*(?:approve|publish|promote|deploy|ship)(?:\s+(?:the\s+)?)?(?:workbench\s+)?preview[.!]?\s*$/i.test(message);
 }

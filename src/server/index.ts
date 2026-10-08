@@ -89,7 +89,14 @@ const shutdown = () => {
   // A promotion is an intentional interruption, not a crash. Persist the
   // terminal state before killing child process groups so the next runtime
   // never displays ghost work for the lease-recovery grace period.
-  repository.interruptOwnedWork(OWNER_ID, 'Workbench runtime promoted while this agent was running. Retry or continue the conversation.');
+  scheduler?.stop();
+  const interrupted = repository.interruptOwnedWork(OWNER_ID, 'Workbench runtime promoted while this agent was running. Retry or continue the conversation.');
+  for (const runId of interrupted.requeuedRunIds) {
+    try {
+      const run = repository.getRun(runId);
+      if (run) repository.addActivity(run.workItemId, 'system', 'progress', `Interrupted ${run.kind} by a runtime promotion; re-queued to resume on the new runtime.`);
+    } catch { /* The interruption itself is durable; the note is best effort while stopping. */ }
+  }
   // Only per-run children stop here. Agent session hosts (agent-session.ts)
   // are detached on purpose and must survive this runtime; the next one
   // reattaches to them at boot.

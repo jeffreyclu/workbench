@@ -2623,8 +2623,8 @@ export class WorkItemRepository {
   }
 
   /** Mark work owned by a deliberately stopping runtime as interrupted now. */
-  interruptOwnedWork(ownerId: string, reason: string): { runIds: string[]; messageIds: string[] } {
-    return this.execution.interruptOwnedWork(ownerId, reason);
+  interruptOwnedWork(ownerId: string, reason: string, options?: Parameters<ExecutionService['interruptOwnedWork']>[2]): ReturnType<ExecutionService['interruptOwnedWork']> {
+    return this.execution.interruptOwnedWork(ownerId, reason, options);
   }
 
   /** Schedule a bounded retry for a run that failed transiently. Returns false when attempts are exhausted. */
