@@ -2112,7 +2112,7 @@ export async function replyInSharedRoom(
       const completedAt = new Date().toISOString();
       repository.updateRun(runId, { agent: result.agent, output: result.output, status: 'completed', completedAt, ...telemetry });
       const completedRun = repository.getRun(runId);
-      if (completedRun?.kind === 'review') {
+      if (completedRun && !completedRun.reviewHandoff) {
         const events = turnEvents().map((event) => ({ category: event.kind === 'file_write' ? 'agent_file_write' as const : event.kind === 'file_read' ? 'agent_file_read' as const : 'agent_tool_use' as const, detail: event.detail, streamKind: event.kind }));
         repository.recordRunReviewHandoff(buildAgentRunReviewHandoff(completedRun, result.output, events, completedAt));
       }

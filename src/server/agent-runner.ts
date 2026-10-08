@@ -1120,6 +1120,12 @@ export async function judgeExecutionProfile(prompt: string, cwd: string, signal?
   return selectPromptExecutionProfile(prompt);
 }
 
+/** Runner-observed event for the handoff; MCP responses keep their bounded text so learnings can be read back. */
+function observedEventFromAudit(entry: AgentAuditCandidate): ObservedRunEvent {
+  const result = entry.trace?.phase === 'response' ? JSON.stringify(entry.trace.payload ?? '').slice(0, 2_000) : undefined;
+  return { category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode, result };
+}
+
 export interface AgentAuditCandidate {
   category: 'agent_file_read' | 'agent_file_write' | 'agent_tool_use';
   detail: string;
@@ -2318,7 +2324,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       }, onAudit: (entries) => {
         for (const entry of entries) repository.addAuditEntry(entry.category, 'palmyra', entry.detail, item.id);
         for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, 'palmyra', 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
-        for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
+        for (const entry of entries) observedRunEvents.push(observedEventFromAudit(entry));
         if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
@@ -2344,7 +2350,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }, (entries, producingAgent) => {
       for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
       for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
-      for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
+      for (const entry of entries) observedRunEvents.push(observedEventFromAudit(entry));
       if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
         kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
         trace: entry.trace,
@@ -2370,7 +2376,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         if (run.messageId) repository.updateSharedMessage(run.messageId, telemetry);
       }, (entries, producingAgent) => {
         for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
-        for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
+        for (const entry of entries) observedRunEvents.push(observedEventFromAudit(entry));
         if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
@@ -2417,7 +2423,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       }, (entries, producingAgent) => {
         for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
         for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
-        for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
+        for (const entry of entries) observedRunEvents.push(observedEventFromAudit(entry));
         if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
           kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
           trace: entry.trace,
@@ -2451,7 +2457,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         const recordRetryAudit = (entries: AgentAuditCandidate[], producingAgent: AgentRun['agent']) => {
           for (const entry of entries) repository.addAuditEntry(entry.category, producingAgent, entry.detail, item.id);
           for (const entry of entries) repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, producingAgent, 'tool', { category: entry.category, kind: entry.streamKind ?? 'tool', detail: entry.detail });
-          for (const entry of entries) observedRunEvents.push({ category: entry.category, detail: entry.detail, streamKind: entry.streamKind, command: entry.command, exitCode: entry.exitCode });
+          for (const entry of entries) observedRunEvents.push(observedEventFromAudit(entry));
           if (run.messageId) addLiveAgentStreamEvents(repository, run.messageId, run.id, run.conversationId ?? null, entries.map((entry) => ({
             kind: entry.streamKind ?? (entry.category === 'agent_file_read' ? 'file_read' : entry.category === 'agent_file_write' ? 'file_write' : 'tool'), detail: entry.detail,
             trace: entry.trace,
@@ -2536,11 +2542,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }
     const completedAt = new Date().toISOString();
     const finishPatch = { agent: result.agent, status: 'completed' as const, output, completedAt, ...telemetry };
-    // A review saves the same handoff a coding run does, so its summary is
-    // on record for the next agent and for Jeffrey.
-    const finished = MUTATING_RUN_KINDS.has(run.kind) || run.kind === 'review'
-      ? repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt))
-      : repository.finishRun(run.id, ownerId, finishPatch);
+    // Every run kind saves a handoff, so its summary, blockers, and learnings
+    // are on record for the next agent and for Jeffrey.
+    const finished = repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt));
     if (!finished) return;
     repository.recordMemoryCitations(output, { runId: run.id, messageId: run.messageId, conversationId: run.conversationId });
     if (executionPlan) repository.createExecutionPlan(item.id, executionPlan.summary, executionPlan.tasks);

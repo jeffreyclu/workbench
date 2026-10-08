@@ -2474,6 +2474,46 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Handoff format 2 adds blockers, learnings, and prior art for every run
+    // kind. SQLite cannot relax the format_version = 1 CHECK in place, so the
+    // table is rebuilt; existing rows keep their data and read the new
+    // columns as empty arrays.
+    id: '087_agent_run_handoff_v2',
+    apply(database) {
+      database.exec(`
+        DROP TRIGGER IF EXISTS agent_run_review_handoffs_immutable;
+        ALTER TABLE agent_run_review_handoffs RENAME TO agent_run_review_handoffs_v1;
+        CREATE TABLE agent_run_review_handoffs (
+          agent_run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+          format_version INTEGER NOT NULL DEFAULT 2 CHECK (format_version IN (1, 2)),
+          summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
+          changes_json TEXT NOT NULL CHECK (json_valid(changes_json) AND json_type(changes_json) = 'array'),
+          acceptance_criteria_json TEXT NOT NULL CHECK (json_valid(acceptance_criteria_json) AND json_type(acceptance_criteria_json) = 'array'),
+          contract_changes_json TEXT NOT NULL CHECK (json_valid(contract_changes_json) AND json_type(contract_changes_json) = 'array'),
+          verification_json TEXT NOT NULL CHECK (json_valid(verification_json) AND json_type(verification_json) = 'array'),
+          uncertainties_json TEXT NOT NULL CHECK (json_valid(uncertainties_json) AND json_type(uncertainties_json) = 'array'),
+          tradeoffs_json TEXT NOT NULL CHECK (json_valid(tradeoffs_json) AND json_type(tradeoffs_json) = 'array'),
+          blockers_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(blockers_json) AND json_type(blockers_json) = 'array'),
+          learnings_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(learnings_json) AND json_type(learnings_json) = 'array'),
+          prior_art_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(prior_art_json) AND json_type(prior_art_json) = 'array'),
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO agent_run_review_handoffs (
+          agent_run_id, format_version, summary, changes_json, acceptance_criteria_json,
+          contract_changes_json, verification_json, uncertainties_json, tradeoffs_json, created_at
+        ) SELECT agent_run_id, format_version, summary, changes_json, acceptance_criteria_json,
+          contract_changes_json, verification_json, uncertainties_json, tradeoffs_json, created_at
+        FROM agent_run_review_handoffs_v1;
+        DROP TABLE agent_run_review_handoffs_v1;
+        CREATE TRIGGER agent_run_review_handoffs_immutable
+        BEFORE UPDATE ON agent_run_review_handoffs
+        BEGIN
+          SELECT RAISE(ABORT, 'agent run review handoffs are immutable');
+        END;
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

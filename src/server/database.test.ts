@@ -100,6 +100,7 @@ const EXPECTED_MIGRATIONS = [
   '084_agent_run_waiting_reason',
   '085_agent_run_prompt_size',
   '086_memory_usage_metrics',
+  '087_agent_run_handoff_v2',
 ];
 
 describe('openDatabase', () => {
@@ -1176,6 +1177,29 @@ describe('openDatabase', () => {
     expect(columns).toContain('commit_hash');
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_workspace_diff_snapshots_agent_run'").get()).toBeTruthy();
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '060_workspace_diff_snapshot_provenance'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('upgrades a recorded v1 handoff to format 2 columns from migration 086', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec(`INSERT INTO work_items (id, title, queue_position, created_at, updated_at) VALUES ('old-item', 'Old', 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+      INSERT INTO agent_runs (id, work_item_id, kind, requested_target, agent, status, created_at) VALUES ('run-old', 'old-item', 'execute', 'codex', 'codex', 'completed', '2026-01-01T00:00:00.000Z');`);
+    current.exec('DROP TABLE agent_run_review_handoffs;');
+    current.exec(`CREATE TABLE agent_run_review_handoffs (
+      agent_run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE, format_version INTEGER NOT NULL DEFAULT 1 CHECK (format_version = 1), summary TEXT NOT NULL,
+      changes_json TEXT NOT NULL, acceptance_criteria_json TEXT NOT NULL, contract_changes_json TEXT NOT NULL,
+      verification_json TEXT NOT NULL, uncertainties_json TEXT NOT NULL, tradeoffs_json TEXT NOT NULL, created_at TEXT NOT NULL
+    );`);
+    current.prepare("INSERT INTO agent_run_review_handoffs VALUES ('run-old', 1, 'Old run.', '[]', '[]', '[]', '[]', '[]', '[]', '2026-01-01T00:00:00.000Z')").run();
+    current.prepare("DELETE FROM schema_migrations WHERE id = '087_agent_run_handoff_v2'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT format_version, summary, blockers_json, learnings_json, prior_art_json FROM agent_run_review_handoffs WHERE agent_run_id = 'run-old'").get())
+      .toEqual({ format_version: 1, summary: 'Old run.', blockers_json: '[]', learnings_json: '[]', prior_art_json: '[]' });
+    expect(() => upgraded.prepare("UPDATE agent_run_review_handoffs SET summary = 'x'").run()).toThrow(/immutable/);
     upgraded.close();
   });
 

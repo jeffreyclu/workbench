@@ -2416,3 +2416,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 /* The delegated-review markers carry their own words, so with motion reduced the
    icon holds still rather than disappearing. */
 @media (prefers-reduced-motion: reduce) { .diff-review-queue-delegating, .diff-review-diff-block-delegating .spin, .review-canvas-node-delegating .spin { animation: none; } }
+.run-handoff-card { display: grid; gap: 4px; margin-top: 8px; padding: 8px 10px; border: 1px solid #35382d; border-radius: 8px; background: #181915; }
+.run-handoff-card p { margin: 0; color: #d9dacf; font-size: 12px; line-height: 1.45; }
+.run-handoff-facts { color: #85877b; font: 10px 'DM Mono'; }
+.run-handoff-card summary { cursor: pointer; color: #a7ba6d; font-size: 11px; }
+.run-handoff-card ul { margin: 4px 0 0; padding-left: 18px; color: #c8c9be; font-size: 11px; }

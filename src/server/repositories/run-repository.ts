@@ -37,7 +37,7 @@ function mapReviewHandoffRow(row: Record<string, string | null>): AgentRunReview
   if (!row.handoff_agent_run_id) return null;
   return {
     agentRunId: row.handoff_agent_run_id,
-    formatVersion: Number(row.handoff_format_version) as 1,
+    formatVersion: Number(row.handoff_format_version) as 1 | 2,
     summary: row.handoff_summary!,
     changes: JSON.parse(row.handoff_changes_json!) as AgentRunReviewHandoff['changes'],
     acceptanceCriteria: JSON.parse(row.handoff_acceptance_criteria_json!) as AgentRunReviewHandoff['acceptanceCriteria'],
@@ -45,6 +45,9 @@ function mapReviewHandoffRow(row: Record<string, string | null>): AgentRunReview
     verification: JSON.parse(row.handoff_verification_json!) as AgentRunReviewHandoff['verification'],
     uncertainties: JSON.parse(row.handoff_uncertainties_json!) as AgentRunReviewHandoff['uncertainties'],
     tradeoffs: JSON.parse(row.handoff_tradeoffs_json!) as AgentRunReviewHandoff['tradeoffs'],
+    blockers: JSON.parse(row.handoff_blockers_json ?? '[]') as string[],
+    learnings: JSON.parse(row.handoff_learnings_json ?? '[]') as string[],
+    priorArt: JSON.parse(row.handoff_prior_art_json ?? '[]') as string[],
     createdAt: row.handoff_created_at!,
   };
 }
@@ -114,6 +117,9 @@ export class RunRepository {
         handoff.verification_json AS handoff_verification_json,
         handoff.uncertainties_json AS handoff_uncertainties_json,
         handoff.tradeoffs_json AS handoff_tradeoffs_json,
+        handoff.blockers_json AS handoff_blockers_json,
+        handoff.learnings_json AS handoff_learnings_json,
+        handoff.prior_art_json AS handoff_prior_art_json,
         handoff.created_at AS handoff_created_at
         FROM agent_runs
         LEFT JOIN agent_run_review_handoffs AS handoff ON handoff.agent_run_id = agent_runs.id
@@ -125,12 +131,14 @@ export class RunRepository {
   recordReviewHandoff(handoff: AgentRunReviewHandoff): void {
     this.database.prepare(`INSERT INTO agent_run_review_handoffs (
       agent_run_id, format_version, summary, changes_json, acceptance_criteria_json,
-      contract_changes_json, verification_json, uncertainties_json, tradeoffs_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      contract_changes_json, verification_json, uncertainties_json, tradeoffs_json,
+      blockers_json, learnings_json, prior_art_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(handoff.agentRunId, handoff.formatVersion, handoff.summary,
         JSON.stringify(handoff.changes), JSON.stringify(handoff.acceptanceCriteria),
         JSON.stringify(handoff.contractChanges), JSON.stringify(handoff.verification),
-        JSON.stringify(handoff.uncertainties), JSON.stringify(handoff.tradeoffs), handoff.createdAt);
+        JSON.stringify(handoff.uncertainties), JSON.stringify(handoff.tradeoffs),
+        JSON.stringify(handoff.blockers), JSON.stringify(handoff.learnings), JSON.stringify(handoff.priorArt), handoff.createdAt);
   }
 
   get(id: string): AgentRun | null {

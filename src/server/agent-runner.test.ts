@@ -815,7 +815,7 @@ fi`;
     expect(repository.getRun(run.id)!.promptSize!.repoRoutingBlockChars).toBeGreaterThan(0);
     expect(repository.getRun(run.id)?.reviewHandoff).toEqual(expect.objectContaining({
       agentRunId: run.id,
-      formatVersion: 1,
+      formatVersion: 2,
       verification: [],
       uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'],
     }));

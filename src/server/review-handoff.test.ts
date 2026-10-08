@@ -42,4 +42,26 @@ describe('buildAgentRunReviewHandoff', () => {
 
     expect(handoff.summary).toBe('Verdict: request changes, 1 blocking.');
   });
+
+  it('builds format 2 with blockers, learnings, and prior art for any run kind', () => {
+    const events: ObservedRunEvent[] = [
+      { category: 'agent_tool_use', detail: 'git push', streamKind: 'tool', command: 'git push origin main', exitCode: 126 },
+      { category: 'agent_tool_use', detail: 'workbench.record_learning', streamKind: 'tool', result: '{"citation":"[workbench-operating-practices.md#12]"}' },
+      { category: 'agent_tool_use', detail: 'workbench.record_learning', streamKind: 'tool' },
+    ];
+    const output = '## Problem\nThe fix is in.\n\n## Context\n- Blockers: push was blocked by the external-action guard.\n- Blockers: none\n- Followed [workbench-operating-practices.md#12] and [parse-dont-pattern-match.md#3].';
+
+    const handoff = buildAgentRunReviewHandoff(run({ kind: 'research' }), output, events, '2026-08-27T01:00:00.000Z');
+
+    expect(handoff.formatVersion).toBe(2);
+    expect(handoff.blockers).toEqual(['Blockers: push was blocked by the external-action guard.', 'Refused: git push origin main']);
+    expect(handoff.learnings).toEqual(['workbench-operating-practices.md#12']);
+    expect(handoff.priorArt).toEqual(['parse-dont-pattern-match.md#3']);
+  });
+
+  it('leaves blockers, learnings, and prior art empty when the run shows none', () => {
+    const handoff = buildAgentRunReviewHandoff(run(), 'All good.\nVerdict: 1 blocking finding.', [], '2026-08-27T01:00:00.000Z');
+
+    expect(handoff).toMatchObject({ blockers: [], learnings: [], priorArt: [] });
+  });
 });

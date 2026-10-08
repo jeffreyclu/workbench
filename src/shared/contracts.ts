@@ -1074,7 +1074,8 @@ export interface AgentRunReviewHandoffVerification {
 /** Immutable reviewer map captured when a coding run completes. */
 export interface AgentRunReviewHandoff {
   agentRunId: string;
-  formatVersion: 1;
+  /** 1 predates blockers, learnings, and prior art; those read as empty. */
+  formatVersion: 1 | 2;
   /** Agent-provided navigation text. It is never verification evidence. */
   summary: string;
   changes: AgentRunReviewHandoffChange[];
@@ -1083,6 +1084,12 @@ export interface AgentRunReviewHandoff {
   verification: AgentRunReviewHandoffVerification[];
   uncertainties: string[];
   tradeoffs: Array<{ decision: string; rationale: string }>;
+  /** What stopped or limited the run: final-answer blocker lines and refused commands. */
+  blockers: string[];
+  /** Citation ids (`file.md#N`) written by record_learning during this run. */
+  learnings: string[];
+  /** Citation ids (`file.md#N`) the run cited in its output. */
+  priorArt: string[];
   createdAt: string;
 }
 
