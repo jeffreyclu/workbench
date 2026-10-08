@@ -727,3 +727,19 @@ In session mode (WORKBENCH_PERSISTENT_SESSIONS=1), Workbench-side memory prefetc
 To exercise real agent dispatch against a copied Workbench database, start scripts/preview-api.ts. It uses previewRuntimeCapabilities (src/server/runtime-capabilities.ts): executeAgents true, ownScheduler false, runDiscoveryCatchUp false. So the copy's queued work never runs. Do not use src/server/index.ts: it uses live capabilities and owns the scheduler. Do not use scripts/e2e-api.ts either: e2eRuntimeCapabilities turns agent dispatch off. Also, vitest only includes src/**/*.test.ts(x) (vitest.config.ts:6). Logic for a new scripts/ entry point must live in src/ to be testable. Verified in source 2026-10-08.
 
 *Provenance: 98ce376e-6ba5-4074-ae35-b2762c6355b1*
+
+### <a id="51"></a>51. Session turns write their usage diagnostic only at turn end
+
+In src/server/shared-room.ts, persistent-session turns (WORKBENCH_PERSISTENT_SESSIONS=1) write their only 'usage' diagnostic in runSharedSessionTurn's .then, after the turn completes (around line 2337). The session sink's onUsage and onEvents update the run but write no agent_run_diagnostics row. Per-run Claude and Codex paths write a 'usage' diagnostic on every streamed usage update. So any latency metric taken from MIN(agent_run_diagnostics.created_at) is really the whole turn's duration for sessions and the first-token time for per-run, which makes sessions look slower. scripts/session-cost-report.ts (commit 6fe891e) has this bias. Before comparing session and per-run timing, write a diagnostic on the session's first provider event, or use a timestamp other than diagnostics.
+
+*Provenance: d3551fa8-53fd-4ddd-a112-c013165a67de*
+
+### <a id="52"></a>52. Session-turn start-to-first-activity needs a first-event diagnostic
+
+Persistent-session turns write their only `usage` diagnostic when the turn ends, so a start-to-first-activity metric built on the earliest `tool` or `usage` diagnostic reports the whole turn duration for sessions. Fix: shared-room.ts writes one `tool` diagnostic with `{ category: 'session_first_event' }` on the first provider event of a turn (via an optional onFirstEvent hook in the session turn reader). Use kind `tool`, not a new kind: the diagnostics table CHECK constraint allows only `prompt`, `usage` and `tool`, so a new kind would need a migration. Keep excluding `prompt` diagnostics from the report, since they are written at run start and always give 0s.
+
+### <a id="53"></a>53. Persistent sessions: a busy session ignores a changed worktree and shares one capability file
+
+ensureSession (src/server/agent-session.ts) restarts the host with --resume on a cwd change only when the session state is not 'turn'. If another turn (for example a chat reply) is running on the same conversation and agent, a task run in a different worktree reuses that process and executes in the other turn's cwd, possibly the primary checkout. Overlapping turns also share one capability file: writeTurnCapability overwrites the grant and the first turn to finish clears it for the other. Any change that routes more run kinds onto the conversation session (commit 5571956, task 66235d6b) must serialize turns per session or isolate busy-session runs. Review of that commit found this; unverified whether an execute run can overlap a chat turn in practice.
+
+*Provenance: 66235d6b-8e27-4e05-9294-1b4bcbe49df4*
