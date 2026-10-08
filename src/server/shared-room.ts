@@ -811,6 +811,8 @@ export type SharedReplyGrounding = {
 type SharedReplyMemory = {
   query: string;
   attempted: boolean;
+  /** Prefetch was skipped at dispatch because persistent sessions search memory themselves; a per-run agent must prefetch again. */
+  deferredToSession?: boolean;
   resolved: Promise<ReturnType<typeof selectDurableMemoryEvidence>>;
 };
 
@@ -1414,10 +1416,12 @@ export function dispatchNextSharedTurn(repository: WorkItemRepository, conversat
     projectName: linkedItem?.projectName,
   });
   const memoryPlan = durableMemoryRetrievalPlan(currentMessage);
-  const memoryAttempted = shouldPrefetchDurableMemory(taskKind, currentMessage);
+  const deferredToSession = persistentSessionsEnabled();
+  const memoryAttempted = !deferredToSession && shouldPrefetchDurableMemory(taskKind, currentMessage);
   const memory: SharedReplyMemory = {
     query: memoryQuery,
     attempted: memoryAttempted,
+    ...(deferredToSession ? { deferredToSession } : {}),
     resolved: memoryAttempted
       ? repository.searchActivityMemory(memoryQuery, memoryPlan.candidateLimit, {
         refresh: false,
@@ -2090,10 +2094,14 @@ export async function replyInSharedRoom(
       taskTitle: linkedItem?.title,
       projectName: linkedItem?.projectName,
     });
-    const memoryQuery = memorySnapshot?.query ?? automaticMemoryQuery;
+    // A persistent session calls recall_context itself, so Workbench injects no
+    // memory bodies for it. A per-run agent still gets the prefetch.
+    const sessionMode = persistentSessionsEnabled() && (agent === 'claude' || agent === 'codex');
+    const usableMemorySnapshot = memorySnapshot?.deferredToSession ? undefined : memorySnapshot;
+    const memoryQuery = usableMemorySnapshot?.query ?? automaticMemoryQuery;
     const memoryPlan = durableMemoryRetrievalPlan(latestUserMessage);
-    const memoryAttempted = memorySnapshot?.attempted ?? shouldPrefetchDurableMemory(runKind, latestUserMessage);
-    const memoryPromise = memorySnapshot?.resolved ?? (memoryAttempted
+    const memoryAttempted = !sessionMode && (usableMemorySnapshot?.attempted ?? shouldPrefetchDurableMemory(runKind, latestUserMessage));
+    const memoryPromise = usableMemorySnapshot?.resolved ?? (memoryAttempted
       ? repository.searchActivityMemory(memoryQuery, memoryPlan.candidateLimit, {
         refresh: false,
         projectKey: !isExplicitMemoryRequest(latestUserMessage) && linkedItem?.projectName ? projectKey(linkedItem.projectName) || undefined : undefined,
@@ -2130,7 +2138,6 @@ export async function replyInSharedRoom(
     // A session's provider keeps one environment for its whole life, so its
     // guard is the session's own and runSharedSessionTurn writes each turn's
     // capability into it. Only the per-run path gets a per-turn guard.
-    const sessionMode = persistentSessionsEnabled() && (agent === 'claude' || agent === 'codex');
     if (!sessionMode) {
       externalActionGuard = createExternalActionProcessGuard(externalAuthorization);
       stopExternalActionObserver = observeExternalActionRefusals(externalActionGuard, onExternalActionRefusal);
@@ -2144,10 +2151,14 @@ export async function replyInSharedRoom(
       kind: 'decision',
       detail: `Supervisor granted ${externalAuthorization.capability.actionIds.join(', ')} ${externalAuthorization.capability.source === 'conversation_lease' ? 'from this conversation\'s active five-minute lease' : "from Jeffrey's current command"}.${requiredWorkbenchTools.length ? ` Required Workbench tools preflighted: ${requiredWorkbenchTools.join(', ')}.` : ''}${externalAuthorization.capability.requiredExecutables.length ? ` Required executables preflighted: ${externalAuthorization.capability.requiredExecutables.join(', ')}.` : ''}`,
     }]);
-    const memoryContext = durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget, memoryPlan.inlineBodies);
-    const shortTermMemory = repository.getSharedContextWithItems(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });
+    const memoryContext = sessionMode ? '' : durableMemoryPrompt(memoryEvidence, memoryPlan.promptBudget, memoryPlan.inlineBodies);
+    const shortTermMemory = sessionMode
+      ? { text: '', items: [] }
+      : repository.getSharedContextWithItems(target.conversationId, { conversationId: target.conversationId, workItemId: linkedItem?.id, query: latestUserMessage });
     const shortTermContext = shortTermMemory.text;
-    const retrievedMemory = retrievedMemoryDetailFor(memoryQuery, memoryEvidence, shortTermMemory.items);
+    const retrievedMemory = sessionMode
+      ? { count: null, detail: { query: memoryQuery, items: [], shortTermItems: [], agentDriven: true } }
+      : retrievedMemoryDetailFor(memoryQuery, memoryEvidence, shortTermMemory.items);
     repository.updateSharedMessage(messageId, {
       retrievedMemoryCount: retrievedMemory.count,
       retrievedMemoryDetail: retrievedMemory.detail,
@@ -2195,7 +2206,7 @@ export async function replyInSharedRoom(
       sharedContextChars: shortTermContext.length,
       connectionContextChars: connectionContext.length,
       conversationMessageCount: thread.length,
-      retrievedMemoryCount: retrievedMemory.count,
+      retrievedMemoryCount: retrievedMemory.count ?? 0,
       shortTermMemoryCount: shortTermMemory.items.length,
       longTermMemoryCount: retrievedMemoryCountForAttempt(memoryAttempted, memoryEvidence),
       retrievedMemoryChars: memoryContext.length,

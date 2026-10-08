@@ -1339,6 +1339,8 @@ export interface RetrievedMemoryDetail {
   items: RetrievedMemoryItem[];
   /** Always-injected short-term context (open conversations), never counted as retrieved. */
   shortTermItems?: RetrievedMemoryItem[];
+  /** Persistent session: Workbench injected nothing; the agent calls recall_context itself, so the count of 0 is not a miss. */
+  agentDriven?: boolean;
 }
 export interface PublishedArtifact { id: string; url: string; title: string; }
 

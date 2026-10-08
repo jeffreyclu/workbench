@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +12,7 @@ import { reviewHarnessPrompt } from '../shared/review-harness.js';
 import { personaBody } from './personas.js';
 import { ensureSession, readAgentSessionStatus, sessionExternalActionGuard, submitTurn } from './agent-session.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
-import { accountProfileForSharedReply, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { accountProfileForSharedReply, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -1422,5 +1422,26 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(finished.status).toBe('completed');
     expect(finished.body).toMatch(/^reply 1 from \d+$/);
     expect(spawns()).toHaveLength(1);
+  }, 30_000);
+
+  it('injects no memory bodies in a session turn and records the memory as agent-driven', async () => {
+    const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    process.env.WORKBENCH_PERSISTENT_SESSIONS = '1';
+    try {
+      const conversation = repository.createConversation('Room');
+      repository.createSharedMessage('jeffrey', 'What did we decide earlier about the memory ranking work?', 'completed', conversation.id, [], 'claude');
+      const reply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+      const searchMemory = vi.spyOn(repository, 'searchActivityMemory');
+      const shortTerm = vi.spyOn(repository, 'getSharedContextWithItems');
+      await replyInSharedRoom(repository, 'claude', reply.id);
+      expect(searchMemory).not.toHaveBeenCalled();
+      expect(shortTerm).not.toHaveBeenCalled();
+      const finished = repository.getSharedMessageById(reply.id)!;
+      expect(finished.retrievedMemoryCount).toBeNull();
+      expect(repository.getRetrievedMemoryDetail(reply.id)).toMatchObject({ items: [], shortTermItems: [], agentDriven: true });
+    } finally {
+      if (saved === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      else process.env.WORKBENCH_PERSISTENT_SESSIONS = saved;
+    }
   }, 30_000);
 });
