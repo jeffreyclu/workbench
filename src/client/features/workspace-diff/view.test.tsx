@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { socketTransport } from '../../data/socket-transport.js';
 import type { AgentRunReviewHandoff, DiffHunkReview, WorkspaceDiffFile } from '../../../shared/contracts.js';
 import { contentHashOfLines } from '../../../shared/review-decisions.js';
 import type { WorkspaceDiffScope } from '../../data/source-client.js';
@@ -10,7 +11,6 @@ import type { ReviewAssistTaskIntent } from '../diff-review/review-assist.js';
 import { WorkspaceDiffView } from './view.js';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-const sse = (events: unknown[]) => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 const publish = { branch: 'review', hasOrigin: true, ahead: 0, hasChanges: true, reason: null };
 
 function workspaceDiff(files: WorkspaceDiffFile[], revision = 'review-revision') {
@@ -494,14 +494,18 @@ describe('WorkspaceDiffView decision queue', () => {
       if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file], 'jump-revision') });
       if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
       if (url.endsWith('/api/review-assist/lookup')) return json({ answer: null });
-      if (url.endsWith('/api/review-assist/stream')) return sse([
-        { type: 'delta', text: 'This decision only touches ' },
-        { type: 'delta', text: 'local formatting.' },
-        { type: 'done', answer: 'This decision only touches local formatting.' },
-      ]);
       throw new Error(`Unexpected request: ${url} ${init?.method ?? ''}`);
     });
     renderView(fetchMock);
+
+    vi.spyOn(socketTransport, 'request').mockImplementation(async (_operation, input, options) => {
+      const request = input as { path?: string };
+      if (request.path !== '/api/review-assist/stream') throw new Error(`Unexpected socket request: ${request.path ?? 'unknown'}`);
+      options?.onProgress?.(`data: ${JSON.stringify({ type: 'delta', text: 'This decision only touches ' })}\n\n`);
+      options?.onProgress?.(`data: ${JSON.stringify({ type: 'delta', text: 'local formatting.' })}\n\n`);
+      options?.onProgress?.(`data: ${JSON.stringify({ type: 'done', answer: 'This decision only touches local formatting.' })}\n\n`);
+      return { status: 200, contentType: 'text/event-stream', body: '', encoding: 'utf8' };
+    });
 
     await findSelectedDecision('Changes behavior in src/local.ts.');
     await openDecisionDetail(1);

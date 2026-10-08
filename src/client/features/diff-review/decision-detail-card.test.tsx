@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { socketTransport } from '../../data/socket-transport.js';
 import type { ReviewDecision } from './logic.js';
 import { DiffReviewDecisionDetailCard } from './decision-detail-card.js';
 
@@ -25,7 +26,15 @@ const decision: ReviewDecision = {
 
 const frame = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-const sse = (events: unknown[]) => new Response(events.map(frame).join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+
+function mockReviewAssistStream(events: unknown[]) {
+  return vi.spyOn(socketTransport, 'request').mockImplementation(async (_operation, input, options) => {
+    const request = input as { path?: string };
+    if (request.path !== '/api/review-assist/stream') throw new Error(`Unexpected socket request: ${request.path ?? 'unknown'}`);
+    for (const event of events) options?.onProgress?.(frame(event));
+    return { status: 200, contentType: 'text/event-stream', body: '', encoding: 'utf8' };
+  });
+}
 
 function renderCard(taskIntent: { title: string; description: string } | null = null, autoScore?: { answer: string | null; error: string | null }) {
   const client = new QueryClient();
@@ -88,9 +97,7 @@ describe('diff review decision detail', () => {
   });
 
   it('shows the model answer after an on-demand assist action succeeds', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith('/api/review-assist/stream')
-      ? sse([{ type: 'delta', text: 'This looks ' }, { type: 'delta', text: 'safe.' }, { type: 'done', answer: 'This looks safe.' }])
-      : json({ answer: null }))));
+    mockReviewAssistStream([{ type: 'delta', text: 'This looks ' }, { type: 'delta', text: 'safe.' }, { type: 'done', answer: 'This looks safe.' }]);
     renderCard();
 
     fireEvent.click(screen.getByRole('button', { name: 'Explain this decision' }));
@@ -104,18 +111,14 @@ describe('diff review decision detail', () => {
     // analysis cannot see that and would otherwise narrow this to null.
     let releaseTail!: () => void;
     const tail = new Promise<void>((resolve) => { releaseTail = resolve; });
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      if (!String(input).endsWith('/api/review-assist/stream')) return json({ answer: null });
-      const stream = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          controller.enqueue(new TextEncoder().encode(frame({ type: 'delta', text: 'Partial answer so far.' })));
-          await tail;
-          controller.enqueue(new TextEncoder().encode(frame({ type: 'done', answer: 'Partial answer so far. Complete.' })));
-          controller.close();
-        },
-      });
-      return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
-    }));
+    vi.spyOn(socketTransport, 'request').mockImplementation(async (_operation, input, options) => {
+      const request = input as { path?: string };
+      if (request.path !== '/api/review-assist/stream') throw new Error(`Unexpected socket request: ${request.path ?? 'unknown'}`);
+      options?.onProgress?.(frame({ type: 'delta', text: 'Partial answer so far.' }));
+      await tail;
+      options?.onProgress?.(frame({ type: 'done', answer: 'Partial answer so far. Complete.' }));
+      return { status: 200, contentType: 'text/event-stream', body: '', encoding: 'utf8' };
+    });
     renderCard();
 
     fireEvent.click(screen.getByRole('button', { name: 'Explain this decision' }));
@@ -128,9 +131,7 @@ describe('diff review decision detail', () => {
   });
 
   it('surfaces a mid-stream failure as a visible error rather than a half-written answer', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith('/api/review-assist/stream')
-      ? sse([{ type: 'delta', text: 'Partial…' }, { type: 'error', message: 'AI review assist stopped unexpectedly.' }])
-      : json({ answer: null }))));
+    mockReviewAssistStream([{ type: 'delta', text: 'Partial…' }, { type: 'error', message: 'AI review assist stopped unexpectedly.' }]);
     renderCard();
 
     fireEvent.click(screen.getByRole('button', { name: 'Explain this decision' }));
@@ -141,10 +142,7 @@ describe('diff review decision detail', () => {
   });
 
   it('keeps a failed assist request visible with a retry action instead of a neutral fallback', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: false, status: 500, headers: new Headers({ 'content-type': 'application/json' }),
-      json: () => Promise.resolve({ error: 'AI review assist failed.' }),
-    }));
+    vi.spyOn(socketTransport, 'request').mockResolvedValue({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'AI review assist failed.' }), encoding: 'utf8' });
     renderCard();
 
     fireEvent.click(screen.getByRole('button', { name: 'What could break?' }));
@@ -154,9 +152,7 @@ describe('diff review decision detail', () => {
     vi.unstubAllGlobals();
   });
   it('renders the 0-100 risk score on demand from the score action', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith('/api/review-assist/stream')
-      ? sse([{ type: 'done', answer: 'SCORE: 72\nTouches a shared auth boundary with no test coverage.' }])
-      : json({ answer: null }))));
+    mockReviewAssistStream([{ type: 'done', answer: 'SCORE: 72\nTouches a shared auth boundary with no test coverage.' }]);
     renderCard();
 
     fireEvent.click(screen.getByRole('button', { name: 'Score risk' }));
@@ -210,9 +206,7 @@ describe('diff review decision detail', () => {
   });
 
   it('does not invent a number when the model ignores the score format', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith('/api/review-assist/stream')
-      ? sse([{ type: 'done', answer: 'I cannot assess this change.' }])
-      : json({ answer: null }))));
+    mockReviewAssistStream([{ type: 'done', answer: 'I cannot assess this change.' }]);
     renderCard();
 
     fireEvent.click(screen.getByRole('button', { name: 'Score risk' }));

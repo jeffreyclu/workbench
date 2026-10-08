@@ -963,3 +963,13 @@ connector list rather than skipping that row.
 The generalizable test is whether a file sits on the feature's own path or on a neighbouring surface
 the feature was pushed into. "Backend file" and "Python file" are not the boundary; "not the thing
 Jeffrey asked to build" is.
+
+
+## <a id="42"></a>42. Streaming client tests must mock the socket progress channel
+
+*Confirmed 2026-10-08.* `requestStream()` sends `application.command` through
+`socketTransport.request`, not the fetch-backed Vitest adapter used by ordinary
+`request()` calls. Tests for streamed UI must mock that transport and emit SSE
+frames through `options.onProgress`; fetch mocks alone leave the mutation pending
+and falsely make rendered answers and errors disappear. Keep the normal fetch
+mock for cache lookups and other non-stream application requests.
