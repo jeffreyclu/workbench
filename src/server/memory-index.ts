@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, type StdioOptions } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, extname, join, relative, resolve } from 'node:path';
+import { extname, join, relative, resolve } from 'node:path';
 import { pipeline } from '@huggingface/transformers';
 import type { WorkbenchDatabase } from './database.js';
 import { buildFtsMatchQuery } from './fts-query.js';
@@ -256,22 +256,46 @@ function splitNumberedEntries(body: string): Array<{ id: string; title: string; 
     .filter((entry) => nonEmpty(entry.body));
 }
 
-/** Returns the file's committed modification time, or mtime when Git cannot
- * establish one for the exact working-tree content. */
-function documentFileDate(file: string, fallback: string): string {
+/**
+ * Committed modification time for every tracked, unmodified file under a docs
+ * root, resolved with two Git calls per root instead of two per file. Files
+ * Git reports as modified or untracked are absent from the map so callers fall
+ * back to the file's mtime. A root outside any repository yields an empty map.
+ */
+function committedFileDates(docsRoot: string): Map<string, string> {
+  const dates = new Map<string, string>();
   try {
-    const options = { cwd: dirname(file), encoding: 'utf8' as const, stdio: ['ignore', 'pipe', 'ignore'] as StdioOptions };
-    if (execFileSync('git', ['status', '--porcelain', '--', file], options).trim()) return fallback;
-    const committed = execFileSync('git', ['log', '-1', '--format=%cI', '--', file], options).trim();
-    const timestamp = Date.parse(committed);
-    return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
+    const options = { cwd: docsRoot, encoding: 'utf8' as const, stdio: ['ignore', 'pipe', 'ignore'] as StdioOptions, maxBuffer: 64 * 1024 * 1024 };
+    const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], options).trim();
+    const dirty = new Set(
+      execFileSync('git', ['status', '--porcelain', '-z', '--untracked-files=all', '--', '.'], options)
+        .split('\0')
+        .filter(Boolean)
+        .map((line) => resolve(repoRoot, line.slice(3))),
+    );
+    // One log walk over the root: each commit prints its date, then the files
+    // it touched. The first date seen for a file is that file's latest commit.
+    const log = execFileSync('git', ['log', '--format=%x01%cI', '--name-only', '--', '.'], options);
+    let current: string | null = null;
+    for (const line of log.split('\n')) {
+      if (line.startsWith('\x01')) {
+        const timestamp = Date.parse(line.slice(1).trim());
+        current = Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+        continue;
+      }
+      if (!line.trim() || !current) continue;
+      const file = resolve(repoRoot, line.trim());
+      if (!dates.has(file) && !dirty.has(file)) dates.set(file, current);
+    }
   } catch {
-    return fallback;
+    return dates;
   }
+  return dates;
 }
 
 function collectDocCandidates(label: string, docsRoot: string): CandidateDocument[] {
   const candidates: CandidateDocument[] = [];
+  const committed = committedFileDates(docsRoot);
   for (const file of listMarkdownFiles(docsRoot)) {
     const body = readFileSync(file, 'utf8');
     if (!nonEmpty(body)) continue;
@@ -279,7 +303,7 @@ function collectDocCandidates(label: string, docsRoot: string): CandidateDocumen
     // shared Workbench documents tree) can otherwise share a relative path and
     // collide on the same (source, source_id) key.
     const sourceId = `${label}:${relative(docsRoot, file)}`;
-    const createdAt = documentFileDate(file, statSync(file).mtime.toISOString());
+    const createdAt = committed.get(file) ?? statSync(file).mtime.toISOString();
     const entries = splitNumberedEntries(body);
     if (entries) {
       // One row per numbered entry (sourceId `label:path#N`) so a lesson is
