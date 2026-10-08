@@ -200,6 +200,30 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
       .toEqual({ count: 0 });
   });
 
+  it('indexes numbered markdown entries individually and leaves unnumbered files whole', () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-memory-entries-'));
+    writeFileSync(join(root, 'lessons.md'), [
+      '## <a id="9"></a>9. Lessons', '', 'Intro.', '',
+      '### <a id="1"></a>1. Use sockets only', '', 'Application data uses WebSockets.', '',
+      '#### Unnumbered detail', '', 'Still part of entry one.', '',
+      '### <a id="2"></a>2. Rate tokens, never cost', '', 'Track tokens.',
+    ].join('\n'));
+    writeFileSync(join(root, 'plain.md'), '# Plain\n\nNo numbered entries here.');
+    const roots = [{ label: 'local', path: root }];
+    collectMemoryDocuments(database, { docRoots: roots });
+
+    const rows = database.prepare("SELECT source_id, title, body FROM memory_documents WHERE source = 'doc' ORDER BY source_id").all() as Array<{ source_id: string; title: string; body: string }>;
+    expect(rows.map((row) => row.source_id)).toEqual(['local:lessons.md#1', 'local:lessons.md#2', 'local:lessons.md#9', 'local:plain.md']);
+    const first = rows[0];
+    expect(first.title).toBe('Use sockets only');
+    expect(first.body).toContain('Still part of entry one.');
+    expect(first.body).not.toContain('Track tokens.');
+    expect(rows[3].title).toBe('Plain');
+
+    expect(collectMemoryDocuments(database, { docRoots: roots }).upserted).toBe(0);
+    rmSync(root, { recursive: true });
+  });
+
   it('removes local documents after their canonical file is moved or deleted', () => {
     const root = mkdtempSync(join(tmpdir(), 'workbench-memory-docs-'));
     const path = join(root, 'brief.md');

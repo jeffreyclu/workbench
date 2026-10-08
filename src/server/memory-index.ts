@@ -226,6 +226,35 @@ function listMarkdownFiles(root: string): string[] {
   return found;
 }
 
+// A numbered entry heading: `## <a id="12"></a>12. Title` (or `###`). The
+// anchor id is the citation id agents quote as `file.md#12`.
+const NUMBERED_ENTRY_HEADING = /^#{2,3} <a id="(\d+)"><\/a>\s*(?:\d+\.\s*)?(.+)$/;
+
+/**
+ * Splits a markdown file at numbered entry headings. Returns null when the
+ * file has none, so unnumbered files keep whole-file indexing. Text before the
+ * first entry (and any unnumbered subsections) stays with the entry it follows.
+ */
+function splitNumberedEntries(body: string): Array<{ id: string; title: string; body: string }> | null {
+  const entries: Array<{ id: string; title: string; lines: string[] }> = [];
+  const seen = new Set<string>();
+  let preamble: string[] = [];
+  let inFence = false;
+  for (const line of body.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    const match = inFence ? null : NUMBERED_ENTRY_HEADING.exec(line);
+    if (match && !seen.has(match[1])) {
+      seen.add(match[1]);
+      entries.push({ id: match[1], title: match[2].trim(), lines: [line] });
+    } else if (entries.length) entries[entries.length - 1].lines.push(line);
+    else preamble.push(line);
+  }
+  if (!entries.length) return null;
+  return entries
+    .map((entry) => ({ id: entry.id, title: entry.title, body: entry.lines.join('\n').trim() }))
+    .filter((entry) => nonEmpty(entry.body));
+}
+
 function collectDocCandidates(label: string, docsRoot: string): CandidateDocument[] {
   const candidates: CandidateDocument[] = [];
   for (const file of listMarkdownFiles(docsRoot)) {
@@ -235,10 +264,23 @@ function collectDocCandidates(label: string, docsRoot: string): CandidateDocumen
     // shared Workbench documents tree) can otherwise share a relative path and
     // collide on the same (source, source_id) key.
     const sourceId = `${label}:${relative(docsRoot, file)}`;
+    const createdAt = statSync(file).mtime.toISOString();
+    const entries = splitNumberedEntries(body);
+    if (entries) {
+      // One row per numbered entry (sourceId `label:path#N`) so a lesson is
+      // ranked and cited on its own, not as part of a 100 KB file.
+      for (const entry of entries) {
+        candidates.push({
+          source: 'doc', sourceId: `${sourceId}#${entry.id}`, conversationId: null, workItemId: null, actor: null,
+          title: entry.title, body: entry.body, createdAt,
+        });
+      }
+      continue;
+    }
     const heading = body.match(/^#\s+(.+)$/m)?.[1]?.trim();
     candidates.push({
       source: 'doc', sourceId, conversationId: null, workItemId: null, actor: null,
-      title: heading || sourceId, body, createdAt: statSync(file).mtime.toISOString(),
+      title: heading || sourceId, body, createdAt,
     });
   }
   return candidates;
