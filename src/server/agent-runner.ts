@@ -2516,7 +2516,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       captureGateIssued = true;
       repository.addActivity(item.id, 'system', 'progress', CAPTURE_GATE_ISSUED_EVENT);
       try {
-        const gateAgent = result.agent;
+        // Palmyra runs set initialGateState to not_required above, so only a CLI agent reaches this follow-up.
+        const gateAgent = result.agent as CliAgent;
         const priorUsage = result.usage;
         const priorCost = result.costUsd;
         const followUp = await runAgentCommandWithFallback(gateAgent, cwd, CAPTURE_GATE_PROMPT, undefined, controller.signal, undefined, profile, (usage) => {
