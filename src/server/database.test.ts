@@ -103,6 +103,8 @@ const EXPECTED_MIGRATIONS = [
   '087_agent_run_handoff_v2',
   '088_agent_run_failure_kind',
   '089_agent_run_handoff_unverified_claim',
+  '090_knowledge_drift_report',
+  '091_agent_run_review_dispatch',
 ];
 
 describe('openDatabase', () => {
@@ -177,6 +179,35 @@ describe('openDatabase', () => {
     const columns = upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
     expect(columns.map(({ name }) => name)).toContain('failure_kind');
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '088_agent_run_failure_kind'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds knowledge drift report storage when upgrading from migration 088', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE knowledge_drift_reports;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '090_knowledge_drift_report'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_drift_reports'").get()).toBeTruthy();
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '090_knowledge_drift_report'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds the run review dispatch decision when upgrading from migration 088', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('ALTER TABLE agent_runs DROP COLUMN review_dispatch_json;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '091_agent_run_review_dispatch'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+    expect(columns.map(({ name }) => name)).toContain('review_dispatch_json');
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '091_agent_run_review_dispatch'").get()).toBeTruthy();
     upgraded.close();
   });
 

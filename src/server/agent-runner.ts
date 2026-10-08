@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, dirname, join, resolve } from 'node:path';
-import { DEFAULT_ACCOUNT_PROFILE, plannedTaskDependencyError, type AgentRun, type AgentRunPromptSize, type AgentStreamEvent, type WorkItem } from '../shared/contracts.js';
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, plannedTaskDependencyError, type AgentRun, type AgentRunPromptSize, type AgentStreamEvent, type WorkItem } from '../shared/contracts.js';
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
@@ -13,8 +13,10 @@ import { createExternalActionProcessGuard, externalActionGuardEnvironment, obser
 import { WorkItemRepository } from './repository.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { notifyAgentRunFinished } from './slack-notify.js';
-import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isManagedRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
-import { buildAgentRunReviewHandoff, type ObservedRunEvent } from './review-handoff.js';
+import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isManagedRunWorktree, isolatedRunWorkspaces, runWorktreeChangeStats, type ChangedFileStat, type RunWorkspaceBinding } from './run-worktree.js';
+import { buildAgentRunReviewHandoff, observedFiles, type ObservedRunEvent } from './review-handoff.js';
+import { classifyReviewDispatch } from './review-dispatch.js';
+import { reviewDispatchLabel, type AgentRunReviewDispatch, type ReviewDepthTier } from '../shared/review-dispatch.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { scheduleReviewAutoScore } from './review-auto-score.js';
 import { appendWorkLog } from './work-log.js';
@@ -2061,6 +2063,77 @@ function startReviewAutoScore(repository: WorkItemRepository, run: AgentRun, fal
   if (run.conversationId) void scheduleReviewAutoScore(repository, { conversationId: run.conversationId }, fallbackWorkspace);
 }
 
+/** What a completed execute run changed. Git diff stats from each worktree
+ * are authoritative; observed file writes, without line counts, stand in only
+ * when no worktree could be measured. */
+async function measureRunChanges(bindings: readonly RunWorkspaceBinding[], events: ObservedRunEvent[]): Promise<ChangedFileStat[]> {
+  const measured: ChangedFileStat[] = [];
+  let anyMeasured = false;
+  for (const binding of bindings) {
+    try {
+      measured.push(...await runWorktreeChangeStats(binding.worktree));
+      anyMeasured = true;
+    } catch { /* Not a Git checkout, or Git is unavailable. */ }
+  }
+  if (anyMeasured) return measured;
+  return observedFiles(events).map((path) => {
+    const owner = isAbsolute(path) ? bindings.find((binding) => !relative(binding.worktree, path).startsWith('..')) : undefined;
+    return { path: owner ? relative(owner.worktree, path) : path, added: null, removed: null };
+  });
+}
+
+const REVIEW_TIER_INSTRUCTIONS: Record<ReviewDepthTier, string> = {
+  sensitive: 'Sensitive tier: the change touches auth, authorization, data, migrations, or secrets. Read every changed line in those files, check the upgrade path of any schema change, and treat unguarded access or a data-loss path as blocking.',
+  standard: 'Standard tier: complete all five review passes over the whole change.',
+  trivial: 'Trivial tier: confirm the change does what it claims.',
+};
+
+const MAX_REVIEW_INSTRUCTION_FILES = 30;
+
+/** Jeffrey's review rule, applied in code once an execute run has finished.
+ * ALWAYS dispatches a review run, JUDGMENT leaves a suggestion on the task,
+ * NEVER records the skip. The decision lands on the run either way. It runs
+ * after the run is finished and must never fail or hold up that completion. */
+function dispatchReviewForChange(repository: WorkItemRepository, item: WorkItem, run: AgentRun, changes: ChangedFileStat[], commits: string[], ownerId: string, leaseMs: number, externalContext: string): void {
+  try {
+    const decision = classifyReviewDispatch(changes);
+    if (!decision) return;
+    const dispatch: AgentRunReviewDispatch = { ...decision, reviewRunId: null, decidedAt: new Date().toISOString() };
+    repository.updateRun(run.id, { reviewDispatch: dispatch });
+    const label = reviewDispatchLabel(dispatch);
+    if (decision.mode === 'never') {
+      repository.addActivity(item.id, 'system', 'progress', `Review skipped. ${label}.`);
+      return;
+    }
+    if (decision.mode === 'judgment') {
+      repository.addActivity(item.id, 'system', 'suggestion', `Review recommended: ${decision.reason}.`);
+      return;
+    }
+    // A different vendor from the implementer, so the review starts from a
+    // fresh context rather than resuming the author's provider session.
+    const { agent: reviewer, reason: reviewerReason } = selectReviewAgent(repository.listRuns(item.id));
+    const shownFiles = decision.files.slice(0, MAX_REVIEW_INSTRUCTION_FILES);
+    const instructions = [
+      `Review the code changes made by execute run ${run.id} on this task. Workbench dispatched this review automatically (${label}).`,
+      REVIEW_TIER_INSTRUCTIONS[decision.tier],
+      `Changed files: ${shownFiles.join(', ')}${decision.files.length > shownFiles.length ? `, and ${decision.files.length - shownFiles.length} more` : ''}.`,
+      commits.length ? `The changes were integrated as commit ${commits.join('; ')}.` : 'The changes were not integrated; read them in the run worktree.',
+    ].join('\n');
+    const conversation = repository.getOrCreateWorkConversation(item.id, item.title);
+    const accountProfile = defaultAccountProfileForTask(item);
+    repository.createSharedMessage('system', `Requested review: ${label}`, 'completed', conversation.id);
+    const reply = repository.createSharedMessage(reviewer, '', 'running', conversation.id, [], 'none', null, accountProfile, null, 'review');
+    const reviewRun = repository.createRun(item.id, 'review', reviewer, reviewer, instructions, conversation.id, reply.id, 'manual', accountProfile);
+    repository.updateRun(run.id, { reviewDispatch: { ...dispatch, reviewRunId: reviewRun.id } });
+    repository.addActivity(item.id, 'system', 'execution_started', `Review dispatched automatically to ${reviewer} (${reviewerReason}): ${label}.`);
+    void executeAgentRun(repository, reviewRun, ownerId, leaseMs, externalContext);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Review dispatch failed:', message);
+    try { repository.addActivity(item.id, 'system', 'blocker', `Automatic review dispatch failed: ${message}`); } catch { /* The run already completed. */ }
+  }
+}
+
 /** How long a run whose workspace is busy waits before the scheduler offers it the workspace again. */
 const WORKSPACE_WAIT_RETRY_MS = 5_000;
 
@@ -2553,6 +2626,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       verbose,
     });
     result = { ...result, output };
+    // Measured before integration, which resets an integrated worktree.
+    const changeStats = run.kind === 'execute' ? await measureRunChanges(workspaceBindings, observedRunEvents) : [];
+    const integrationCommits: string[] = [];
     if (sourceWorkspace && workspace && MUTATING_RUN_KINDS.has(run.kind)) {
       // Integration reports; it never decides whether the run finished. This
       // await sits before finishRun, so a throw here would erase a completed
@@ -2561,6 +2637,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         const integration = await integrateWorkbenchRunWorktree(binding.sourceWorkspace, binding.worktree, run.id)
           .catch((error: unknown) => ({ integrated: false, commitHash: null, conflicted: [] as string[], blocked: error instanceof Error ? error.message : String(error) }));
         if (integration.integrated) repository.addActivity(item.id, 'system', 'progress', `Integrated agent changes into ${binding.sourceWorkspace} at ${integration.commitHash?.slice(0, 12)}.`);
+        if (integration.commitHash) integrationCommits.push(`${integration.commitHash} in ${binding.sourceWorkspace}`);
         // A partly integrated run is still a completed run. Name the files
         // left behind so the held-back work is recoverable rather than silent.
         if (integration.conflicted.length) repository.addActivity(item.id, 'system', 'blocker', `${integration.conflicted.length} file(s) conflicted in ${binding.sourceWorkspace} and stayed in ${binding.worktree}: ${integration.conflicted.join(', ')}.`);
@@ -2590,6 +2667,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     }
     repository.addActivity(item.id, result.agent, 'progress', `Completed ${run.kind}.`);
     startReviewAutoScore(repository, run, sourceWorkspace ?? workspace ?? null);
+    if (run.kind === 'execute') dispatchReviewForChange(repository, item, run, changeStats, integrationCommits, ownerId, leaseMs, externalContext);
     // A chronology line must never fail the run that earned it.
     try {
       if (!process.env.VITEST) appendWorkLog({

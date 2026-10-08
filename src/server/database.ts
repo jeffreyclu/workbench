@@ -2537,6 +2537,31 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // The drift job keeps only its latest warning report. Historical reports
+    // are not operational records and would grow without improving diagnosis.
+    id: '090_knowledge_drift_report',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE knowledge_drift_reports (
+          id TEXT PRIMARY KEY CHECK (id = 'latest'),
+          checked_at TEXT NOT NULL,
+          report_json TEXT NOT NULL CHECK (json_valid(report_json))
+        );
+      `);
+    },
+  },
+  {
+    // The review dispatch decision (always / never / judgment) and its depth
+    // tier, recorded when an execute run completes with code changes.
+    id: '091_agent_run_review_dispatch',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'review_dispatch_json')) {
+        database.exec("ALTER TABLE agent_runs ADD COLUMN review_dispatch_json TEXT CHECK (review_dispatch_json IS NULL OR json_valid(review_dispatch_json));");
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
