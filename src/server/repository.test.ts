@@ -1555,6 +1555,17 @@ describe('WorkItemRepository', () => {
     expect(repository.nextQueuedSharedTurn(conversation.id)).toBeNull();
   });
 
+  it('picks a queued message posted by an assistant and fails one nobody can pick up', () => {
+    const conversation = repository.createConversation('Assistant dispatch');
+    const stuck = repository.createSharedMessage('claude', 'Unroutable', 'queued', conversation.id, [], 'bogus');
+    const message = repository.createSharedMessage('claude', 'Take this', 'queued', conversation.id, [], 'claude');
+    repository.createSharedMessage('codex', '', 'queued', conversation.id, [], 'none');
+
+    expect(repository.nextQueuedSharedTurn(conversation.id)).toEqual({ message, dispatchTarget: 'claude' });
+    expect(repository.getSharedMessageById(stuck.id)).toMatchObject({ status: 'failed', error: expect.stringContaining('bogus') });
+    expect(repository.nextQueuedSharedTurn(conversation.id, new Set(['claude']))).toBeNull();
+  });
+
   it('queues Palmyra as a provider and serializes its replies', () => {
     const conversation = repository.createConversation('Palmyra thread');
     const message = repository.createSharedMessage('jeffrey', 'Answer with Palmyra', 'queued', conversation.id, [], 'palmyra');

@@ -9,6 +9,11 @@ import { WorkItemRepository } from './repository.js';
 import { createWorkbenchMcpServer, type WorkbenchAdminActions } from './workbench-mcp.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
+import { fakeAgentDirectory } from './test-fake-agent.js';
+import { ArtifactLibrary } from './artifact-library.js';
+import { liveRuntimeCapabilities } from './runtime-capabilities.js';
+import { ArtifactService } from './services/artifact-service.js';
+import { WorkbenchAdminService } from './services/workbench-admin-service.js';
 
 describe('Workbench MCP', () => {
   let database: WorkbenchDatabase;
@@ -492,6 +497,33 @@ describe('Workbench MCP', () => {
     expect(calls[0].args).toEqual([item.id, { executionProfile: 'deep', force: true }]);
     expect(calls[1].args).toEqual([item.id, { kind: 'review', target: 'claude', instructions: 'Review it.', executionProfile: null }, { actor: 'claude', force: false }]);
     expect(calls[5].args).toEqual([conversation.id, 'codex', 'Take this.', 'claude', null]);
+  });
+
+  it('schedules a turn an assistant dispatches to itself and runs its reply', async () => {
+    const admin = new WorkbenchAdminService(repository, liveRuntimeCapabilities, new ArtifactService(repository, new ArtifactLibrary(database)));
+    const realServer = createWorkbenchMcpServer(repository, admin.mcpActions());
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const realClient = new Client({ name: 'workbench-mcp-real-admin', version: '1.0.0' });
+    await realServer.connect(serverTransport);
+    await realClient.connect(clientTransport);
+    const conversation = repository.createConversation('Assistant dispatch');
+    const previousPath = process.env.PATH;
+    const { directory } = fakeAgentDirectory("printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'", "printf '%s\\n' '{\"type\":\"result\",\"result\":\"Done\"}'");
+    try {
+      const result = await realClient.callTool({ name: 'dispatch_conversation_turn', arguments: { conversationId: conversation.id, actor: 'claude', body: 'Pick this up.', dispatchTo: 'claude' } });
+      expect(result.isError).not.toBe(true);
+      const messages = repository.listAllSharedMessages(conversation.id);
+      const posted = messages.find((message) => message.body === 'Pick this up.');
+      expect(posted).toMatchObject({ author: 'claude' });
+      expect(posted?.status).not.toBe('queued');
+      const reply = messages.find((message) => message.author === 'claude' && message.id !== posted?.id);
+      expect(reply).toBeDefined();
+      await vi.waitFor(() => expect(repository.getSharedMessageById(reply!.id)?.status).toBe('completed'), { timeout: 5_000 });
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+      await realClient.close();
+    }
   });
 
   it('exposes only local source and Linear configuration state', async () => {

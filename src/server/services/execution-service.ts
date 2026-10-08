@@ -131,11 +131,11 @@ export class ExecutionService {
   /** Atomically promote exactly one queued jeffrey turn to running-dispatch, guarding against double dispatch. */
   claimQueuedTurn(id: string): boolean {
     const changed = this.database.prepare(`
-      UPDATE shared_messages SET status = 'completed' WHERE id = ? AND status = 'queued' AND author = 'jeffrey'
+      UPDATE shared_messages SET status = 'completed' WHERE id = ? AND status = 'queued' AND author IN ('jeffrey', 'codex', 'claude', 'palmyra')
     `).run(id).changes;
     if (!Number(changed)) return false;
     const message = this.collaborators.getSharedMessageById(id);
-    if (message) this.collaborators.recordSharedBriefEntry(message.conversationId, message.id, 'jeffrey', 'decision', message.body);
+    if (message) this.collaborators.recordSharedBriefEntry(message.conversationId, message.id, message.author, 'decision', message.body);
     return true;
   }
 

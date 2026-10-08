@@ -1055,10 +1055,17 @@ export class WorkItemRepository {
 
   nextQueuedSharedTurn(conversationId: string, busyAgents: ReadonlySet<'codex' | 'claude' | 'palmyra'> = new Set()): { message: SharedMessage; dispatchTarget: 'auto' | 'codex' | 'claude' | 'palmyra' | 'both' } | null {
     const rows = this.database.prepare(`SELECT id, dispatch_target FROM shared_messages
-      WHERE conversation_id = ? AND author = 'jeffrey' AND status = 'queued'
+      WHERE conversation_id = ? AND author IN ('jeffrey', 'codex', 'claude', 'palmyra') AND status = 'queued'
       ORDER BY queue_priority DESC, created_at ASC, rowid ASC`).all(conversationId) as Array<{ id: string; dispatch_target: string }>;
     for (const row of rows) {
-      if (!['auto', 'codex', 'claude', 'palmyra', 'both'].includes(row.dispatch_target)) continue;
+      if (!['auto', 'codex', 'claude', 'palmyra', 'both'].includes(row.dispatch_target)) {
+        // 'none' marks an agent reply waiting for its session slot; anything
+        // else can never be dispatched, so fail it instead of leaving it silent.
+        if (row.dispatch_target !== 'none') {
+          this.updateSharedMessage(row.id, { status: 'failed', error: `Queued message has dispatch target "${row.dispatch_target}", which no agent can pick up.`, completedAt: new Date().toISOString() });
+        }
+        continue;
+      }
       const dispatchTarget = row.dispatch_target as 'auto' | 'codex' | 'claude' | 'palmyra' | 'both';
       const agents = dispatchTarget === 'both' ? ['codex', 'claude'] as const
         : dispatchTarget === 'auto' ? [this.selectBalancedAgent('codex', ['codex', 'claude'])] : [dispatchTarget];
