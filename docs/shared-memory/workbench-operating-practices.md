@@ -652,3 +652,9 @@ and `memory-index.ts` already do. `import.meta.url` is only for files that ship 
 promotion preflight now boots a release-shaped copy (`scripts/promote-runtime.ts`), so a path that
 only works in the repository fails the gate instead of the live switch. When a promotion "succeeds"
 but `/api/health` keeps the old `buildId`, read `data/logs/runtime.err.log` for the boot error.
+
+### <a id="40"></a>40. Discovery consolidation card existed but was never mounted; proposals are mostly no-op keeps
+
+src/client/features/discovery/consolidation-card.tsx had passing unit tests but no render site and no styles, so users never saw it. Unit tests on a component do not prove it is reachable. Before changing a feature card, grep for where it is mounted. Also, a real consolidation proposal reviewed 462 entries: 15 archive, 0 promote, 447 keep. Keep verdicts change nothing, so the UI should lead with counts, list only archive and promote items, and fold the keeps into a closed disclosure. That rule now lives in discovery/logic.ts. Unverified in a browser as of 2026-10-08.
+
+*Provenance: d75ec969-7666-4431-8d65-a4883a0da300*

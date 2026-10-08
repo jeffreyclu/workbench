@@ -31,7 +31,7 @@ const EMBED_BATCH_SIZE = 32;
 // Keep a wider pre-dedup pool than the API response cap. Long conversations can
 // occupy many high-ranking chunks; document-level dedup needs enough candidates
 // to still surface distinct conversations, activities, and docs.
-export const MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE = 400;
+export const MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE = 800;
 
 export type MemorySearchOptions = {
   limit?: number;
@@ -590,17 +590,18 @@ type MemoryDocumentRow = {
   actor: string | null; title: string; body: string; created_at: string;
 };
 
-const SOURCE_AUTHORITY: Readonly<Record<string, number>> = {
-  artifact: 1.12,
-  doc: 1.1,
-  activity: 1.08,
-  work_item: 1.08,
-  message: 1.04,
-  conversation: 1,
-  run_output: 0.98,
-  run_instructions: 0.95,
-  run_error: 0.92,
-};
+export const MEMORY_SOURCE_PRIORS = {
+  numbered_lesson: 6,
+  doc: 1.8,
+  artifact: 1.3,
+  activity: 1.45,
+  work_item: 1.2,
+  run_output: 1,
+  run_instructions: 0.96,
+  run_error: 0.94,
+  message: 0.82,
+  conversation: 0.78,
+} as const;
 
 const QUERY_STOP_WORDS = new Set([
   'about', 'after', 'again', 'also', 'and', 'are', 'because', 'been', 'before', 'but', 'can', 'context',
@@ -691,16 +692,61 @@ function lexicalImportanceMultiplier(document: MemoryDocumentRow, query: string)
   return 1 + coverageBoost + phraseBoost;
 }
 
-function recencyMultiplier(createdAt: string): number {
+function sourcePrior(document: Pick<MemoryDocumentRow, 'source' | 'source_id'>): { label: string; multiplier: number } {
+  if (document.source === 'doc' && document.source_id.includes('#')) {
+    return { label: 'numbered lesson', multiplier: MEMORY_SOURCE_PRIORS.numbered_lesson };
+  }
+  const key = document.source as keyof typeof MEMORY_SOURCE_PRIORS;
+  return { label: document.source.replaceAll('_', ' '), multiplier: MEMORY_SOURCE_PRIORS[key] ?? 1 };
+}
+
+function recencyMultiplier(createdAt: string): { ageDays: number | null; multiplier: number } {
   const timestamp = Date.parse(createdAt);
-  if (!Number.isFinite(timestamp)) return 0.96;
+  if (!Number.isFinite(timestamp)) return { ageDays: null, multiplier: 0.6 };
   const ageDays = Math.max(0, (Date.now() - timestamp) / 86_400_000);
-  return 0.92 + (0.08 * Math.exp(-ageDays / 365));
+  return {
+    ageDays,
+    multiplier: 0.6 + (0.4 * Math.exp((-Math.LN2 * ageDays) / 90)),
+  };
+}
+
+function rankingPath(document: Pick<MemoryDocumentRow, 'source' | 'source_id' | 'created_at'>): {
+  prior: number;
+  recency: number;
+  path: string[];
+} {
+  const prior = sourcePrior(document);
+  const recency = recencyMultiplier(document.created_at);
+  const age = recency.ageDays === null ? 'unknown age' : `${Math.floor(recency.ageDays)}d old`;
+  return {
+    prior: prior.multiplier,
+    recency: recency.multiplier,
+    path: [
+      `Source prior: ${prior.label} ×${prior.multiplier.toFixed(2)}`,
+      `Recency: ${age} ×${recency.multiplier.toFixed(2)}`,
+    ],
+  };
+}
+
+function collapseNearDuplicateMessages(results: MemorySearchResult[]): MemorySearchResult[] {
+  const others: MemorySearchResult[] = [];
+  const newestByBody = new Map<string, MemorySearchResult>();
+  for (const result of results) {
+    if (result.source !== 'message') {
+      others.push(result);
+      continue;
+    }
+    const normalized = normalizedMemoryBody(result.snippet);
+    const key = normalized.length > 200 ? normalized.slice(0, 200) : normalized;
+    const current = newestByBody.get(key);
+    if (!current || result.createdAt > current.createdAt) newestByBody.set(key, result);
+  }
+  return [...others, ...newestByBody.values()];
 }
 
 function personalImportanceMultiplier(document: MemoryDocumentRow, profile: MemorySearchOptions['importanceProfile']): number {
   if (profile !== 'personal') return 1;
-  if (document.actor?.toLocaleLowerCase() === 'jeffrey') return 1.2;
+  if (document.actor?.toLocaleLowerCase() === 'jeffrey') return 2;
   if (document.source === 'doc') return 1.15;
   if (document.source === 'artifact' || document.source === 'activity' || document.source === 'work_item') return 1.1;
   if (document.source === 'run_output' || document.source === 'run_error') return 0.94;
@@ -746,8 +792,9 @@ export function diversifyMemoryResults(results: MemorySearchResult[], limit: num
   const safeLimit = Math.max(0, Math.min(limit, results.length));
   if (!safeLimit) return [];
   const ranked = [...results].sort((left, right) => right.score - left.score || right.createdAt.localeCompare(left.createdAt));
-  const direct = ranked.filter((result) => result.retrievalPath.length === 1);
-  const protectedCount = Math.min(direct.length, Math.max(1, Math.ceil(safeLimit * 0.5)));
+  const direct = ranked.filter((result) => result.retrievalPath.every((step) => step === 'Matched request'
+    || step.startsWith('Source prior:') || step.startsWith('Recency:')));
+  const protectedCount = Math.min(direct.length, Math.max(1, Math.min(5, Math.ceil(safeLimit * 0.5))));
   const selected = direct.slice(0, protectedCount);
   const selectedKeys = new Set(selected.map((result) => `${result.source}:${result.sourceId}`));
   const remaining = ranked.filter((result) => !selectedKeys.has(`${result.source}:${result.sourceId}`));
@@ -773,7 +820,7 @@ export function diversifyMemoryResults(results: MemorySearchResult[], limit: num
       const adjustedScore = candidate.score
         * Math.pow(0.82, candidate.workItemId ? workItemCounts.get(candidate.workItemId) ?? 0 : 0)
         * Math.pow(0.86, candidate.conversationId ? conversationCounts.get(candidate.conversationId) ?? 0 : 0)
-        * Math.pow(0.96, sourceCounts.get(candidate.source) ?? 0)
+        * Math.pow(0.7, sourceCounts.get(candidate.source) ?? 0)
         * Math.pow(0.92, bucket ? timeCounts.get(bucket) ?? 0 : 0);
       if (adjustedScore > bestAdjustedScore
         || (adjustedScore === bestAdjustedScore && candidate.createdAt > remaining[bestIndex].createdAt)) {
@@ -933,7 +980,6 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
   const directResults: MemorySearchResult[] = [];
   const excludedBody = options.excludeExactBody ? normalizedMemoryBody(options.excludeExactBody) : '';
   for (const [documentId, best] of bestByDocument) {
-    if (best.relevance < MIN_DIRECT_RELEVANCE) continue;
     const document = documentById.get(documentId);
     const chunk = chunks.get(best.chunkId);
     if (!document || !chunk) continue;
@@ -941,23 +987,30 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     if (options.excludeGeneratedConversationId && document.conversation_id === options.excludeGeneratedConversationId
       && (document.actor === 'codex' || document.actor === 'claude' || document.actor === 'palmyra' || document.actor === 'system')) continue;
     if (excludedBody && normalizedMemoryBody(document.body) === excludedBody) continue;
+    const ranking = rankingPath(document);
     const score = best.relevance
-      * (SOURCE_AUTHORITY[document.source] ?? 1)
+      * ranking.prior
       * lexicalImportanceMultiplier(document, primary)
-      * recencyMultiplier(document.created_at)
+      * ranking.recency
       * (corroboration.get(document.id) ?? 1)
       * personalImportanceMultiplier(document, options.importanceProfile)
       * (document.work_item_id && boostedWorkItemIds.has(document.work_item_id) ? PROJECT_BOOST_MULTIPLIER : 1);
+    if (score < MIN_DIRECT_RELEVANCE) continue;
     directResults.push({
       source: document.source, sourceId: document.source_id, title: document.title, snippet: chunk.text,
       createdAt: document.created_at, conversationId: document.conversation_id, workItemId: document.work_item_id,
-      actor: document.actor, score, retrievalPath: ['Matched request'],
+      actor: document.actor, score, retrievalPath: ['Matched request', ...ranking.path],
     });
   }
-  directResults.sort((left, right) => right.score - left.score || right.createdAt.localeCompare(left.createdAt));
-  if (!directResults.length) return [];
-  const strongestScore = directResults[0].score;
-  const relevantDirect = directResults.filter(({ score }) => score >= strongestScore * RELATIVE_RELEVANCE_FLOOR);
+  const collapsedDirect = collapseNearDuplicateMessages(directResults);
+  collapsedDirect.sort((left, right) => right.score - left.score || right.createdAt.localeCompare(left.createdAt));
+  if (!collapsedDirect.length) return [];
+  const strongestBySource = new Map<string, number>();
+  for (const result of collapsedDirect) {
+    strongestBySource.set(result.source, Math.max(strongestBySource.get(result.source) ?? 0, result.score));
+  }
+  const relevantDirect = collapsedDirect.filter((result) => result.score
+    >= (strongestBySource.get(result.source) ?? result.score) * RELATIVE_RELEVANCE_FLOOR);
 
   const graphResults = expandKnowledgeGraph(database, relevantDirect, {
     limit: Math.min(20, Math.ceil(limit / 3)),
@@ -967,10 +1020,11 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     workItemId: options.workItemId,
   });
   const graphDocumentRows = graphResults.length ? database.prepare(`
-    SELECT id, source, source_id FROM memory_documents
+    SELECT * FROM memory_documents
     WHERE ${graphResults.map(() => '(source = ? AND source_id = ?)').join(' OR ')}
-  `).all(...graphResults.flatMap(({ source, sourceId }) => [source, sourceId])) as Array<{ id: string; source: string; source_id: string }> : [];
+  `).all(...graphResults.flatMap(({ source, sourceId }) => [source, sourceId])) as MemoryDocumentRow[] : [];
   const graphDocumentIds = new Map(graphDocumentRows.map((row) => [`${row.source}:${row.source_id}`, row.id]));
+  const graphDocuments = new Map(graphDocumentRows.map((row) => [`${row.source}:${row.source_id}`, row]));
   if (primaryQueryVector && graphDocumentRows.length) {
     try {
       const graphSimilarities = await scoreSemanticDocuments(database, primaryQueryVector, graphDocumentRows.map((row) => row.id));
@@ -989,7 +1043,14 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     const semantic = semanticStrength(documentId ? bestPrimarySemanticByDocument.get(documentId) : undefined);
     const queryAffinity = Math.max(lexical, semantic);
     if (queryAffinity <= 0) return [];
-    return [{ ...result, score: result.score * queryAffinity * 0.55 }];
+    const document = graphDocuments.get(`${result.source}:${result.sourceId}`);
+    if (!document) return [];
+    const ranking = rankingPath(document);
+    return [{
+      ...result,
+      score: result.score * queryAffinity * 0.55 * ranking.prior * ranking.recency,
+      retrievalPath: [...result.retrievalPath, ...ranking.path],
+    }];
   });
 
   const merged = new Map(relevantDirect.map((result) => [`${result.source}:${result.sourceId}`, result]));
@@ -997,5 +1058,5 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
     const key = `${result.source}:${result.sourceId}`;
     if (!merged.has(key)) merged.set(key, result);
   }
-  return diversifyMemoryResults([...merged.values()], limit);
+  return diversifyMemoryResults(collapseNearDuplicateMessages([...merged.values()]), limit);
 }

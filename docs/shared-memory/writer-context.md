@@ -337,3 +337,19 @@ open the backend repo and patch it. Backend changes need their own ticket, their
 Jeffrey's explicit say-so on that repo. Confirming a diagnosis is not the same as approving a fix,
 and cross-repo edits are the expensive kind of scope creep because they land outside the boundary
 anyone is reviewing.
+
+### <a id="23"></a>23. Profile-panel rendering ownership
+
+Jeffrey clarified on 2026-10-08: simple optional JSX uses inline condition && content, not mutable ReactNode scratch values. Credential field handlers should be named in the owning orchestrator or owned by the child; do not duplicate callbacks or pass whole input trees as inline slot props. Simple value-selection ternaries, such as choosing tool versus tools, are appropriate; nested ternaries are not. Group panel components by tab, and move configuration/exported domain types out of components. Shared Writer notes fe-web-app-stack-migration.md entry 2 updated.
+
+### <a id="24"></a>24. Profile-panel authority and mode boundaries
+
+Jeffrey, 2026-10-08: contract-versus-draft authority must be audited throughout the panel. Backend capabilities define support; the persisted query profile defines existing configuration; Jotai holds pending changes. Draft values must not grant capability support. Historical saved choices require explicit edit-only preservation. View versus edit composition should split in one place, not be propagated as editMode throughout rows, tabs, and actions. Proposed (not implemented): stable outer WDS Sheet with separate view/edit composition roots; read-only tools use query data, edit tools use draft, preserving legacy ordering. Writer notes fe-web-app-stack-migration.md entry 2 updated.
+
+### <a id="25"></a>25. Profile contracts must reflect backend operation schemas
+
+Jeffrey corrected CON-657 on 2026-10-08: a frontend capability summary is not a backend schema contract. Reflect backend request constraints explicitly, including UpdateOrgProfileBody allowedTools minItems:1, using the backend schema as authority. Generated TypeScript does not retain runtime minima. Separate create/PATCH semantics: unchanged historical values can remain when omitted from PATCH; every submitted field must meet its backend operation schema. Validate the complete draft and cross-field applicability before constructing writes, without hiding errors behind Save disabled state. Frontend-only: do not edit backend. Shared Writer notes fe-web-app-stack-migration.md entry 2 updated.
+
+### <a id="26"></a>26. OAuth credential update handler is stricter than its published type
+
+Verified read-only in be.mcp-gateway on 2026-10-08: routes/profile/schema.ts publishes OAuth clientSecret as optional, and generated frontend types repeat that. routes/profile/org/update.ts nevertheless rejects missing or empty clientId/clientSecret in credentials PUT. Frontend-only CON-657 now separates the published credential schema from the update-operation runtime requirement, validates the entire multi-operation save request before the first write, and inherits PATCH allowedTools minItems:1 directly from the backend-schema mirror. Do not impose fresh creation credentials on settings-only edits or claim generated TypeScript preserves runtime bounds. Source paths are documented in shared/schemas/profile-write.ts; backend unchanged. Mirrors need maintenance when backend constraints change; they are not an automatic guarantee against unpublished server changes.

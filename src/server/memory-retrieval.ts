@@ -120,10 +120,15 @@ export function selectDurableMemoryEvidence(
     return true;
   });
   const maxItems = Math.max(1, Math.min(100, options.maxItems ?? 100));
-  const strongestScore = Math.max(0, ...filtered.map(({ score }) => Number.isFinite(score) ? score : 0));
-  const relevant = strongestScore > 0
-    ? filtered.filter(({ score }) => score >= strongestScore * 0.6)
-    : filtered;
+  const strongestBySource = new Map<string, number>();
+  for (const candidate of filtered) {
+    const score = Number.isFinite(candidate.score) ? candidate.score : 0;
+    strongestBySource.set(candidate.source, Math.max(strongestBySource.get(candidate.source) ?? 0, score));
+  }
+  const relevant = filtered.filter((candidate) => {
+    const strongest = strongestBySource.get(candidate.source) ?? 0;
+    return strongest <= 0 || candidate.score >= strongest * 0.6;
+  });
   if (!options.promptBudget) return relevant.slice(0, maxItems);
 
   let remaining = Math.max(0, Math.max(1_000, options.promptBudget) - DURABLE_MEMORY_PROMPT_PREFIX.length - DURABLE_MEMORY_PROMPT_SUFFIX.length);

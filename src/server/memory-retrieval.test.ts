@@ -94,6 +94,16 @@ describe('durable memory prefetch', () => {
     expect(results.map(({ title }) => title)).toEqual(['Prototype decision']);
   });
 
+  it('excludes both user and assistant messages from the current conversation', () => {
+    const results = selectDurableMemoryEvidence([
+      evidence({ source: 'message', title: 'Current question', conversationId: 'current', actor: 'jeffrey' }),
+      evidence({ source: 'message', title: 'Current reply', conversationId: 'current', actor: 'codex' }),
+      evidence({ source: 'doc', title: 'Historical lesson', conversationId: null }),
+    ], 'current', { maxItems: 8, excludeCurrentConversation: true });
+
+    expect(results.map(({ title }) => title)).toEqual(['Historical lesson']);
+  });
+
   it('renders ordinary prefetch as compact pointers instead of inlined bodies', () => {
     const prompt = durableMemoryPrompt(Array.from({ length: 10 }, (_, index) => evidence({
       entryId: `doc:memory-${index}`,

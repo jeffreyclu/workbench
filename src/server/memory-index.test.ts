@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
-import { buildMemoryFtsMatchQuery, chunkText, collectMemoryDocuments, diversifyMemoryResults, indexPendingMemory, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, pruneLegacyAuditMemory, pruneLegacyAuditMemoryBatch, reciprocalRankFusion, searchMemory, setEmbedder, type MemorySearchResult } from './memory-index.js';
+import { buildMemoryFtsMatchQuery, chunkText, collectMemoryDocuments, diversifyMemoryResults, indexPendingMemory, MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE, MEMORY_SOURCE_PRIORS, pruneLegacyAuditMemory, pruneLegacyAuditMemoryBatch, reciprocalRankFusion, searchMemory, setEmbedder, type MemorySearchResult } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { WorkItemRepository } from './repository.js';
 
@@ -66,7 +66,7 @@ describe('reciprocalRankFusion', () => {
 
 describe('memory retrieval candidate pool', () => {
   it('keeps enough chunk candidates to preserve broad document recall after deduplication', () => {
-    expect(MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE).toBe(400);
+    expect(MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE).toBe(800);
   });
 });
 
@@ -175,9 +175,18 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     const results = await searchMemory(database, 'nebulafalcon', { sources: ['message'], limit: 10 });
     const graphResult = results.find((result) => result.sourceId === related.id);
 
-    expect(results.find((result) => result.sourceId === seed.id)?.retrievalPath).toEqual(['Matched request']);
+    expect(results.find((result) => result.sourceId === seed.id)?.retrievalPath).toEqual([
+      'Matched request',
+      expect.stringMatching(/^Source prior: message ×0\.82$/),
+      expect.stringMatching(/^Recency:/),
+    ]);
     expect(graphResult?.snippet).toContain('cursor-pagination');
-    expect(graphResult?.retrievalPath).toEqual(['Matched request', 'Same conversation']);
+    expect(graphResult?.retrievalPath).toEqual([
+      'Matched request',
+      'Same conversation',
+      expect.stringMatching(/^Source prior: message ×0\.82$/),
+      expect.stringMatching(/^Recency:/),
+    ]);
   });
 
   it('removes revoked artifacts from the memory index on the next collection', async () => {
@@ -290,7 +299,7 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     expect(results.map((result) => result.sourceId)).toEqual(['connectors-memory']);
   });
 
-  it('applies project scope before the lexical and semantic top-400 candidate cutoffs', async () => {
+  it('applies project scope before the lexical and semantic candidate cutoffs', async () => {
     const timestamp = '2026-09-09T00:00:00.000Z';
     database.prepare(`INSERT INTO work_items (id, title, queue_position, project_name, project_key, created_at, updated_at, last_touched_at)
       VALUES ('target-task', 'Target task', 1, 'Target', 'target', ?, ?, ?),
@@ -388,6 +397,55 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     expect(results.map(({ sourceId }) => sourceId)).toEqual(['historical-decision']);
   });
 
+  it('ranks durable sources above old duplicate room messages and excludes the current question', async () => {
+    expect(MEMORY_SOURCE_PRIORS.numbered_lesson).toBeGreaterThan(MEMORY_SOURCE_PRIORS.doc);
+    expect(MEMORY_SOURCE_PRIORS.doc).toBeGreaterThan(MEMORY_SOURCE_PRIORS.activity);
+    expect(MEMORY_SOURCE_PRIORS.activity).toBeGreaterThan(MEMORY_SOURCE_PRIORS.work_item);
+    expect(MEMORY_SOURCE_PRIORS.work_item).toBeGreaterThan(MEMORY_SOURCE_PRIORS.run_output);
+    expect(MEMORY_SOURCE_PRIORS.run_output).toBeGreaterThan(MEMORY_SOURCE_PRIORS.message);
+
+    const query = 'what changes to workbench memory were made';
+    const durableBody = 'Workbench memory changes added durable source ranking, duplicate collapse, and recency weighting.';
+    const today = new Date().toISOString();
+    insertDocument('workbench-docs:shared-memory/workbench-operating-practices.md#36', 'doc', 'Memory ranking changes', durableBody, null, { createdAt: today });
+    insertDocument('workbench-docs:implementation-plan-agent-harness.md', 'doc', 'Memory ranking changes', durableBody, null, { createdAt: today });
+    insertDocument('memory-activity', 'activity', 'Memory ranking changes', durableBody, 'memory-task', { createdAt: today });
+    insertDocument('memory-work-item', 'work_item', 'Memory ranking changes', durableBody, 'memory-task', { createdAt: today });
+    insertDocument('memory-run-output', 'run_output', 'Memory ranking changes', durableBody, 'memory-task', { createdAt: today });
+    const duplicatePrefix = `${query} ${'duplicate room message '.repeat(12)}`.slice(0, 220);
+    for (let index = 0; index < 5; index += 1) {
+      insertDocument(`old-room-message-${index}`, 'message', 'Room message', `${duplicatePrefix} copy ${index}`, null, {
+        conversationId: `old-room-${index}`,
+        actor: 'jeffrey',
+        createdAt: `2026-08-0${index + 1}T12:00:00.000Z`,
+      });
+    }
+    insertDocument('current-question', 'message', 'Current question', query, null, {
+      conversationId: 'current-conversation', actor: 'jeffrey', createdAt: today,
+    });
+    await indexPendingMemory(database);
+
+    const results = await searchMemory(database, query, { limit: 10, excludeConversationId: 'current-conversation' });
+
+    expect(results[0]?.sourceId).toBe('workbench-docs:shared-memory/workbench-operating-practices.md#36');
+    expect(results.slice(0, 5).some(({ sourceId }) => sourceId === 'workbench-docs:shared-memory/workbench-operating-practices.md#36'
+      || sourceId === 'workbench-docs:implementation-plan-agent-harness.md'
+      || sourceId === 'memory-activity')).toBe(true);
+    expect(results.slice(0, 8).filter(({ source }) => source === 'message').length).toBeLessThanOrEqual(2);
+    expect(results.map(({ sourceId }) => sourceId)).not.toContain('current-question');
+    expect(results[0]?.retrievalPath).toEqual([
+      'Matched request',
+      'Source prior: numbered lesson ×6.00',
+      expect.stringMatching(/^Recency:/),
+    ]);
+
+    const messageResults = await searchMemory(database, query, {
+      sources: ['message'], limit: 10, excludeConversationId: 'current-conversation',
+    });
+    expect(messageResults.map(({ sourceId }) => sourceId).filter((sourceId) => sourceId.startsWith('old-room-message-'))).toEqual(['old-room-message-4']);
+    expect(messageResults.map(({ sourceId }) => sourceId)).not.toContain('current-question');
+  });
+
   it('rejects weak semantic matches instead of filling the result limit with noise', async () => {
     setEmbedder(async (texts) => texts.map((text) => {
       if (text === 'repair authentication outage') return Float32Array.from([1, 0]);
@@ -438,7 +496,7 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
       VALUES ('solo-task', 'Solo evidence', 1, 'Workbench', 'workbench', ?, ?, ?),
              ('corroborated-task', 'Corroborated evidence', 2, 'Workbench', 'workbench', ?, ?, ?)`)
       .run(timestamp, timestamp, timestamp, timestamp, timestamp, timestamp);
-    insertDocument('solo-message', 'message', 'Launch evidence', 'Delivered the quartz launch.', 'solo-task');
+    insertDocument('solo-message', 'message', 'Launch evidence', 'Delivered the quartz launch', 'solo-task');
     insertDocument('corroborated-message', 'message', 'Launch evidence', 'Delivered the quartz launch.', 'corroborated-task');
     insertDocument('corroborating-activity', 'activity', 'Launch evidence', 'Validated the quartz launch.', 'corroborated-task');
     await indexPendingMemory(database);
