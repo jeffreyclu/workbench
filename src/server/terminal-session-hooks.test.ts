@@ -67,6 +67,16 @@ describe('Claude Code hook bridge', () => {
     expect(messages(conversations()[0].id).slice(1)).toEqual([{ author: 'jeffrey', body: 'From the terminal' }, { author: 'claude', body: 'Terminal reply' }]);
   });
 
+  it('ignores harness-injected prompts such as task notifications', () => {
+    applyTerminalHookEvent(database, event('SessionStart'));
+    const injected = applyTerminalHookEvent(database, event('UserPromptSubmit', { prompt_id: 'n-1', prompt: '<task-notification>\n<task-id>abc</task-id>\n</task-notification>' }));
+    expect(injected.status).toBe('applied');
+    expect(conversations()[0].title).toBe('Terminal session');
+    applyTerminalHookEvent(database, event('UserPromptSubmit', { prompt_id: 'p-1', prompt: 'Real question' }));
+    expect(conversations()[0].title).toBe('Real question');
+    expect(messages(conversations()[0].id).slice(1)).toEqual([{ author: 'jeffrey', body: 'Real question' }]);
+  });
+
   it('does not resurrect a deleted conversation', () => {
     applyTerminalHookEvent(database, event('SessionStart'));
     database.prepare("UPDATE shared_conversations SET deleted_at = 'now'").run();

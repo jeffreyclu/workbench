@@ -641,13 +641,17 @@ export function applyTerminalHookEvent(database: WorkbenchDatabase, payload: Ter
     const conversationId = session.conversation_id;
     let changed = created;
     const kind = payload.hook_event_name === 'UserPromptSubmit' ? 'prompt' : payload.hook_event_name === 'Stop' ? 'stop' : null;
-    const text = (kind === 'prompt' ? payload.prompt : payload.last_assistant_message)?.trim() ?? '';
+    // A UserPromptSubmit hook also fires for text the harness injects on
+    // Jeffrey's behalf (task notifications, system reminders). Those are not
+    // his words and never title or populate the conversation.
+    const text = kind === 'prompt' ? typedText([payload.prompt ?? '']) : payload.last_assistant_message?.trim() ?? '';
     if (kind && payload.prompt_id && text) {
       const seen = database.prepare('SELECT 1 FROM terminal_hook_events WHERE provider = ? AND session_id = ? AND prompt_id = ? AND kind = ?')
         .get(payload.provider, payload.session_id, payload.prompt_id, kind);
       if (!seen) {
         if (kind === 'prompt') {
-          database.prepare('UPDATE shared_conversations SET title = ? WHERE id = ? AND title = ?').run(titleFromPrompt(text), conversationId, DEFAULT_TERMINAL_TITLE);
+          // Also replaces a title taken from injected text before this filter existed.
+          database.prepare("UPDATE shared_conversations SET title = ? WHERE id = ? AND (title = ? OR title LIKE '<%')").run(titleFromPrompt(text), conversationId, DEFAULT_TERMINAL_TITLE);
         }
         const messageId = insertMessage(database, conversationId, kind === 'prompt' ? 'jeffrey' : payload.provider, text, at);
         database.prepare('INSERT INTO terminal_hook_events (provider, session_id, prompt_id, kind, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
