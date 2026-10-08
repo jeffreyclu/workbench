@@ -95,6 +95,18 @@ describe('WorkbenchAdminService.startWorkItemExecution', () => {
     ]);
   });
 
+  it('routes a review to the vendor other than its completed implementation', async () => {
+    const task = repository.create({ title: 'Review routed task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+    const implementation = repository.createRun(task.id, 'execute', 'auto', 'codex', 'Implement it.');
+    repository.updateRun(implementation.id, { status: 'completed', completedAt: new Date().toISOString() });
+    repository.setClassification(task.id, { kind: 'review', agent: 'codex', complex: false, instructions: 'Review it.' });
+
+    const result = await admin.startWorkItemExecution(task.id, { executionProfile: null, force: true });
+
+    expect('run' in result && result.run.agent).toBe('claude');
+    expect(repository.listActivity(task.id).find((entry) => entry.kind === 'execution_started')?.body).toContain('chosen because implementer was codex');
+  });
+
   it('never selects Palmyra for a task\'s first Auto execution', async () => {
     const loaded = repository.create({ title: 'Existing load', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     repository.createRun(loaded.id, 'execute', 'auto', 'codex', 'first');

@@ -22,11 +22,15 @@ export function describeExecutionRouting(input: {
   kind: AgentRun['kind'];
   agents: AgentRun['agent'][];
   reason: string;
-  agentSource: 'assigned' | 'balanced';
+  agentSource: 'assigned' | 'balanced' | 'independent_review';
   requestedProfile: ExecutionProfile | null;
 }): string {
   const agentText = input.agents.join(' + ');
-  const agentReason = input.agentSource === 'assigned' ? 'assigned to this task' : 'auto-picked to balance agent load';
+  const agentReason = input.agentSource === 'assigned'
+    ? 'assigned to this task'
+    : input.agentSource === 'independent_review'
+      ? input.reason.split('; ').at(-1) ?? 'chosen for independent review'
+      : 'auto-picked to balance agent load';
   const tierText = input.requestedProfile ? `${input.requestedProfile} (you chose it)` : 'auto (picked when the run starts)';
   return `Execution type: ${input.kind} (${input.reason}). Agent: ${agentText} (${agentReason}). Model tier: ${tierText}.`;
 }

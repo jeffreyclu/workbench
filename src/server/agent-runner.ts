@@ -2331,10 +2331,11 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         if (run.conversationId) publishRealtimeMessagesEvent(run.conversationId); else publishRealtimeEvent('shared-messages');
       }
     }, controller.signal, (fallback, reason) => {
-      repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
-      if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: reason.slice(0, 500) });
+      const fallbackReason = reviewFallbackReason(run, fallback, reason, repository.listRuns(item.id)) ?? reason;
+      repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: fallbackReason.slice(0, 500) });
+      if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: fallbackReason.slice(0, 500) });
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
-      repository.addActivity(item.id, 'system', 'agent_fallback', describeAgentFallback({ from: run.agent, to: fallback, model: modelFor(fallback, profile), reason }));
+      repository.addActivity(item.id, 'system', 'agent_fallback', describeAgentFallback({ from: run.agent, to: fallback, model: modelFor(fallback, profile), reason: fallbackReason }));
     }, profile, (usage) => {
       const telemetry = { inputTokens: usage.inputTokens, cacheCreationInputTokens: usage.cacheCreationInputTokens, cacheReadInputTokens: usage.cacheReadInputTokens, outputTokens: usage.outputTokens };
       repository.updateRun(run.id, telemetry);
@@ -2493,6 +2494,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     if (result.agent === 'palmyra' && run.conversationId && 'messages' in result && result.messages) {
       repository.setConversationPalmyraContext(run.conversationId, JSON.stringify(result.messages));
     }
+    const persistedFallbackReason = reviewFallbackReason(run, result.agent, result.fallbackReason, repository.listRuns(item.id));
+    if (persistedFallbackReason !== result.fallbackReason) result = { ...result, fallbackReason: persistedFallbackReason };
     const rawOutput = result.output;
     const telemetry = { inputTokens: result.usage.inputTokens, cacheCreationInputTokens: result.usage.cacheCreationInputTokens, cacheReadInputTokens: result.usage.cacheReadInputTokens, outputTokens: result.usage.outputTokens, fallbackFrom: result.fallbackFrom, fallbackReason: result.fallbackReason, costUsd: result.costUsd ?? null };
     let executionPlan: { summary: string; tasks: Array<{ title: string; description: string; workspacePath: string | null; dependsOn: number[] }> } | null = null;
@@ -2819,6 +2822,27 @@ export function classificationForKind(item: WorkItem, kind: AgentRun['kind']): R
         ? 'Execute this self-contained backend task through the authoritative backend-engineer persona. Make authorized changes and return observed evidence and verification.'
         : `Execute this self-contained ${kind} task end to end. Use the appropriate tools, make necessary changes when authorized, and return evidence and verification.`,
   };
+}
+
+export type ReviewAgentSelection = {
+  agent: AgentRun['agent'];
+  implementer: AgentRun['agent'] | null;
+  reason: string;
+};
+
+/** Select an independent reviewer from the task's most recent completed implementation. */
+export function selectReviewAgent(runs: readonly AgentRun[]): ReviewAgentSelection {
+  const implementer = runs.find((run) => run.kind === 'execute' && run.status === 'completed')?.agent ?? null;
+  if (implementer === 'codex') return { agent: 'claude', implementer, reason: 'chosen because implementer was codex' };
+  if (implementer === 'claude') return { agent: 'codex', implementer, reason: 'chosen because implementer was claude' };
+  if (implementer === 'palmyra') return { agent: 'claude', implementer, reason: 'chosen because implementer was palmyra' };
+  return { agent: 'claude', implementer: null, reason: 'defaulted to claude because no completed implementation run is known' };
+}
+
+export function reviewFallbackReason(run: AgentRun, fallback: AgentRun['agent'], reason: string | null, runs: readonly AgentRun[]): string | null {
+  if (!reason || run.kind !== 'review') return reason;
+  const { implementer } = selectReviewAgent(runs);
+  return implementer === fallback ? `same-vendor fallback: ${reason}` : reason;
 }
 
 export async function classifyExecutionRobust(

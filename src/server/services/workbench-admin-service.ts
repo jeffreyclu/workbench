@@ -12,7 +12,7 @@ import {
 import type { Activity, AgentRun, WorkItem } from '../../shared/contracts.js';
 import type { ActionFailure } from '../action-result.js';
 import { isActionFailure } from '../action-result.js';
-import { CANCEL_FORCE_KILL_DELAY_MS, cancelAgentRun, classifyExecutionRobust, executeAgentRun, resolveAgents, type ExecutionProfile } from '../agent-runner.js';
+import { CANCEL_FORCE_KILL_DELAY_MS, cancelAgentRun, classifyExecutionRobust, executeAgentRun, resolveAgents, selectReviewAgent, type ExecutionProfile } from '../agent-runner.js';
 import { describeExecutionRouting } from '../activity-log.js';
 import { contextForPrompt, listBrokerConnections, resolveBrokerUrl, searchBrokerSources } from '../connection-broker.js';
 import { scanSource } from '../source-scanner.js';
@@ -176,7 +176,14 @@ export class WorkbenchAdminService {
     const explicitlyAssigned = this.repository.getExplicitAgentAssignees(item.id);
     // The first Auto execution is a primary-agent decision. Palmyra remains
     // available only through an explicit assignment/selection.
-    const agents = explicitlyAssigned.length ? explicitlyAssigned : [this.repository.selectBalancedAgent(classified.agent, ['codex', 'claude'])];
+    const reviewSelection = classified.kind === 'review' && !explicitlyAssigned.length
+      ? selectReviewAgent(this.repository.listRuns(item.id))
+      : null;
+    const agents = explicitlyAssigned.length
+      ? explicitlyAssigned
+      : reviewSelection
+        ? [reviewSelection.agent]
+        : [this.repository.selectBalancedAgent(classified.agent, ['codex', 'claude'])];
     const classification = { ...classified, agent: agents[0] };
     if (!explicitlyAssigned.length) this.repository.updateAutomaticAgentAssignees(item.id, agents);
     let conversation = this.repository.getOrCreateWorkConversation(item.id, item.title);
@@ -209,8 +216,8 @@ export class WorkbenchAdminService {
     const activity = this.repository.addActivity(item.id, 'system', 'execution_started', describeExecutionRouting({
       kind: classification.kind,
       agents,
-      reason: classificationReason,
-      agentSource: explicitlyAssigned.length ? 'assigned' : 'balanced',
+      reason: reviewSelection ? `${classificationReason}; ${reviewSelection.reason}` : classificationReason,
+      agentSource: explicitlyAssigned.length ? 'assigned' : reviewSelection ? 'independent_review' : 'balanced',
       requestedProfile: effortProfileFor(executionProfile),
     }));
     const sourceContext = await this.sourceContextFor(item);
