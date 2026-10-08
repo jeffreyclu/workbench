@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { authoritativeTaskWorkspace, cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, installRunWorktreeHooks, isolatedRunWorkspaces, provisionRunWorktreeDependencies, shouldIsolateRunWorkspace, WORKBENCH_RUN_WORKTREE_ROOT } from './run-worktree.js';
+import { authoritativeTaskWorkspace, cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, installRunWorktreeHooks, isolatedRunWorkspaces, provisionRunWorktreeDependencies, runWorktreeChangeStats, shouldIsolateRunWorkspace, WORKBENCH_RUN_WORKTREE_ROOT } from './run-worktree.js';
 
 const directories: string[] = [];
 
@@ -533,5 +533,36 @@ describe('installRunWorktreeHooks', () => {
     expect(() => run(worktree, 'commit', '-m', 'x\n\nco-authored-by: Bot <bot@example.test>')).toThrow(/Co-Authored-By/);
     run(worktree, 'commit', '-qm', 'clean message');
     expect(existsSync(join(worktree, 'native-ran'))).toBe(true);
+  });
+});
+
+describe('runWorktreeChangeStats', () => {
+  it('counts tracked edits, renames, binary files, and new untracked files', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-change-stats-'));
+    directories.push(directory);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: directory, stdio: 'ignore' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test');
+    mkdirSync(join(directory, 'src'));
+    writeFileSync(join(directory, 'src/edit.ts'), 'a\nb\nc\n');
+    writeFileSync(join(directory, 'src/old-name.ts'), 'one\ntwo\nthree\nfour\nfive\n');
+    git('add', '.');
+    git('commit', '-qm', 'base');
+
+    writeFileSync(join(directory, 'src/edit.ts'), 'a\nB\nc\nd\n');
+    git('mv', 'src/old-name.ts', 'src/new-name.ts');
+    writeFileSync(join(directory, 'src/added.ts'), 'x\ny');
+    writeFileSync(join(directory, 'logo.bin'), Buffer.from([0, 1, 2, 0, 3]));
+    git('add', 'logo.bin');
+
+    const stats = await runWorktreeChangeStats(directory);
+    expect(stats).toEqual(expect.arrayContaining([
+      { path: 'src/edit.ts', added: 2, removed: 1 },
+      { path: 'src/new-name.ts', added: 0, removed: 0 },
+      { path: 'logo.bin', added: null, removed: null },
+      { path: 'src/added.ts', added: 2, removed: 0 },
+    ]));
+    expect(stats).toHaveLength(4);
   });
 });

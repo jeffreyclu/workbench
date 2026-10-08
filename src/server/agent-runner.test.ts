@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../shared/contracts.js';
 import { agentSubprocessEnv } from './agent-security.js';
@@ -824,6 +826,47 @@ fi`;
       verification: [],
       uncertainties: ['No completed test, build, typecheck, or lint command was observed by the runner.'],
     }));
+    database.close();
+  });
+
+  it('dispatches a sensitive review automatically when an execute run changes src/server/database.ts', async () => {
+    const completed = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Added the column.' } });
+    const review = JSON.stringify({ type: 'result', result: 'Review complete.' });
+    const { directory, log } = fakeAgentDirectory(
+      `printf 'export const added = true;\\n' >> src/server/database.ts\nprintf '%s\\n' '${completed}'`,
+      `printf '%s\\n' '${review}'`,
+    );
+    // Git must stay reachable for the diff stats; the fake agents still win.
+    process.env.PATH = `${directory}:/usr/bin:/bin`;
+    const workspace = join(directory, 'repo');
+    mkdirSync(join(workspace, 'src/server'), { recursive: true });
+    writeFileSync(join(workspace, 'src/server/database.ts'), 'export const schema = 1;\n');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'ignore' });
+    git('init', '-q');
+    git('-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-q', '--allow-empty', '-m', 'empty');
+    git('add', '.');
+    git('-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-q', '-m', 'base');
+    const database = openDatabase(':memory:');
+    const repository = new WorkItemRepository(database);
+    const task = repository.create({ title: 'Add a column', description: '', priority: 1, status: 'ready', projectName: 'Other', workspacePath: workspace, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Add the column.');
+
+    await executeAgentRun(repository, run, 'test-owner', 60_000);
+
+    const executed = repository.getRun(run.id)!;
+    expect(executed.status).toBe('completed');
+    expect(executed.reviewDispatch).toEqual(expect.objectContaining({
+      mode: 'always', tier: 'sensitive', reason: 'it touches data (src/server/database.ts)',
+      files: ['src/server/database.ts'], changedLines: 1, reviewRunId: expect.any(String),
+    }));
+    const reviewRun = repository.getRun(executed.reviewDispatch!.reviewRunId!)!;
+    expect(reviewRun).toEqual(expect.objectContaining({ workItemId: task.id, kind: 'review', agent: 'claude' }));
+    expect(reviewRun.instructions).toContain('Sensitive tier');
+    expect(repository.listActivity(task.id).map((entry) => entry.body)).toContain(
+      'Review dispatched automatically to claude (chosen because implementer was codex): review: always / sensitive, because it touches data (src/server/database.ts).',
+    );
+    await waitFor(() => !isAgentRunActive(reviewRun.id) && repository.getRun(reviewRun.id)!.status !== 'queued', 10_000);
+    expect(readFileSync(log, 'utf8').trim().split('\n').slice(0, 2)).toEqual(['codex', 'claude']);
     database.close();
   });
 

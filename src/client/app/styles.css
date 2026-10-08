@@ -1186,6 +1186,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .run-card pre { max-height: 360px; overflow: auto; margin: 0; padding: 13px; color: #bdbcb5; background: #0d0d0c; font: 10px/1.65 'DM Mono'; white-space: pre-wrap; word-break: break-word; }
 .run-card .run-prompt { margin: 0; padding: 10px 12px; color: #77766f; font-size: 10px; font-style: italic; }
 .run-card .run-prompt { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.run-card .run-review-dispatch { margin: 0; padding: 6px 12px; color: #55544e; font-size: 11px; }
+.run-card .run-review-dispatch.review-always { color: #8a4b12; }
 .run-card > .model-badge { display: flex; width: fit-content; margin: 4px 12px 0; }
 .prompt-size-table { width: calc(100% - 24px); margin: 10px 12px 12px; border-collapse: collapse; color: #8d8c85; font: 9px/1.35 'DM Mono'; }
 .prompt-size-table caption { padding: 0 0 6px; color: #bdbcb5; font-weight: 700; text-align: left; }

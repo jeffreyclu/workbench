@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { REVIEW_CHANGE_TYPES } from './change-type.js';
 import { projectKey } from './project-name.js';
 import { aiProviderChoiceSchema, type AiProviderChoice } from './ai-providers.js';
+import type { AgentRunReviewDispatch } from './review-dispatch.js';
 
 export const workItemStatusSchema = z.enum([
   'backlog',
@@ -1155,6 +1156,8 @@ export interface AgentRun {
   promptSize: AgentRunPromptSize | null;
   /** Present only after a completed coding run writes its immutable reviewer map. */
   reviewHandoff: AgentRunReviewHandoff | null;
+  /** Whether this execute run's change was sent to review, and at what depth. */
+  reviewDispatch: AgentRunReviewDispatch | null;
 }
 
 /** A conversation-level alert threshold for cumulative cached-input spend.

@@ -22,7 +22,8 @@ function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
-function observedFiles(events: ObservedRunEvent[]): string[] {
+/** Paths the runner saw the agent write. */
+export function observedFiles(events: ObservedRunEvent[]): string[] {
   return unique(events
     .filter((event) => event.category === 'agent_file_write')
     .map((event) => event.detail.replace(/^\[[^\]]+\]\s*/, '').replace(/^(?:add|create|delete|update):\s*/i, '').trim())

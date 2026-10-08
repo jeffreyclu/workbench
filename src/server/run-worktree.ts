@@ -1,5 +1,6 @@
 import { execFile as execFileCallback, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -193,6 +194,48 @@ async function changedPaths(cwd: string, range: string[]): Promise<Set<string>> 
 async function untrackedPaths(cwd: string): Promise<string[]> {
   const output = await git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd, timeout: 5_000, maxBuffer: 1_000_000 });
   return output.split('\0').filter(Boolean);
+}
+
+export interface ChangedFileStat {
+  path: string;
+  /** Null for binary files and files too large to count. */
+  added: number | null;
+  removed: number | null;
+}
+
+const UNTRACKED_LINE_COUNT_MAX_BYTES = 1_000_000;
+
+async function untrackedLineCount(path: string): Promise<number | null> {
+  try {
+    if ((await stat(path)).size > UNTRACKED_LINE_COUNT_MAX_BYTES) return null;
+    const text = await readFile(path, 'utf8');
+    if (!text) return 0;
+    return text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+  } catch {
+    return null;
+  }
+}
+
+/** Per-file added/removed line counts for everything a run left in its
+ * worktree, including new untracked files. Read before integration, which
+ * resets an integrated worktree. */
+export async function runWorktreeChangeStats(worktree: string): Promise<ChangedFileStat[]> {
+  const output = await git(['diff', '--numstat', '-z', 'HEAD', '--', ...integrationPathspec], { cwd: worktree, timeout: 15_000, maxBuffer: 4_000_000 });
+  const stats: ChangedFileStat[] = [];
+  const fields = output.split('\0');
+  for (let index = 0; index < fields.length; index += 1) {
+    const [added, removed, path] = fields[index].split('\t');
+    if (removed === undefined) continue;
+    const count = (value: string) => value === '-' ? null : Number(value);
+    // A rename reports an empty path, then the old and new paths as fields.
+    const filePath = path || fields[(index += 2)];
+    if (filePath) stats.push({ path: filePath, added: count(added), removed: count(removed) });
+  }
+  for (const path of await untrackedPaths(worktree)) {
+    if (isIntegrationExcludedPath(path)) continue;
+    stats.push({ path, added: await untrackedLineCount(join(worktree, path)), removed: 0 });
+  }
+  return stats;
 }
 
 /** Every Git repository is isolated before a mutating run. A selected checkout

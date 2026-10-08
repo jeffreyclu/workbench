@@ -8,7 +8,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     instructions: 'Fix the flaky login test.', status: 'completed', output: '', error: '', failureKind: null, createdAt: '2026-08-27T00:00:00.000Z',
     startedAt: null, completedAt: null, conversationId: null, messageId: null, model: null, executionProfile: null, accountProfile: 'default',
     inputTokens: null, cacheCreationInputTokens: null, cacheReadInputTokens: null, outputTokens: null, estimatedCostUsd: null, costSource: null, fallbackFrom: null, fallbackReason: null,
-    attempt: 0, maxAttempts: 3, nextAttemptAt: null, waitingReason: null, resolvedWorkspace: null, origin: 'manual', promptSize: null, reviewHandoff: null,
+    attempt: 0, maxAttempts: 3, nextAttemptAt: null, waitingReason: null, resolvedWorkspace: null, origin: 'manual', promptSize: null, reviewHandoff: null, reviewDispatch: null,
     ...overrides,
   };
 }

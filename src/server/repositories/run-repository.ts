@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { DEFAULT_ACCOUNT_PROFILE, type AgentRun, type AgentRunPromptSize, type AgentRunReviewHandoff } from '../../shared/contracts.js';
 import { resolveCost } from '../model-pricing.js';
 import { WORKBENCH_PROJECT_KEY } from '../../shared/project-name.js';
+import type { AgentRunReviewDispatch } from '../../shared/review-dispatch.js';
 import type { UnitOfWork } from '../unit-of-work.js';
 
 export interface RunPatch {
@@ -32,6 +33,7 @@ export interface RunPatch {
   attempt?: number;
   resolvedWorkspace?: string | null;
   promptSize?: AgentRunPromptSize | null;
+  reviewDispatch?: AgentRunReviewDispatch | null;
 }
 
 function mapReviewHandoffRow(row: Record<string, string | null>): AgentRunReviewHandoff | null {
@@ -87,6 +89,7 @@ function mapRunRow(row: Record<string, string | null>): AgentRun {
     origin: (row.origin ?? 'manual') as AgentRun['origin'],
     promptSize: row.prompt_size_json ? JSON.parse(row.prompt_size_json) as AgentRunPromptSize : null,
     reviewHandoff: mapReviewHandoffRow(row),
+    reviewDispatch: row.review_dispatch_json ? JSON.parse(row.review_dispatch_json) as AgentRunReviewDispatch : null,
   };
 }
 
@@ -247,6 +250,7 @@ export class RunRepository {
       ['started_at', changes.startedAt], ['completed_at', changes.completedAt], ['owner_id', changes.ownerId], ['lease_expires_at', changes.leaseExpiresAt],
       ['next_attempt_at', changes.nextAttemptAt], ['waiting_reason', changes.waitingReason], ['attempt', changes.attempt], ['resolved_workspace', changes.resolvedWorkspace],
       ['prompt_size_json', changes.promptSize === undefined ? undefined : changes.promptSize === null ? null : JSON.stringify(changes.promptSize)],
+      ['review_dispatch_json', changes.reviewDispatch === undefined ? undefined : changes.reviewDispatch === null ? null : JSON.stringify(changes.reviewDispatch)],
     ]);
     return [
       ...[...columns].filter((entry): entry is [string, string | number | null] => entry[1] !== undefined),
