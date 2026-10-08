@@ -1331,6 +1331,29 @@ export interface AgentStreamEvent {
   createdAt: string;
 }
 
+/** One rendered line of a live agent session's log. `delta` lines are fragments of one streaming message. */
+export interface TerminalLine {
+  offset: number;
+  at: string;
+  kind: 'delta' | 'text' | 'tool' | 'result' | 'host';
+  text: string;
+}
+
+export interface TerminalSessionInfo {
+  state: 'idle' | 'turn' | 'stopped' | 'none';
+  pid: number | null;
+  model: string | null;
+  providerSessionId: string | null;
+  stopReason: string | null;
+}
+
+/** Response of the read-only session tail route; `nextOffset` is the byte offset to ask for next. */
+export interface TerminalSnapshot {
+  session: TerminalSessionInfo;
+  lines: TerminalLine[];
+  nextOffset: number;
+}
+
 /** The exact memory query and matches behind a reply's retrievedMemoryCount, fetched on demand when the memory badge is clicked. */
 export interface RetrievedMemoryItem { source: string; title: string; body: string; createdAt: string; retrievalPath?: string[]; /** `[file.md#N]` for numbered lesson entries. */ citation?: string }
 export interface RetrievedMemoryDetail {

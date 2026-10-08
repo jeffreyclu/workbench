@@ -108,6 +108,8 @@ const HOST_PATH = fileURLToPath(new URL('./agent-session-host.mjs', import.meta.
 const HOST_READY_TIMEOUT_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 const TAIL_WAIT_MS = 5_000;
+/** One file read never exceeds this, so a long session streams in chunks instead of one huge frame. */
+const MAX_FILE_READ_BYTES = 512 * 1024;
 
 function configuredMs(name: string, fallback: number): number {
   const configured = Number.parseInt(process.env[name] ?? '', 10);
@@ -529,10 +531,15 @@ export async function tail(session: AgentSessionKey & { socketPath: string }, of
   }
 }
 
-function readEventsFromFile(path: string, offset: number): { events: AgentSessionEvent[]; nextOffset: number } {
+/** Read-only view of the session log for the terminal panel and attach script: never touches the host. */
+export function readSessionEventsFromFile(key: AgentSessionKey, offset: number): { events: AgentSessionEvent[]; nextOffset: number } {
+  return readEventsFromFile(pathsFor(key).eventsPath, offset);
+}
+
+function readEventsFromFile(path: string, offset: number, limit = MAX_FILE_READ_BYTES): { events: AgentSessionEvent[]; nextOffset: number } {
   const size = existsSync(path) ? statSync(path).size : 0;
   if (offset >= size) return { events: [], nextOffset: Math.min(offset, size) };
-  const buffer = Buffer.alloc(size - offset);
+  const buffer = Buffer.alloc(Math.min(size - offset, limit));
   const descriptor = openSync(path, 'r');
   try {
     readSync(descriptor, buffer, 0, buffer.length, offset);
@@ -547,6 +554,8 @@ function readEventsFromFile(path: string, offset: number): { events: AgentSessio
     } catch { /* a torn line from a killed host */ }
     start = newline + 1;
   }
+  // A single record larger than the chunk would otherwise stall the reader.
+  if (start === 0 && buffer.length === limit && size - offset > limit) return readEventsFromFile(path, offset, limit * 4);
   return { events, nextOffset: offset + start };
 }
 

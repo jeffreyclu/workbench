@@ -8,6 +8,7 @@ import type { AgentRun, SharedMessage } from '../../shared/contracts.js';
 import { aiProviderChoiceSchema } from '../../shared/ai-providers.js';
 import { resolveWorkingDirectory, runAgentCommandWithFallback } from '../agent-runner.js';
 import { searchMemory } from '../memory-index.js';
+import { readTerminalSnapshot } from '../agent-session-terminal.js';
 import { cancelSharedReply, dispatchNextSharedTurn, interjectQueuedSharedMessage, replyInSharedRoom, replyWithPalmyra, retrySharedSynthesis, runSharedBackgroundJob } from '../shared-room.js';
 import { commitAndPushWorkspace, getWorkspaceCommitDiff, getWorkspaceDiff, getWorkspaceDiffRevision, getWorkspaceFileSource, getWorkspaceHeadCommit, getWorkspaceRefDiff, listWorkspaceCommits, listWorkspaceRefCommits, listWorkspaceRefs, repositoryIdentity, snapshotsForRepository } from '../workspace-diff.js';
 import { captureRecordedWorkspaceDiffSnapshots } from '../workspace-diff-history.js';
@@ -124,6 +125,16 @@ export function createConversationRouter({ repository, database, capabilities, a
   router.get('/api/shared/conversations/:id/agent-events', (request, response) => {
     if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
     response.json({ events: repository.listAgentStreamEvents(request.params.id) });
+  });
+
+  // Read-only tail of a live session's events.jsonl from a byte offset. The
+  // client holds the offset, so reconnects resume without replaying the log.
+  router.get('/api/shared/conversations/:id/agent-sessions/:agent/terminal', (request, response) => {
+    if (!repository.getConversation(request.params.id)) return response.status(404).json({ error: 'Conversation not found.' });
+    const agent = z.enum(['claude', 'codex']).safeParse(request.params.agent);
+    const offset = z.coerce.number().int().min(0).default(0).safeParse(request.query.offset ?? 0);
+    if (!agent.success || !offset.success) return response.status(400).json({ error: 'Invalid agent or offset.' });
+    response.json(readTerminalSnapshot(database, { conversationId: request.params.id, agent: agent.data }, offset.data));
   });
 
   const conversationWorkingDirectory = (conversationId: string) => {

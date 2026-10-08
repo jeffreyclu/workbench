@@ -14,4 +14,5 @@ export const conversationData = {
   listMessages: (conversationId: string, cursor?: string) => api.listSharedMessages(conversationId, cursor),
   listAgentEvents: (conversationId: string) => api.listAgentStreamEvents(conversationId),
   search: (query: string) => api.searchSharedConversations(query, 40),
+  tailTerminal: (conversationId: string, agent: 'claude' | 'codex', offset: number, signal?: AbortSignal) => api.getAgentSessionTerminal(conversationId, agent, offset, signal),
 };

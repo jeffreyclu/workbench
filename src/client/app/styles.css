@@ -1655,6 +1655,19 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .attachment-preview-unsupported { margin: 0; padding: 12px; }
 .thread-filter-bar { position: absolute; top: 92px; right: 28px; left: 28px; z-index: 6; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: auto; margin: 0; padding: 0; pointer-events: none; }
 .thread-filter-bar > * { pointer-events: auto; }
+.terminal-drawer { position: absolute; top: 132px; right: 28px; z-index: 7; display: flex; flex-direction: column; gap: 8px; width: min(560px, calc(100% - 56px)); max-height: 60%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface, #fff); box-shadow: 0 8px 28px rgb(0 0 0 / 18%); }
+.terminal-panel { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.terminal-panel-header { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.terminal-panel-log { margin: 0; min-height: 120px; max-height: 320px; overflow: auto; padding: 8px; border-radius: 6px; background: #111; color: #e6e6e6; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.terminal-line-host { color: #8ab4ff; }
+.terminal-line-tool { color: #f0c674; }
+.terminal-line-result { color: #9aa0a6; }
+.terminal-panel-warning, .terminal-panel-stopped, .terminal-panel-error { margin: 0; padding: 6px 8px; border-radius: 6px; font-size: 12px; }
+.terminal-panel-warning { background: #fff4d6; color: #5c4400; }
+.terminal-panel-stopped { background: #eee; color: #333; }
+.terminal-panel-error { background: #fde7e7; color: #7a1010; }
+.terminal-panel-footer label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.terminal-panel-footer input { flex: 1; min-width: 0; font: 11px ui-monospace, Menlo, monospace; }
 .conversation-surface-tabs { display: inline-flex; align-items: stretch; margin-right: auto; overflow: hidden; border: 1px solid #373731; border-radius: 6px; background: #171715; box-shadow: 0 6px 16px #0009; }
 .conversation-surface-tabs button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 9px; color: #908f88; background: transparent; border: 0; border-right: 1px solid #373731; font: 700 10px 'DM Mono'; cursor: pointer; }
 .conversation-surface-tabs button:last-child { border-right: 0; }
