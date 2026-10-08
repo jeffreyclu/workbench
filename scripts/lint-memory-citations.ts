@@ -1,11 +1,10 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { analyzeMemoryFile, isMemoryTier, MEMORY_TIERS } from '../src/shared/memory-catalogue.js';
 
 type Metadata = { load: 'core' | 'context' | 'archive'; keywords: string[]; refs: string[] };
 type Entry = { id: number; title: string };
-const tiers = ['portable', 'workbench', 'writer'];
-const tierHeader = /^(?:---\n)?tier: (\S+)\s*(?:\n|$)/;
 const fileTiers = new Map<string, string>();
 
 const sharedDirectory = join(process.cwd(), 'docs/shared-memory');
@@ -41,9 +40,6 @@ const metadata: Record<string, Metadata> = {
   'writer-repo-and-environment-map.md': { load: 'core', keywords: ['five connector repos', 'prod org 3002'], refs: ['writer-be-mcp-gateway-local-setup.md', 'writer-fe-web-app-local-setup.md'] },
   'writer-tooling-and-process.md': { load: 'core', keywords: ['CON-194 split', 'pre-push hook'], refs: ['writer-branching-and-deploy.md'] },
 };
-const numberedHeading = /^#{2,3} <a id="(\d+)"><\/a>\1\. (.*)$/gm;
-const unnumberedHeading = /^#{2,3} (?!<a id="\d+"><\/a>\d+\. ).+$/gm;
-const citation = /\[([\w.-]+\.md)#(\d+)\]/g;
 const errors: string[] = [];
 
 async function collect(directory: string) {
@@ -52,13 +48,13 @@ async function collect(directory: string) {
   for (const file of (await readdir(directory)).filter((name) => name.endsWith('.md') && name !== 'index.md').sort()) {
     const source = await readFile(join(directory, file), 'utf8');
     sources.set(file, source);
-    const tier = source.match(tierHeader)?.[1];
-    if (!tier || !tiers.includes(tier)) errors.push(`${file} needs a first-line header "tier: ${tiers.join(' | ')}"${tier ? ` (found "${tier}")` : ''}.`);
+    const analysis = analyzeMemoryFile(source);
+    const tier = analysis.tier;
+    if (!isMemoryTier(tier)) errors.push(`${file} needs a first-line header "tier: ${MEMORY_TIERS.join(' | ')}"${tier ? ` (found "${tier}")` : ''}.`);
     else fileTiers.set(file, tier);
-    const numbered = [...source.matchAll(numberedHeading)].map((match) => ({ id: Number(match[1]), title: match[2] }));
-    if (source.match(unnumberedHeading)) errors.push(`${file} has an unnumbered entry heading.`);
-    if (new Set(numbered.map(({ id }) => id)).size !== numbered.length) errors.push(`${file} has duplicate entry IDs.`);
-    entries.set(file, numbered);
+    if (analysis.hasUnnumberedHeading) errors.push(`${file} has an unnumbered entry heading.`);
+    if (analysis.duplicateEntryNumbers.length) errors.push(`${file} has duplicate entry IDs.`);
+    entries.set(file, analysis.entries);
   }
   return { entries, sources };
 }
@@ -75,8 +71,8 @@ function render(title: string, entries: Map<string, Entry[]>) {
 
 const [shared, knowledge] = await Promise.all([collect(sharedDirectory), collect(knowledgeDirectory)]);
 const allEntries = new Map([...shared.entries, ...knowledge.entries]);
-for (const [file, source] of [...shared.sources, ...knowledge.sources]) for (const match of source.matchAll(citation)) {
-  if (!allEntries.get(match[1])?.some(({ id }) => id === Number(match[2]))) errors.push(`${file} has dangling citation [${match[1]}#${match[2]}].`);
+for (const [file, source] of [...shared.sources, ...knowledge.sources]) for (const target of analyzeMemoryFile(source).citations) {
+  if (!allEntries.get(target.file)?.some(({ id }) => id === target.entry)) errors.push(`${file} has dangling citation [${target.file}#${target.entry}].`);
 }
 const owners = new Map<string, string>();
 for (const [file, item] of Object.entries(metadata)) {

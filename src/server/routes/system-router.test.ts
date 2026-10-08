@@ -19,6 +19,8 @@ import { openDatabase, type WorkbenchDatabase } from '../database.js';
 import { WorkItemRepository } from '../repository.js';
 import { e2eRuntimeCapabilities } from '../runtime-capabilities.js';
 import { closeTestServer, listenTestServer } from '../test-http-harness.js';
+import { checkKnowledgeDrift } from '../knowledge-drift.js';
+import { storeKnowledgeDriftReport } from '../knowledge-drift-store.js';
 
 describe('system router desktop notifications', () => {
   let database: WorkbenchDatabase;
@@ -91,5 +93,14 @@ describe('system router desktop notifications', () => {
     expect(response.status).toBe(200);
     expect(body).toMatchObject({ status: 'healthy', latest: { status: 'passed' } });
     expect(seams.readMcpQualityHistory).toHaveBeenCalledOnce();
+  });
+
+  it('returns the stored knowledge drift report', async () => {
+    const report = checkKnowledgeDrift({ sharedFiles: [], knowledgeFiles: [], sharedIndex: '', knowledgeIndex: '', now: '2026-10-08T12:00:00.000Z' });
+    storeKnowledgeDriftReport(database, report);
+
+    const response = await fetch(`${baseUrl}/api/system/knowledge-drift`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(report);
   });
 });

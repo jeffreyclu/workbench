@@ -14,6 +14,7 @@ import { parseAiProviderChoice } from '../../shared/ai-providers.js';
 import { getMemoryDiagnostics } from '../memory-diagnostics.js';
 import { readMcpQualityHistory } from '../mcp-quality-history.js';
 import { getMcpQualityAutomationStatus } from '../mcp-quality-monitor.js';
+import { readKnowledgeDriftReport } from '../knowledge-drift-store.js';
 
 export function createHealthRouter({ repository, capabilities, buildId }: RouteContext) {
   const router = Router();
@@ -87,6 +88,9 @@ export function createSystemRouter({ repository, database }: RouteContext) {
   });
   router.get('/api/insights/mcp-quality', (_request, response) => {
     response.json({ ...readMcpQualityHistory(), automation: getMcpQualityAutomationStatus() });
+  });
+  router.get('/api/system/knowledge-drift', (_request, response) => {
+    response.json(readKnowledgeDriftReport(database));
   });
   router.get('/api/audit-log', (request, response) => {
     const input = listAuditLogQuerySchema.parse(request.query);
