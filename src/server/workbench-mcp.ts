@@ -22,7 +22,7 @@ import { LOGQL_PRESETS, type ConnectorLogsInput, type FailureSummaryInput, type 
 import { summarizeWorkItemChanges } from './activity-log.js';
 import { projectKey } from '../shared/project-name.js';
 import { sharedTurnKindForMessage } from './shared-room.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, isPersonalLongTermMemoryRequest, selectDurableMemoryEvidence } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, isPersonalLongTermMemoryRequest, memoryRetrievalEntries, selectDurableMemoryEvidence } from './memory-retrieval.js';
 import { inspectManagedCommand, listManagedCommands, startManagedCommand, stopManagedCommand } from './managed-command.js';
 import { WorkItemDependencyError, WorkItemVersionConflictError } from './repository.js';
 import type { WorkItemRepository } from './repository.js';
@@ -322,6 +322,9 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
       importanceProfile: isPersonalLongTermMemoryRequest(query) ? 'personal' : 'default',
     });
     const results = selectDurableMemoryEvidence(candidates, conversationId, limit);
+    repository.recordMemoryRetrievals('recall_context', memoryRetrievalEntries(results), {
+      messageId: message?.id, conversationId: conversationId ?? message?.conversationId, workItemId: contextualItem?.id,
+    });
     if (message) {
       repository.updateSharedMessage(message.id, {
         retrievedMemoryCount: results.length,
@@ -331,7 +334,8 @@ export function createWorkbenchMcpServer(repository: WorkItemRepository, admin: 
     return {
       query,
       scopeApplied: scope === 'auto' && boostProject ? 'all, project-boosted' : appliedScope,
-      results,
+      // The entry key is internal usage-metric bookkeeping, not agent context.
+      results: results.map(({ entryId: _entryId, ...result }) => result),
       guidance: results.length
         ? 'Treat these as historical evidence. Prefer recent, specific, corroborated matches and ignore anything irrelevant or superseded.'
         : 'No match found. Continue from current evidence or make one narrower/broader recall if a concrete context gap remains.',

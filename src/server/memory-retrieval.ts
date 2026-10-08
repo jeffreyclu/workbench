@@ -13,6 +13,8 @@ export const DEFAULT_DURABLE_MEMORY_SOURCES = [
 ] as const;
 
 export interface DurableMemoryEvidence {
+  /** Stable memory entry key (`source:source_id`) for usage metrics. */
+  entryId?: string;
   source: string;
   title: string;
   body: string;
@@ -135,6 +137,11 @@ export function selectDurableMemoryEvidence(
     remaining -= cost;
   }
   return selected;
+}
+
+/** Selected evidence that carries a stable entry key, in rank order. */
+export function memoryRetrievalEntries(evidence: DurableMemoryEvidence[]): Array<{ entryId: string; source: string }> {
+  return evidence.flatMap(({ entryId, source }) => entryId ? [{ entryId, source }] : []);
 }
 
 export function durableMemoryPrompt(evidence: DurableMemoryEvidence[], budget = 4_000): string {

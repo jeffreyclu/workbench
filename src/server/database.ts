@@ -2436,6 +2436,44 @@ const schemaMigrations: readonly Migration[] = [
       if (!columns.some((column) => column.name === 'prompt_size_json')) database.exec('ALTER TABLE agent_runs ADD COLUMN prompt_size_json TEXT;');
     },
   },
+  {
+    // Memory usage is a ranking and gap-detection signal only. Nothing may
+    // prune or archive memory on these counts: a rarely read entry can be the
+    // once-a-year gotcha. No foreign keys, so deleting a run, reply, or
+    // memory document never silently erases its usage history.
+    id: '086_memory_usage_metrics',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS memory_retrievals (
+          id TEXT PRIMARY KEY,
+          entry_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          channel TEXT NOT NULL CHECK (channel IN ('recall_context', 'prefetch')),
+          rank INTEGER NOT NULL,
+          run_id TEXT,
+          message_id TEXT,
+          conversation_id TEXT,
+          work_item_id TEXT,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_retrievals_entry ON memory_retrievals(entry_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS memory_citations (
+          id TEXT PRIMARY KEY,
+          entry_id TEXT NOT NULL,
+          file TEXT NOT NULL,
+          entry_number INTEGER NOT NULL,
+          reply_key TEXT NOT NULL,
+          run_id TEXT,
+          message_id TEXT,
+          conversation_id TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(reply_key, entry_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_citations_entry ON memory_citations(entry_id, created_at);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

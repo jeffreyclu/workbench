@@ -178,6 +178,7 @@ const baselineInventory = [
   'GET /api/github/pull-request-commit-diff',
   'GET /api/github/pull-request-commits',
   'GET /api/insights/memory',
+  'GET /api/insights/memory/usage',
   'GET /api/reviews',
   'GET /api/reviews/:id',
   'GET /api/reviews/:id/workspace-diff',
@@ -223,7 +224,7 @@ describe('HTTP route inventory', () => {
     database = openDatabase(':memory:');
     const app = createApp(database, e2eRuntimeCapabilities);
     expect(routeInventory(app)).toEqual(baselineInventory);
-    expect(baselineInventory).toHaveLength(189);
+    expect(baselineInventory).toHaveLength(190);
   });
 
   it('preserves Express implicit HEAD handling without a separate registration', async () => {

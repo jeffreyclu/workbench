@@ -16,6 +16,7 @@ vi.mock('../mcp-quality-history.js', () => ({
 
 import { createApp } from '../app.js';
 import { openDatabase, type WorkbenchDatabase } from '../database.js';
+import { WorkItemRepository } from '../repository.js';
 import { e2eRuntimeCapabilities } from '../runtime-capabilities.js';
 import { closeTestServer, listenTestServer } from '../test-http-harness.js';
 
@@ -66,6 +67,21 @@ describe('system router desktop notifications', () => {
     expect(body.graph.triggerCount).toBeGreaterThan(0);
     expect(body.graph.triggerCount).toBe(body.graph.requiredTriggerCount);
     expect(body.traversalCanary.status).toBe('no_data');
+  });
+
+  it('exposes read-only memory usage counts per entry', async () => {
+    const repository = new WorkItemRepository(database);
+    repository.recordMemoryRetrievals('prefetch', [{ entryId: 'doc:notes:working-with-jeffrey.md', source: 'doc' }], { messageId: 'reply-1' });
+    repository.recordMemoryCitations('See [working-with-jeffrey.md#12].', { messageId: 'reply-1' });
+
+    const response = await fetch(`${baseUrl}/api/insights/memory/usage`);
+    const body = await response.json() as { entries: Array<{ entryId: string; retrievals: number; citations: number }> };
+
+    expect(response.status).toBe(200);
+    expect(body.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entryId: 'doc:notes:working-with-jeffrey.md', retrievals: 1, citations: 0 }),
+      expect.objectContaining({ entryId: 'working-with-jeffrey.md#12', retrievals: 0, citations: 1 }),
+    ]));
   });
 
   it('exposes read-only MCP regression history', async () => {

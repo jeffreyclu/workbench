@@ -99,6 +99,7 @@ const EXPECTED_MIGRATIONS = [
   '083_remove_session_feedback',
   '084_agent_run_waiting_reason',
   '085_agent_run_prompt_size',
+  '086_memory_usage_metrics',
 ];
 
 describe('openDatabase', () => {
@@ -143,6 +144,21 @@ describe('openDatabase', () => {
     const columns = upgraded.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
     expect(columns.map(({ name }) => name)).toContain('prompt_size_json');
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '085_agent_run_prompt_size'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('adds memory usage tables when upgrading from the preceding migration set', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE memory_retrievals; DROP TABLE memory_citations;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '086_memory_usage_metrics'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const tables = upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memory_retrievals', 'memory_citations') ORDER BY name").all();
+    expect(tables).toEqual([{ name: 'memory_citations' }, { name: 'memory_retrievals' }]);
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '086_memory_usage_metrics'").get()).toBeTruthy();
     upgraded.close();
   });
 

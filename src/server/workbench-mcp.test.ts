@@ -250,6 +250,30 @@ describe('Workbench MCP', () => {
     }
   });
 
+  it('records one memory retrieval per entry recall_context returns', async () => {
+    setEmbedder(deterministicTestEmbedder);
+    try {
+      const target = repository.create({ title: 'Connector cache contract', description: 'Invalidate the profile cache before refetching.', priority: 1, status: 'ready', projectName: 'Connectors', workspacePath: null, dueDate: null });
+      repository.addActivity(target.id, 'codex', 'decision', 'Invalidate the profile cache before refetching connector profiles.');
+
+      const recalled = await callData<{ results: Array<Record<string, unknown>> }>('recall_context', {
+        query: 'profile cache invalidation before connector refetch',
+        scope: 'all',
+        limit: 8,
+      });
+
+      expect(recalled.results.length).toBeGreaterThan(0);
+      expect(recalled.results.every((result) => !('entryId' in result))).toBe(true);
+      const rows = database.prepare("SELECT entry_id, channel, rank FROM memory_retrievals ORDER BY rank").all() as Array<{ entry_id: string; channel: string; rank: number }>;
+      expect(rows).toHaveLength(recalled.results.length);
+      expect(rows.every((row) => row.channel === 'recall_context')).toBe(true);
+      expect(rows.map((row) => row.rank)).toEqual(recalled.results.map((_result, index) => index + 1));
+      expect(new Set(rows.map((row) => row.entry_id)).size).toBe(rows.length);
+    } finally {
+      setEmbedder(null);
+    }
+  });
+
   it('recalls deduplicated project context without leaking another project', async () => {
     setEmbedder(deterministicTestEmbedder);
     try {

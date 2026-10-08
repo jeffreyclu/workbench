@@ -23,7 +23,7 @@ import { evidencePromptBlock, type ExternalEvidence } from './external-evidence.
 import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
 import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, memoryRetrievalEntries, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
 import { currentTurnAuthorityContract, finalizeSupervisedOutput, isStatusOnlyTurn, superviseDraft, superviseExternalAction, supervisedRetryPrompt, supervisorRetryError, supervisorPromptContract } from './supervisor.js';
 import { listCandidateWorkspaces } from './workspace-candidates.js';
@@ -2193,6 +2193,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const shortTermContext = shortTermMemory.text;
     const sharedContext = [shortTermContext, externalContext].filter(Boolean).join('\n\n');
     const [freshExternalAuthorization, memoryEvidence] = await Promise.all([externalAuthorizationPromise, memoryPromise]);
+    repository.recordMemoryRetrievals('prefetch', memoryRetrievalEntries(memoryEvidence), {
+      runId: run.id, messageId: run.messageId, conversationId: run.conversationId, workItemId: item.id,
+    });
     const externalAuthorization = await superviseExternalAction({
       conversationId: run.conversationId,
       freshAuthorization: freshExternalAuthorization,
@@ -2535,6 +2538,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       ? repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt))
       : repository.finishRun(run.id, ownerId, finishPatch);
     if (!finished) return;
+    repository.recordMemoryCitations(output, { runId: run.id, messageId: run.messageId, conversationId: run.conversationId });
     if (executionPlan) repository.createExecutionPlan(item.id, executionPlan.summary, executionPlan.tasks);
     if (run.messageId) {
       repository.updateSharedMessage(run.messageId, { body: output, status: 'completed', ...telemetry });

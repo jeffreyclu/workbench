@@ -19,7 +19,7 @@ import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarnes
 import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
 import { isTransientSqliteContention } from './sqlite-contention.js';
 import { ProviderTurnWatchdog, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
-import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
+import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, memoryRetrievalEntries, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
 import { preflightWorkbenchTools } from './palmyra-workbench-tools.js';
@@ -1761,6 +1761,9 @@ export async function replyInSharedRoom(
       })
       : Promise.resolve([]));
     const [freshExternalAuthorization, turnGrounding, memoryEvidence] = await Promise.all([externalAuthorizationPromise, groundingPromise, memoryPromise]);
+    repository.recordMemoryRetrievals('prefetch', memoryRetrievalEntries(memoryEvidence), {
+      runId, messageId, conversationId: target.conversationId, workItemId: linkedItem?.id,
+    });
     const externalAuthorization = await superviseExternalAction({
       conversationId: target.conversationId,
       freshAuthorization: freshExternalAuthorization,
@@ -2103,6 +2106,7 @@ export async function replyInSharedRoom(
       }
     }
     repository.updateSharedMessage(messageId, { author: result.agent, body: result.output, status: 'completed', ...telemetry });
+    repository.recordMemoryCitations(result.output, { runId, messageId, conversationId: target.conversationId });
     repository.recordAgentHandoff(target.conversationId, messageId, result.agent, result.output);
     if (runId) {
       const completedAt = new Date().toISOString();

@@ -17,6 +17,7 @@ import { SourceConnectionRepository } from './repositories/source-connection-rep
 import { DiscoveryRepository } from './repositories/discovery-repository.js';
 import { ConversationRepository } from './repositories/conversation-repository.js';
 import { TabCountRepository } from './repositories/tab-count-repository.js';
+import { MemoryUsageRepository, memoryEntryId, type MemoryEntryUsage, type MemoryRetrievalChannel, type MemoryRetrievalEntry, type MemoryUsageContext } from './repositories/memory-usage-repository.js';
 import { resolveCost } from './model-pricing.js';
 import { RunRepository, type RunPatch } from './repositories/run-repository.js';
 import { QueueRepository } from './repositories/queue-repository.js';
@@ -209,6 +210,7 @@ export class WorkItemRepository {
   private readonly discovery: DiscoveryRepository;
   private readonly conversations: ConversationRepository;
   private readonly tabCounts: TabCountRepository;
+  private readonly memoryUsage: MemoryUsageRepository;
   private readonly runs: RunRepository;
   private readonly queue: QueueRepository;
   private readonly workItems: WorkItemTableRepository;
@@ -226,6 +228,7 @@ export class WorkItemRepository {
     this.discovery = new DiscoveryRepository(this.unitOfWork);
     this.conversations = new ConversationRepository(this.unitOfWork);
     this.tabCounts = new TabCountRepository(this.unitOfWork);
+    this.memoryUsage = new MemoryUsageRepository(this.unitOfWork);
     this.shortTermMemory = new ShortTermMemoryStore(database, shortTermMemoryRoot);
     this.queue = new QueueRepository(this.unitOfWork);
     this.runs = new RunRepository(this.unitOfWork);
@@ -842,7 +845,7 @@ export class WorkItemRepository {
    * block the HTTP event loop. Prompt assembly may opt out when a refresh has
    * already been requested for the same dispatch.
    */
-  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; excludeConversationId?: string; excludeGeneratedConversationId?: string; projectKey?: string; boostProjectKey?: string; conversationId?: string; workItemId?: string; sources?: string[]; importanceProfile?: 'default' | 'personal' } = {}): Promise<Array<{ source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null; retrievalPath: string[] }>> {
+  async searchActivityMemory(query: string, limit = 40, options: { refresh?: boolean; excludeExactBody?: string; excludeConversationId?: string; excludeGeneratedConversationId?: string; projectKey?: string; boostProjectKey?: string; conversationId?: string; workItemId?: string; sources?: string[]; importanceProfile?: 'default' | 'personal' } = {}): Promise<Array<{ entryId: string; source: string; title: string; body: string; createdAt: string; score: number; conversationId: string | null; workItemId: string | null; actor: string | null; retrievalPath: string[] }>> {
     if (query.trim().length < 2) return [];
     if (options.refresh !== false) {
       if (process.env.VITEST) {
@@ -869,6 +872,7 @@ export class WorkItemRepository {
     });
     const excludedBody = options.excludeExactBody?.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
     return results.map((result) => ({
+      entryId: memoryEntryId(result.source, result.sourceId),
       source: legacyMemorySource(result.source),
       title: result.title,
       body: result.snippet.slice(0, 4_000),
@@ -879,6 +883,30 @@ export class WorkItemRepository {
       actor: result.actor,
       retrievalPath: result.retrievalPath,
     })).filter((result) => !excludedBody || result.body.trim().replace(/\s+/g, ' ').toLocaleLowerCase() !== excludedBody);
+  }
+
+  // Usage metrics are ranking and gap-detection inputs only, never a pruning
+  // signal. They are best effort: a failed metric write must not fail the
+  // recall or reply it describes.
+  recordMemoryRetrievals(channel: MemoryRetrievalChannel, entries: MemoryRetrievalEntry[], context: MemoryUsageContext = {}): number {
+    try { return this.memoryUsage.recordRetrievals(channel, entries, context); }
+    catch (error) {
+      console.error('[memory-usage] failed to record memory retrievals', error);
+      return 0;
+    }
+  }
+
+  /** Records `[<file>.md#<N>]` citations once per reply. */
+  recordMemoryCitations(text: string, context: MemoryUsageContext): number {
+    try { return this.memoryUsage.recordCitations(text, context); }
+    catch (error) {
+      console.error('[memory-usage] failed to record memory citations', error);
+      return 0;
+    }
+  }
+
+  listMemoryEntryUsage(limit?: number): MemoryEntryUsage[] {
+    return this.memoryUsage.listEntryUsage(limit);
   }
 
   listQueuedConversationIds(): string[] {
