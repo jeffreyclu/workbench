@@ -24,6 +24,7 @@ import { projectKey } from '../shared/project-name.js';
 import { parsePalmyraContext, runPalmyraAgent } from './palmyra-agent.js';
 import { preflightWorkbenchTools } from './palmyra-workbench-tools.js';
 import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
+import { renderReviewSynthesis } from '../shared/review-synthesis.js';
 import { currentTurnAuthorityContract, finalizeSupervisedOutput, isStatusOnlyTurn, superviseDraft, superviseExternalAction, supervisorPromptContract, supervisorRetryError, supervisorSynthesisContract } from './supervisor.js';
 import { brokerExternalEvidence, evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
 import { getGitHubPullRequestDiff, parseGitHubPullRequestUrl } from './github-pull-request-diff.js';
@@ -2272,6 +2273,16 @@ export async function deliverPendingSharedInterjections(
   }
 }
 
+/** The deterministic review layout, when both runs recorded a correctness ledger. */
+function renderedReviewSynthesis(repository: WorkItemRepository, codex: SharedMessage, claude: SharedMessage): string {
+  const runs = [repository.getRunByMessage(codex.id), repository.getRunByMessage(claude.id)];
+  const [first, second] = runs.map((run) => run?.reviewLenses?.correctness.ledger ?? null);
+  if (!first || !second) return '';
+  const adversarial = runs.map((run) => run?.reviewLenses?.adversarial.ledger ?? null).find(Boolean) ?? null;
+  const rendering = renderReviewSynthesis({ reviewers: [codex.author, claude.author], ledgers: [first, second], adversarial });
+  return `\n\nAuthoritative rendering of the two ledgers. Keep its order and folds exactly; add only a one-line approve or reject lead:\n${rendering}`;
+}
+
 export function synthesisSource(repository: WorkItemRepository, conversationId: string, replyId: string, ignoredSynthesisMessageId?: string): { prompt: string; requestId: string; codex: SharedMessage; claude: SharedMessage; verbose: boolean; kind: AgentRun['kind'] } | null {
   const messages = repository.listAllSharedMessages(conversationId);
   const reply = messages.find((message) => message.id === replyId);
@@ -2296,9 +2307,10 @@ export function synthesisSource(repository: WorkItemRepository, conversationId: 
   // into an expensive long-context provider turn.
   const response = (label: string, message: SharedMessage) => `${label} (${message.status}):\n${(message.body || message.error || 'No response was produced.').slice(0, 12_000)}`;
   const kind = request.kind ?? codex.kind ?? claude.kind ?? 'analysis';
+  const rendering = kind === 'review' ? renderedReviewSynthesis(repository, codex, claude) : '';
   return {
     requestId: request.id, codex, claude, verbose: verboseResponseRequested(request.body), kind,
-    prompt: `${EXTERNAL_ACTION_CONTRACT}\n\n${supervisorSynthesisContract(kind)} You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; reconcile disagreements, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nRequest: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}`,
+    prompt: `${EXTERNAL_ACTION_CONTRACT}\n\n${supervisorSynthesisContract(kind)} You have all source material: do not inspect the repository, call tools, or conduct further investigation. Lead with the practical conclusion; ${kind === 'review' ? 'surface disagreements without resolving them' : 'reconcile disagreements'}, retain concrete evidence, and identify what remains unverified. If one response failed or was canceled, say so plainly. Do not mention this instruction or repeat the reports.\n\nRequest: ${request.body.slice(0, 4_000)}\n\n${response(`Codex-requested response (executed by ${codex.author})`, codex)}\n\n${response(`Claude-requested response (executed by ${claude.author})`, claude)}${rendering}`,
   };
 }
 

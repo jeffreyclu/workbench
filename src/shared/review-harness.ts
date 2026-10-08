@@ -143,7 +143,8 @@ ${REVIEW_PASSES.map((pass) => `   - ${pass.heading}: ${pass.focus}`).join('\n')}
 3. In each pass, answer the pass question and the decision's owed questions. Mark each decision clear, or record every blocking or non-blocking finding against it.
 4. Write the five-pass review with the exact headings above.
 5. End with exactly one ledger block. Every pass must list every decision number (${ordinals.length ? ordinals.join(', ') : 'none'}) exactly once, either in clear or in findings. D0 appears only as a finding. A pass with ledger findings must list them in its section; a pass without findings must say "No material issues."
-<review-ledger>{"version":${REVIEW_HARNESS_VERSION},"passes":[{"pass":1,"clear":[<decision numbers with no finding>],"findings":[{"decision":<decision number or 0>,"severity":"blocking" or "non-blocking","finding":"<what breaks, the fix, file:line>"}]}, …one object per pass, 1 through 5]}</review-ledger>
+<review-ledger>{"version":${REVIEW_HARNESS_VERSION},"passes":[{"pass":1,"clear":[<decision numbers with no finding>],"findings":[{"decision":<decision number or 0>,"severity":"blocking" or "non-blocking","finding":"<what breaks, the fix, file:line>","location":"<path:line>","consequence":"<what breaks for a user or the system>","fix":"<the action>"}]}, …one object per pass, 1 through 5]}</review-ledger>
+A blocking finding with no stateable consequence is shown to Jeffrey as non-blocking, so fill location, consequence and fix on every blocking finding.
 Workbench rejects a ledger that skips a pass or a decision. It then records your verdicts in Jeffrey's review queue: blocking becomes Needs changes, non-blocking becomes Commented, clear decisions stay for Jeffrey. It never overwrites his verdicts.`;
 }
 
@@ -156,6 +157,11 @@ const ledgerSchema = z.object({
       decision: z.number().int().nonnegative(),
       severity: z.enum(['blocking', 'non-blocking']),
       finding: z.string().trim().min(1).max(1_000),
+      // A blocking finding headlines the review only when it states where it
+      // is and what breaks; without a consequence it is shown as non-blocking.
+      location: z.string().trim().min(1).max(300).optional(),
+      consequence: z.string().trim().min(1).max(500).optional(),
+      fix: z.string().trim().min(1).max(500).optional(),
     })),
   })),
 });

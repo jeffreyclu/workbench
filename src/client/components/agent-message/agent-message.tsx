@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MarkdownCode, MarkdownPre } from '../markdown/markdown-code.js';
 import { hideWorkbenchControlBlocks, humanizeRunOutput, humanizeRunOutputBlocks } from '../../lib/run-output';
-import { splitAgentResponse } from './agent-message-logic';
+import { splitAgentResponse, splitFolds } from './agent-message-logic';
 import { requestBlob } from '../../data/request';
 
 const LIVE_RUN_OUTPUT_PAGE_SIZE = 5;
@@ -236,7 +236,7 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
   if (running) return <LiveRunOutput output={visibleBody} interjections={interjections} />;
   const sections = splitAgentResponse(visibleBody);
   const structured = sections.length > 1 || detailForSingle;
-  const renderMarkdown = (content: string) => <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+  const renderPlainMarkdown = (content: string) => <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
     code: MarkdownCode,
     pre: MarkdownPre,
     a: ({ href = '', children, ...props }) => {
@@ -245,6 +245,10 @@ export function AgentMessageBody({ body, running, conversationId, workItemId, in
       return <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>;
     },
   }}>{content}</ReactMarkdown>;
+  // A review folds its non-headline content; the counted heading stays visible.
+  const renderMarkdown = (content: string) => <>{splitFolds(content).map((segment, index) => segment.summary === null
+    ? <div key={index}>{renderPlainMarkdown(segment.body)}</div>
+    : <details key={index} className="agent-fold"><summary>{segment.summary}</summary>{renderPlainMarkdown(segment.body)}</details>)}</>;
 
   if (!structured) return <div className="agent-markdown"><StreamingMarkdown content={visibleBody} streaming={shouldTypewriteCompletion} startAtBeginning={shouldTypewriteCompletion} characterByCharacter={shouldTypewriteCompletion} renderMarkdown={renderMarkdown} /></div>;
 

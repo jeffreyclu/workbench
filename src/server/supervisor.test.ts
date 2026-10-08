@@ -151,6 +151,9 @@ describe('Workbench supervisor', () => {
     expect(supervisorSynthesisContract('review')).toContain('### Pass 1');
     expect(supervisorSynthesisContract('review')).toContain('### Pass 5');
     expect(supervisorSynthesisContract('review')).toContain('never exceed 350 words');
+    expect(supervisorSynthesisContract('review')).toContain('Do not reconcile');
+    expect(supervisorSynthesisContract('review')).toContain('up to five blocking findings');
+    expect(supervisorSynthesisContract('review')).toContain('`N non-blocking`, `Adversarial: N attacks, K escaped`, `Pass coverage`');
     expect(supervisorSynthesisContract('analysis')).not.toContain('five-pass');
   });
 

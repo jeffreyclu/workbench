@@ -1,3 +1,5 @@
+import { stripFolds } from '../shared/review-synthesis.js';
+
 export const GLOBAL_BREVITY_CONTRACT = `Global brevity rule: this applies to every user-visible answer from every agent, execution category, retry, code-review pass, and synthesis. Lead with the practical result. Use plain English and short sentences. A normal answer has a hard limit of 120 words. Do not narrate the investigation or use unexplained engineering shorthand. When several results matter, use compact bullets. Preserve concrete findings, exact evidence, verification gaps, commands, paths, URLs, and blockers; shorten the wording rather than deleting material results. A five-pass review may exceed 120 words only when needed to retain its actual findings, and must still use one compact bullet per finding. The only full verbosity override is Jeffrey explicitly asking for a verbose response in the current turn; it expires after that turn.`;
 
 export const FINAL_RESPONSE_CONTRACT = `${GLOBAL_BREVITY_CONTRACT}
@@ -44,7 +46,8 @@ function visibleWordCount(value: string): number {
  * contract supplies the plain-language requirement at generation time. */
 export function responseStyleViolation(output: string, options: { verbose?: boolean; review?: boolean } = {}): string | null {
   if (options.verbose) return null;
-  const words = visibleWordCount(output);
+  // Folded review content (`:::fold`) is collapsed for the reader and does not count.
+  const words = visibleWordCount(options.review ? stripFolds(output) : output);
   const limit = options.review ? REVIEW_RESPONSE_HARD_LIMIT : NORMAL_RESPONSE_HARD_LIMIT;
   if (words > limit) return `The response is ${words} words; the non-verbose limit is ${limit}.`;
   return null;

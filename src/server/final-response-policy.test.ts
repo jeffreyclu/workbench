@@ -38,6 +38,12 @@ describe('final response policy', () => {
     expect(responseStyleViolation(long, { verbose: true })).toBeNull();
   });
 
+  it('does not count folded review content toward the review word cap', () => {
+    const folded = `Reject: one blocking issue.\n\n:::fold Pass coverage\n${'detail '.repeat(400)}\n:::`;
+    expect(responseStyleViolation(folded, { review: true })).toBeNull();
+    expect(responseStyleViolation(folded.replace(/:::.*\n/g, ''), { review: true })).toContain('limit is 350');
+  });
+
   it('does not reject a concise review because one evidence bullet is long', () => {
     const review = `## Problem\nOne blocking issue was found.\n\n## Solution\n- The migration writes both old and new records before switching readers, but the linked rollback path still reads only the old record and needs to be updated before merge: [src/server/migrate.ts:42](https://github.com/example/repository/blob/abcdef/src/server/migrate.ts#L42).\n\n## Context\nThe rest of the diff is non-blocking.`;
 

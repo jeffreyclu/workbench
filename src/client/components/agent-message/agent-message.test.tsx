@@ -239,3 +239,13 @@ describe('splitAgentResponse', () => {
     expect(container.textContent).not.toContain(body);
   });
 });
+
+describe('review folds', () => {
+  it('renders a counted fold closed by default with its content inside', () => {
+    const { container } = render(<AgentMessageBody running={false} body={'Reject.\n\n:::fold 2 non-blocking\n- a\n- b\n:::'} />);
+    const details = container.querySelector('details.agent-fold');
+    expect(details?.querySelector('summary')?.textContent).toBe('2 non-blocking');
+    expect(details?.hasAttribute('open')).toBe(false);
+    expect(details?.textContent).toContain('b');
+  });
+});

@@ -1,3 +1,5 @@
+import { FOLD_PATTERN } from '../../../shared/review-synthesis.js';
+
 export interface AgentResponseSection {
   title: string;
   body: string;
@@ -83,4 +85,25 @@ export function splitAgentResponse(body: string): AgentResponseSection[] {
     grouped.push(blocks.slice(i, i + groupSize).join('\n\n'));
   }
   return grouped.map((content, index) => ({ title: index === 0 ? 'Brief' : `Detail ${String(index + 1).padStart(2, '0')}`, body: content }));
+}
+
+export interface FoldSegment {
+  /** Null for ordinary Markdown; the counted heading for a `:::fold` block. */
+  summary: string | null;
+  body: string;
+}
+
+/** Splits a reply around its `:::fold` blocks, in order, dropping nothing. */
+export function splitFolds(content: string): FoldSegment[] {
+  const segments: FoldSegment[] = [];
+  let cursor = 0;
+  for (const match of content.matchAll(new RegExp(FOLD_PATTERN.source, 'gm'))) {
+    const before = content.slice(cursor, match.index).trim();
+    if (before) segments.push({ summary: null, body: before });
+    segments.push({ summary: match[1], body: match[2] });
+    cursor = match.index + match[0].length;
+  }
+  const rest = content.slice(cursor).trim();
+  if (rest) segments.push({ summary: null, body: rest });
+  return segments;
 }
