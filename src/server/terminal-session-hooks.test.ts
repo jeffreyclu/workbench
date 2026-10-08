@@ -57,6 +57,16 @@ describe('Claude Code hook bridge', () => {
     expect(conversations()).toHaveLength(1);
   });
 
+  it('drops Workbench-resumed turns on a session that is already a terminal conversation', () => {
+    applyTerminalHookEvent(database, event('UserPromptSubmit', { prompt_id: 'p-1', prompt: 'From the terminal' }));
+    applyTerminalHookEvent(database, event('Stop', { prompt_id: 'p-1', last_assistant_message: 'Terminal reply' }));
+    const resumedPrompt = applyTerminalHookEvent(database, event('UserPromptSubmit', { prompt_id: 'p-2', prompt: 'Full Workbench prompt', entrypoint: 'sdk-cli' }));
+    const resumedStop = applyTerminalHookEvent(database, event('Stop', { prompt_id: 'p-2', last_assistant_message: 'Workbench reply', entrypoint: 'sdk-cli' }));
+    expect(resumedPrompt).toEqual({ status: 'skipped', reason: 'workbench run' });
+    expect(resumedStop).toEqual({ status: 'skipped', reason: 'workbench run' });
+    expect(messages(conversations()[0].id).slice(1)).toEqual([{ author: 'jeffrey', body: 'From the terminal' }, { author: 'claude', body: 'Terminal reply' }]);
+  });
+
   it('does not resurrect a deleted conversation', () => {
     applyTerminalHookEvent(database, event('SessionStart'));
     database.prepare("UPDATE shared_conversations SET deleted_at = 'now'").run();
@@ -95,7 +105,9 @@ describe('Claude Code hook bridge', () => {
     });
 
     it('rejects forwarded (non-loopback) callers and malformed bodies', async () => {
-      expect((await post(event('SessionStart'), { 'x-forwarded-for': '203.0.113.9' })).status).toBe(403);
+      // A forwarded request is no longer a direct loopback caller, so the app's
+      // auth gate answers 401 before the route's own 403 can; both reject it.
+      expect([401, 403]).toContain((await post(event('SessionStart'), { 'x-forwarded-for': '203.0.113.9' })).status);
       expect(conversations()).toHaveLength(0);
       expect((await post({ provider: 'claude', hook_event_name: 'Nope', session_id: 'x' })).status).toBe(400);
     });

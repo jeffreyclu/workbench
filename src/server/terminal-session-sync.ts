@@ -624,6 +624,12 @@ function ensureHookSession(database: WorkbenchDatabase, payload: TerminalHookPay
  * `prompt_id`, so a hook that retries lands exactly once.
  */
 export function applyTerminalHookEvent(database: WorkbenchDatabase, payload: TerminalHookPayload, now: () => Date = () => new Date()): TerminalHookResult {
+  // Checked on every event, not only when the session row is first recorded:
+  // a Workbench reply to a terminal conversation resumes the same provider
+  // session with `claude -p`, and those hook events must never land as
+  // Jeffrey's words or as a second copy of the reply.
+  if (payload.entrypoint?.startsWith('sdk')) return { status: 'skipped', reason: 'workbench run' };
+  if (payload.cwd && isManagedRunWorktree(payload.cwd)) return { status: 'skipped', reason: 'workbench worktree' };
   const at = now().toISOString();
   database.exec('BEGIN IMMEDIATE;');
   try {
