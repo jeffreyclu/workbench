@@ -243,7 +243,7 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     rmSync(root, { recursive: true });
   });
 
-  it('dates each numbered entry by its latest written date, never later than the file', () => {
+  it('dates numbered entries from the file modification signal, not dates in prose', () => {
     const root = mkdtempSync(join(tmpdir(), 'workbench-memory-entry-dates-'));
     const file = join(root, 'lessons.md');
     writeFileSync(file, [
@@ -257,9 +257,9 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
 
     const rows = database.prepare("SELECT source_id, created_at FROM memory_documents WHERE source = 'doc' ORDER BY source_id").all() as Array<{ source_id: string; created_at: string }>;
     expect(rows).toEqual([
-      { source_id: 'local:lessons.md#1', created_at: '2026-09-21T00:00:00.000Z' },
+      { source_id: 'local:lessons.md#1', created_at: modifiedAt.toISOString() },
       { source_id: 'local:lessons.md#2', created_at: modifiedAt.toISOString() },
-      { source_id: 'local:lessons.md#3', created_at: '2026-10-01T00:00:00.000Z' },
+      { source_id: 'local:lessons.md#3', created_at: modifiedAt.toISOString() },
     ]);
     rmSync(root, { recursive: true });
   });
@@ -539,6 +539,24 @@ describe('indexPendingMemory / searchMemory (stubbed embedder, no model download
     const topical = await searchMemory(database, 'workbench memory catalogue', { limit: 10 });
     expect(topical[0]?.sourceId).toBe('august-artifact');
     expect(topical.flatMap(({ retrievalPath }) => retrievalPath).some((step) => step.startsWith('Time-scoped question:'))).toBe(false);
+  });
+
+  it('boosts a lesson changed today even when its body mentions only an old date', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'workbench-memory-recent-lesson-'));
+    const file = join(root, 'lessons.md');
+    writeFileSync(file, '## <a id="1"></a>1. Workbench memory ranking follow-up\n\nThe Workbench memory lesson references 2026-08-01.');
+    const today = new Date();
+    utimesSync(file, today, today);
+    collectMemoryDocuments(database, { docRoots: [{ label: 'local', path: root }] });
+    await indexPendingMemory(database);
+
+    const [lesson] = await searchMemory(database, 'what changes to workbench memory were made', { limit: 10 });
+
+    expect(lesson?.sourceId).toBe('local:lessons.md#1');
+    expect(lesson?.createdAt.slice(0, 10)).toBe(today.toISOString().slice(0, 10));
+    expect(lesson?.retrievalPath).toContain(TIME_SCOPED_RETRIEVAL_STEP);
+    expect(lesson?.retrievalPath).toContain('Recency: 0d old ×2.00');
+    rmSync(root, { recursive: true });
   });
 
   it('uses recency to break otherwise comparable evidence rankings', async () => {

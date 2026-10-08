@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync, type StdioOptions } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { extname, join, relative, resolve } from 'node:path';
+import { dirname, extname, join, relative, resolve } from 'node:path';
 import { pipeline } from '@huggingface/transformers';
 import type { WorkbenchDatabase } from './database.js';
 import { buildFtsMatchQuery } from './fts-query.js';
 import { expandKnowledgeGraph } from './knowledge-graph.js';
-import { scoreSemanticDocuments, searchSemanticChunks, searchSemanticTexts } from './memory-semantic-worker.js';
+import { scoreSemanticDocuments, searchSemanticChunks } from './memory-semantic-worker.js';
 import { WORKBENCH_DOCUMENTS_ROOT } from './local-documents.js';
 
 /**
@@ -255,22 +256,18 @@ function splitNumberedEntries(body: string): Array<{ id: string; title: string; 
     .filter((entry) => nonEmpty(entry.body));
 }
 
-/**
- * Every entry in a numbered file shares the file's mtime, so one new lesson
- * would make all of its neighbours look new. An entry is dated by the latest
- * calendar date written in it ("Learned 2026-10-08"), never later than the
- * file itself; an undated entry falls back to the file's mtime.
- */
-function numberedEntryDate(body: string, fileModifiedAt: string): string {
-  let latest: string | null = null;
-  for (const [literal] of body.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) {
-    const timestamp = Date.parse(`${literal}T00:00:00.000Z`);
-    if (!Number.isFinite(timestamp)) continue;
-    const iso = new Date(timestamp).toISOString();
-    if (iso.slice(0, 10) !== literal || iso > fileModifiedAt) continue;
-    if (!latest || iso > latest) latest = iso;
+/** Returns the file's committed modification time, or mtime when Git cannot
+ * establish one for the exact working-tree content. */
+function documentFileDate(file: string, fallback: string): string {
+  try {
+    const options = { cwd: dirname(file), encoding: 'utf8' as const, stdio: ['ignore', 'pipe', 'ignore'] as StdioOptions };
+    if (execFileSync('git', ['status', '--porcelain', '--', file], options).trim()) return fallback;
+    const committed = execFileSync('git', ['log', '-1', '--format=%cI', '--', file], options).trim();
+    const timestamp = Date.parse(committed);
+    return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
+  } catch {
+    return fallback;
   }
-  return latest ?? fileModifiedAt;
 }
 
 function collectDocCandidates(label: string, docsRoot: string): CandidateDocument[] {
@@ -282,7 +279,7 @@ function collectDocCandidates(label: string, docsRoot: string): CandidateDocumen
     // shared Workbench documents tree) can otherwise share a relative path and
     // collide on the same (source, source_id) key.
     const sourceId = `${label}:${relative(docsRoot, file)}`;
-    const createdAt = statSync(file).mtime.toISOString();
+    const createdAt = documentFileDate(file, statSync(file).mtime.toISOString());
     const entries = splitNumberedEntries(body);
     if (entries) {
       // One row per numbered entry (sourceId `label:path#N`) so a lesson is
@@ -290,7 +287,7 @@ function collectDocCandidates(label: string, docsRoot: string): CandidateDocumen
       for (const entry of entries) {
         candidates.push({
           source: 'doc', sourceId: `${sourceId}#${entry.id}`, conversationId: null, workItemId: null, actor: null,
-          title: entry.title, body: entry.body, createdAt: numberedEntryDate(entry.body, createdAt),
+          title: entry.title, body: entry.body, createdAt,
         });
       }
       continue;
@@ -1024,27 +1021,18 @@ export async function searchMemory(database: WorkbenchDatabase, query: string, o
   let primaryQueryVector: Float32Array | null = null;
   try {
     const semanticQueries = context ? [primary, context] : [primary];
-    const queryVectors = fileBacked ? null : await embedTexts(semanticQueries);
+    // Reuse one embedding across the full and recent-only passes. The second
+    // pass changes the document population, not the user's query.
+    const queryVectors = await embedTexts(semanticQueries);
     for (const pass of passes) {
-      const semantic = queryVectors
-        ? await searchSemanticChunks(
-            database,
-            queryVectors,
-            pass.sql,
-            pass.parameters,
-            MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE,
-            MIN_SEMANTIC_SIMILARITY,
-          )
-        : await searchSemanticTexts(
-            database,
-            semanticQueries,
-            pass.sql,
-            pass.parameters,
-            MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE,
-            MIN_SEMANTIC_SIMILARITY,
-            buildMemoryFtsMatchQuery(lexicalPrimary),
-            context ? buildMemoryFtsMatchQuery(context) : null,
-          );
+      const semantic = await searchSemanticChunks(
+        database,
+        queryVectors,
+        pass.sql,
+        pass.parameters,
+        MEMORY_RETRIEVAL_CANDIDATE_POOL_SIZE,
+        MIN_SEMANTIC_SIMILARITY,
+      );
       if (semantic.primaryVector) {
         primaryQueryVector = semantic.primaryVector;
         addRankedRows(semantic.primaryLexical.map((row) => ({ chunk_id: row.id, document_id: row.documentId, text: row.text })), 'primaryLexicalRank');
