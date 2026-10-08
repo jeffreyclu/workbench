@@ -3,7 +3,9 @@
 Workbench tasks, conversations, and activity are the canonical shared context.
 
 The shared room is the common conversation for Jeffrey, Codex, and Claude. Every task execution prompt includes:
-- Recent completed room messages (last 6, capped to ~1.5 KB each)
+- Compacted room history: one total budget of 1,500 characters (`compactConversationHistory`, `src/server/shared-room.ts`). Each recent message body is cut to at most 700 characters, newest first, so about two recent messages fit. 15% of the budget is reserved for a summary of older messages (up to 8 messages, 140 characters each).
+- Short-term memory from active conversations, up to 2,400 characters.
+- Durable memory prefetch, up to 12,000 characters (32,000 for personal-memory requests), only for research, strategy, bug-fix, and history-dependent turns.
 
 ## Rules
 

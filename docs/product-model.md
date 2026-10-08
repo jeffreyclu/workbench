@@ -8,7 +8,7 @@ Workbench is Jeffrey's ordered attention stack. Jeffrey owns the stack. Agents g
 
 The shared room is the coordination layer for Jeffrey, Codex, and Claude. A message can ask both agents concurrently, target one agent, or simply record a thought. Messages persist locally in SQLite. Pinning a message promotes it to a durable lesson.
 
-Every task execution receives the durable lessons plus the 30 most recent completed room messages. Running and failed placeholders are excluded. This gives every dispatched agent the same working context without allowing the prompt to grow without bound.
+Every room-dispatched execution receives a compacted view of the conversation, not the full history. `compactConversationHistory` in `src/server/shared-room.ts` applies one total budget of 1,500 characters: each recent message body is cut to at most 700 characters, newest first, and 15% of the budget is reserved for a short summary of older messages (up to 8 messages, 140 characters each). In practice that is about two recent messages. Short-term memory adds up to 2,400 characters. For research, strategy, bug-fix, and history-dependent turns, durable memory retrieval adds up to 12,000 characters (32,000 for personal-memory requests). No lessons file is injected. This keeps the prompt from growing without bound.
 
 ## Attention stack
 
