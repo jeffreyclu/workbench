@@ -529,11 +529,14 @@ describe('openDatabase', () => {
     directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
     const path = join(directory, 'workbench.db');
     const current = openDatabase(path);
-    current.enableDefensive(false);
+    // node:sqlite gained enableDefensive after Node 22.19; older runtimes open
+    // without defensive mode, so writable_schema edits already work there.
+    const defensive = current as unknown as { enableDefensive?: (enabled: boolean) => void };
+    defensive.enableDefensive?.(false);
     current.exec('PRAGMA writable_schema = ON;');
     current.prepare("UPDATE sqlite_master SET sql = replace(sql, ?, ?) WHERE name = 'agent_runs'").run("'provider_refusal', 'runtime_promoted'", "'provider_refusal'");
     current.exec(`PRAGMA schema_version = ${(current.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version + 1}; PRAGMA writable_schema = OFF;`);
-    current.enableDefensive(true);
+    defensive.enableDefensive?.(true);
     current.prepare("DELETE FROM schema_migrations WHERE id = '098_agent_run_failure_kind_runtime_promoted'").run();
     current.close();
 
