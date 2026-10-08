@@ -12,6 +12,7 @@ import { createServer } from 'node:http';
 import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
 import { createApplicationSocketHandler } from './socket-application.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
+import { reattachAll as reattachAgentSessions } from './agent-session.js';
 import { shutdownTurnGroundingClassifier, warmTurnGroundingClassifier } from './turn-grounding-ai.js';
 import { configureRuntimeRetirement } from './runtime-retirement.js';
 import { shutdownMemorySemanticWorker } from './memory-semantic-worker.js';
@@ -38,6 +39,13 @@ const mcpQualityMonitor = liveRuntimeCapabilities.ownScheduler ? startMcpQuality
 }) : null;
 const knowledgeDriftMonitor = liveRuntimeCapabilities.ownScheduler ? startKnowledgeDriftMonitor(database) : null;
 const consolidationMonitor = liveRuntimeCapabilities.ownScheduler ? startConsolidationMonitor(repository) : null;
+// Session hosts are detached and outlive the previous runtime. Adopt the live
+// ones and mark the rest stopped; their provider sessions resume on next use.
+if (liveRuntimeCapabilities.ownScheduler) {
+  reattachAgentSessions(database).catch((error: unknown) => {
+    console.error('Agent session reattach failed:', error instanceof Error ? error.message : error);
+  });
+}
 configureRuntimeRetirement(() => {
   scheduler?.stop();
   promotionWorker?.stop();
@@ -65,6 +73,9 @@ const shutdown = () => {
   // terminal state before killing child process groups so the next runtime
   // never displays ghost work for the lease-recovery grace period.
   repository.interruptOwnedWork(OWNER_ID, 'Workbench runtime promoted while this agent was running. Retry or continue the conversation.');
+  // Only per-run children stop here. Agent session hosts (agent-session.ts)
+  // are detached on purpose and must survive this runtime; the next one
+  // reattaches to them at boot.
   shutdownActiveAgentProcesses();
   shutdownTurnGroundingClassifier();
   shutdownDiffConfidenceModel();

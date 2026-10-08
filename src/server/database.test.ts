@@ -108,6 +108,7 @@ const EXPECTED_MIGRATIONS = [
   '092_consolidation_proposals',
   '093_agent_run_review_lenses',
   '094_consolidation_apply_results',
+  '095_agent_sessions',
 ];
 
 describe('openDatabase', () => {
@@ -256,6 +257,33 @@ describe('openDatabase', () => {
     upgraded.prepare("UPDATE consolidation_proposals SET status = 'partially_applied', apply_results_json = '[]' WHERE id = 'kept'").run();
     expect(upgraded.prepare("SELECT status FROM consolidation_proposals WHERE id = 'kept'").get()).toEqual({ status: 'partially_applied' });
     expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '094_consolidation_apply_results'").get()).toBeTruthy();
+    upgraded.close();
+  });
+
+  it('creates the agent_sessions table when upgrading from migration 094', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    // Return the database to exactly what a runtime through 094 recorded.
+    current.exec('DROP TABLE agent_sessions;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '095_agent_sessions'").run();
+    expect(current.prepare("SELECT id FROM schema_migrations WHERE id = '094_consolidation_apply_results'").get()).toBeTruthy();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = upgraded.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string; pk: number }>;
+    expect(columns.map(({ name }) => name)).toEqual([
+      'conversation_id', 'agent', 'provider_session_id', 'account_profile', 'cwd', 'model', 'profile',
+      'state', 'socket_path', 'last_event_offset', 'started_at', 'last_active_at',
+    ]);
+    expect(columns.filter(({ pk }) => pk > 0).map(({ name }) => name)).toEqual(['conversation_id', 'agent']);
+    const insert = upgraded.prepare("INSERT INTO agent_sessions (conversation_id, agent, account_profile, cwd, profile, state, socket_path, started_at, last_active_at) VALUES (?, ?, 'default', '/tmp', 'standard', ?, '/tmp/s.sock', '2026-10-08T00:00:00.000Z', '2026-10-08T00:00:00.000Z')");
+    insert.run('conversation-1', 'claude', 'idle');
+    expect(() => insert.run('conversation-1', 'claude', 'idle')).toThrow();
+    expect(() => insert.run('conversation-2', 'palmyra', 'idle')).toThrow();
+    expect(() => insert.run('conversation-3', 'codex', 'running')).toThrow();
+    expect(upgraded.prepare("SELECT last_event_offset FROM agent_sessions WHERE conversation_id = 'conversation-1'").get()).toEqual({ last_event_offset: 0 });
+    expect(upgraded.prepare("SELECT id FROM schema_migrations WHERE id = '095_agent_sessions'").get()).toBeTruthy();
     upgraded.close();
   });
 

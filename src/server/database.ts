@@ -2614,6 +2614,32 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // One long-lived provider session host per (conversation, agent). The host
+    // survives server restarts; this row lets a new runtime reattach to it and
+    // keeps the provider session id after an idle stop so the next turn resumes.
+    id: '095_agent_sessions',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+          conversation_id TEXT NOT NULL,
+          agent TEXT NOT NULL CHECK (agent IN ('claude', 'codex')),
+          provider_session_id TEXT,
+          account_profile TEXT NOT NULL,
+          cwd TEXT NOT NULL,
+          model TEXT,
+          profile TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('idle', 'turn', 'stopped')),
+          socket_path TEXT NOT NULL,
+          last_event_offset INTEGER NOT NULL DEFAULT 0 CHECK (last_event_offset >= 0),
+          started_at TEXT NOT NULL,
+          last_active_at TEXT NOT NULL,
+          PRIMARY KEY (conversation_id, agent)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_sessions_state ON agent_sessions(state);
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

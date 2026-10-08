@@ -376,13 +376,23 @@ function codexAppServerCommand(): string {
 
 // ec13a8cb LEGACY-AFFECTING: steerable Codex app-server turns now use the
 // provisioned git/gh guard and skip pooled processes when a grant is attached.
-function spawnCodexAppServer(cwd: string, accountProfile: string, externalActionGuard?: ExternalActionProcessGuard) {
-  return spawn(codexAppServerCommand(), CODEX_APP_SERVER_ARGS, {
-    cwd,
+/** The exact app-server launch, shared with the detached session host. */
+export function codexAppServerLaunch(cwd: string, accountProfile: string, externalActionGuard?: ExternalActionProcessGuard): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
+  return {
+    command: codexAppServerCommand(),
+    args: CODEX_APP_SERVER_ARGS,
     // Codex refuses to start an HTTP MCP server whose configured bearer-token
     // environment variable is absent. Workbench trusts its loopback peer, so
     // this is an intentionally non-secret marker, not Jeffrey's UI token.
     env: { ...agentEnvironmentForWorkspace('codex', accountProfile, cwd, externalActionGuard), WORKBENCH_LOCAL_MCP_TOKEN: 'loopback' },
+  };
+}
+
+function spawnCodexAppServer(cwd: string, accountProfile: string, externalActionGuard?: ExternalActionProcessGuard) {
+  const launch = codexAppServerLaunch(cwd, accountProfile, externalActionGuard);
+  return spawn(launch.command, launch.args, {
+    cwd,
+    env: launch.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   });
