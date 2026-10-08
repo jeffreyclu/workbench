@@ -448,3 +448,15 @@ checkout, and never cite local paths or line numbers as evidence for a PR review
 Learned 2026-10-08 on the time-scoped retrieval task. A complaint about retrieval spawns follow-up tasks, runs, and activity about the same subject within hours. By the time the fix is tested, those newer rows dominate the replay: on the full live copy, `bd37e9e2` and this task's own work item took the top slots for "what changes to workbench memory were made". Run the replay twice. First, on a read-only `sqlite3 ".backup"` copy. Second, on a copy that deletes non-doc `memory_documents` rows (and their chunks) created after the question's timestamp. Judge acceptance on the as-of copy and report both results. Doc rows stay because their `created_at` is the file mtime. Also: in a time-scoped query, trigger words like "changes" match boilerplate such as "Integrated agent changes into ...", so they are kept out of the keyword channel.
 
 *Provenance: 9490929d-6aaf-4722-ae78-d5d4eaabbc2b*
+
+### <a id="28"></a>28. Counting fake-agent spawns over-counts: host respawns and the grounding call
+
+When a test asserts "the turn ran exactly once" using a fake provider's spawn count, count turns received, not process starts. (1) The session host respawns an idle provider after a crash; that spawn executes nothing. (2) In shared-room tests the supervisor's grounding call also runs the fake claude binary with --input-format, so only spawns carrying --session-id or --resume are provider sessions. Also: the fake must emit with writeSync(1, ...) and a real "\n" before process.exit, or buffered stdout is lost and the host sees a failure with zero events, which wrongly triggers the pre-first-event fallback and masks the bug under test. Session fallback is decided by canFallBackToPerRun (shared-room.ts): false once the provider streamed its first event.
+
+*Provenance: 102eeb91-3a84-462e-8353-77b9b56c2593*
+
+### <a id="29"></a>29. Blocking per-run fallback is not enough: run-level transient retry can also replay a started turn
+
+When guarding against a repeated turn after side effects, check every replay path, not just the one named. In src/server/agent-runner.ts the failure handler (~:2826) schedules a whole-run retry when RETRYABLE_KINDS.has(run.kind) && isTransientAgentError(error). The SessionTurnStartedError wrapper added in 79e8bf7 keeps the original message, so a mid-turn error that looks transient is still retried and commits/pushes can run twice. The wrapper also hides the original class from instanceof checks (ProviderRefusalError, AgentTerminalWarningError at ~:2834 and ~:2828). Also unfixed: the Claude-at-capacity to Codex fallback in runAgentCommandWithFallback. Reviewing a fix for duplicated side effects should enumerate all of: per-run fallback, transient retry, capacity fallback.
+
+*Provenance: 73ea0400-3361-441e-bd09-323fe909e172*

@@ -743,3 +743,35 @@ Persistent-session turns write their only `usage` diagnostic when the turn ends,
 ensureSession (src/server/agent-session.ts) restarts the host with --resume on a cwd change only when the session state is not 'turn'. If another turn (for example a chat reply) is running on the same conversation and agent, a task run in a different worktree reuses that process and executes in the other turn's cwd, possibly the primary checkout. Overlapping turns also share one capability file: writeTurnCapability overwrites the grant and the first turn to finish clears it for the other. Any change that routes more run kinds onto the conversation session (commit 5571956, task 66235d6b) must serialize turns per session or isolate busy-session runs. Review of that commit found this; unverified whether an execute run can overlap a chat turn in practice.
 
 *Provenance: 66235d6b-8e27-4e05-9294-1b4bcbe49df4*
+
+### <a id="54"></a>54. Persistent sessions default on; fan-out and failures use per-run path
+
+Persistent agent sessions are on unless WORKBENCH_PERSISTENT_SESSIONS is exactly '0'; persistentSessionsEnabled() in src/server/shared-room.ts is the single reader. Fan-out replies (a message sent to both agents, including task runs) keep per-run processes. A non-cancel session turn failure reruns on the per-run path with the existing Claude-to-Codex rules. The fallback prompt carries no pre-fetched long-term memory because sessions skip it; the agent can still call recall_context. Verified with the real claude CLI: one process served three turns. Operational trap: an assigned run worktree can be deleted from outside the run; recreate it from main at the same path and relink node_modules.
+
+### <a id="55"></a>55. Session-turn fallback must not rerun a turn that already started
+
+Commit cdc5571 (task dee59961) makes any non-cancel persistent-session turn failure rerun the whole request on a per-run process. See replyInSharedRoom in src/server/shared-room.ts (~:2442) and executeAgentRun in src/server/agent-runner.ts (~:2452). runSharedSessionTurn throws on turn status 'failed' or 'interrupted' after the agent may already have edited files, committed, pushed, or posted externally. The rerun then repeats those side effects. Fall back only when ensureSession or submitTurn fails, before the turn is accepted. Report later failures instead of retrying them. A related trap: the same commit excludes replies to messages sent to both agents from sessions, citing "each needs a process of its own". Sessions are already keyed by {conversationId, agent}, so that reason is wrong. Found by review of run 977f8f54. Duplicate side effects were not reproduced live.
+
+*Provenance: dee59961-e797-4010-a56f-083398533ce6*
+
+### <a id="56"></a>56. Shared agent sessions need a per-session turn lock and owner-stamped capability files
+
+A chat turn and a task run can share one live agent session. Without serialization, the run reuses the chat turn's host process and edits the wrong directory. Overlapping turns also clear each other's capability file. Fix: runSharedSessionTurn in src/server/shared-room.ts queues turns per conversation+agent, and ensureSession restarts the host with --resume when the worktree differs. The capability file now stores the writing turn id under __turnId, and a turn clears it only if it wrote it. Limit: the lock is in-process, so it does not cover a second runtime or a turn still running in a host after a server restart. Unrelated pre-existing failure on the base commit: repository.test.ts "retrieves one shared memory snapshot for a dated repeat request" (searchActivityMemory called twice).
+
+### <a id="57"></a>57. Restart pickup of an unfinished session reply must wait in the per-session turn queue
+
+This builds on [workbench-operating-practices.md#56]. At startup, src/server/index.ts:53 runs reattachAgentSessions and then recoverSharedSessionTurns, without awaiting them, while the scheduler is already running. Recovery waits up to LEASE_MS + 5s to claim the reply, then waits for the in-flight turn, and never takes withSessionTurnLock (src/server/shared-room.ts). During that window, a queued execute run on the same conversation and agent finds the lock free. Its ensureSession call then either reuses the busy host, so it edits the reply's directory, or restarts the host with --resume, which kills the recovered reply. Fix: make recovery wait in withSessionTurnLock under the same `${conversationId}:${agent}` key before it reads the in-flight turn. Related trap: syncWaitingReasons in src/server/repositories/run-repository.ts:548 keeps the waiting reason only by matching the text 'waiting for the session%', so renaming SESSION_TURN_WAITING_REASON silently erases the status. Not a risk: the __turnId key in capability.json never grants anything, because the guard only checks for the named permission it needs (scripts/agent-bin/external-action-command-guard.mjs:63-69). Found by reading code in the review of commit f3e43d0 on 2026-10-08; not reproduced at runtime.
+
+*Provenance: 03903338-b30d-4527-a817-daeb65693fb0*
+
+### <a id="58"></a>58. Boot recovery must reserve the session turn queue slot synchronously
+
+Recovered session turns join the per-(conversation, agent) queue in shared-room.ts. The slot must be taken (enqueueSessionTurn) for every live agent_sessions row BEFORE any await in recoverSharedSessionTurns, because the scheduler is already running and a task run can take the lock during the async tail() scan. Reserving per row keeps different conversations parallel. Related traps: sessionTurnAttempts is a process-global map keyed by messageId, so tests reusing a messageId see turnId #2; and the Claude-to-Codex capacity fallback catch receives SessionTurnStartedError (message preserved), so isAgentCapacityError matches it unless guarded by canFallBackToPerRun. The 'Claude session expired' retry branch has the same unguarded re-run gap.
+
+*Provenance: b55fd1d0-98c5-4d2e-a309-50f35040ff63*
+
+### <a id="59"></a>59. Boot recovery must queue before the scheduler starts, and keep its lease alive while queued
+
+Review of commit ba6714c (restart recovery joins per-session turn queue) found two gaps a unit test with a fake agent will not show. (1) src/server/index.ts starts the scheduler before recoverSharedSessionTurns runs (after an async step), so a task run can take the session slot first; slot claiming for recovered turns must happen before the scheduler starts. (2) In recoverSharedSessionTurns the message lease is claimed, but the renewal timer starts only after the wait for the previous turn, so a long run in front lets the reply's lease lapse. Any code that waits in a queue while owning a lease must renew the lease during the wait.
+
+*Provenance: 0af4537e-1cbb-4426-bfef-4f43e06be833*

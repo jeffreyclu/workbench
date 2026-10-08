@@ -8,9 +8,9 @@ Read these rows first, then open only matching files. Entry counts are generated
 | `engineering-standards.md` | 42 | workbench | core | TypeScript conventions; feature flags | `working-with-jeffrey.md` |
 | `integration-constraints.md` | 11 | workbench | core | Tailscale; Slack Workflow Builder | — |
 | `migration-log.md` | 1 | workbench | archive | 2026-08-23 consolidation | — |
-| `verification-and-debugging-method.md` | 27 | portable | core | root-cause validation; PR review | `workbench-operating-practices.md` |
+| `verification-and-debugging-method.md` | 29 | portable | core | root-cause validation; PR review | `workbench-operating-practices.md` |
 | `workbench-frontend-lessons.md` | 62 | workbench | context | buildId toast; virtualized row height | `workbench-product-decisions.md` |
-| `workbench-operating-practices.md` | 53 | workbench | core | task queue stack; artifact publishing | `verification-and-debugging-method.md` |
+| `workbench-operating-practices.md` | 59 | workbench | core | task queue stack; artifact publishing | `verification-and-debugging-method.md` |
 | `workbench-product-decisions.md` | 88 | workbench | core | ProjectColorDot; /api/realtime | `workbench-frontend-lessons.md` |
 | `working-with-jeffrey.md` | 40 | portable | core | Jeffrey voice; ownership confirmation | `engineering-standards.md` |
 | `writer-context.md` | 30 | writer | context | Writer connectors; PLUTO exclusion | — |
