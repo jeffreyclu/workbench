@@ -14,6 +14,7 @@
     "dev:web:lan": "vite --host",
     "share": "tsx scripts/share-local.ts",
     "share:workbench": "tsx scripts/share.ts",
+    "hooks:install": "tsx scripts/install-claude-hooks.ts",
     "runtime:promote": "tsx scripts/promote-runtime.ts",
     "runtime:start": "tsx scripts/start-runtime.ts",
     "runtime:install-supervisor": "zsh scripts/install-runtime-supervisor.sh",

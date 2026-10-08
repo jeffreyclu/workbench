@@ -246,6 +246,17 @@ function isSecure(request: GateRequest, trustedProxies: string[]): boolean {
 }
 
 /**
+ * True only for a direct loopback connection. A tunnel or reverse proxy that
+ * reaches Workbench from loopback still stamps forwarding headers, so those
+ * disqualify the request even though the TCP peer is local.
+ */
+export function isDirectLoopbackRequest(request: GateRequest): boolean {
+  const peer = socketAddress(request);
+  if (!peer || !isLoopbackIp(peer)) return false;
+  return !['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded'].some((name) => request.headers[name] !== undefined);
+}
+
+/**
  * Coworkers who open a shared artifact hold no Workbench token, so writing
  * feedback back or viewing the thread without one — and only when feedback is
  * configured. The narrow exemption covers one artifact's comments, never the

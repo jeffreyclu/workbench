@@ -28,6 +28,7 @@ import { createSourceConnectionRouter } from './routes/source-connection-router.
 import { createExecutionRouter } from './routes/execution-router.js';
 import { createLinearRouter } from './routes/linear-router.js';
 import { createMcpRouter } from './routes/mcp-router.js';
+import { createTerminalSessionRouter } from './routes/terminal-session-router.js';
 import { setRunArtifactPublisher } from './run-artifact-publish.js';
 import { createAgentAccountRouter } from './routes/agent-account-router.js';
 import { createGitHubRouter } from './routes/github-router.js';
@@ -81,6 +82,7 @@ export function createApp(database: WorkbenchDatabase, capabilities: RuntimeCapa
   app.use(createSourceConnectionRouter(context));
   app.use(createGitHubRouter(context));
   app.use(createMcpRouter(context));
+  app.use(createTerminalSessionRouter(context));
   app.use(createAgentAccountRouter());
   app.use(createExecutionRouter(context));
   app.use(createLinearRouter(context));

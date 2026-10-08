@@ -6,6 +6,7 @@ import { basename, join, relative, sep } from 'node:path';
 
 import type { WorkbenchDatabase } from './database.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent } from './realtime.js';
+import { projectKey } from '../shared/project-name.js';
 import { isManagedRunWorktree } from './run-worktree.js';
 
 /**
@@ -296,6 +297,12 @@ function replyBody(text: string, toolCount: number): string {
 
 type ChunkChanges = { created: Set<string>; updated: Set<string> };
 
+function syncMarker(provider: TerminalProvider, sessionId: string, cwd: string | null, project: string | null = null): string {
+  const where = cwd ? ` in \`${cwd}\`` : '';
+  const linked = project ? ` Project: ${project}.` : '';
+  return `Synced from a terminal ${PROVIDER_LABEL[provider]} session${where} (session \`${sessionId}\`).${linked} New turns from the terminal appear here automatically.`;
+}
+
 function insertMessage(database: WorkbenchDatabase, conversationId: string, author: 'jeffrey' | 'system' | TerminalProvider, body: string, at: string): string {
   const id = randomUUID();
   database.prepare(`
@@ -313,8 +320,7 @@ function applyEntry(database: WorkbenchDatabase, row: ImportRow, entry: Transcri
       const conversationId = randomUUID();
       database.prepare('INSERT INTO shared_conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)')
         .run(conversationId, titleFromPrompt(entry.text), entry.at, entry.at);
-      const where = row.cwd ? ` in \`${row.cwd}\`` : '';
-      insertMessage(database, conversationId, 'system', `Synced from a terminal ${PROVIDER_LABEL[row.provider]} session${where} (session \`${row.sessionId}\`). New turns from the terminal appear here automatically.`, entry.at);
+      insertMessage(database, conversationId, 'system', syncMarker(row.provider, row.sessionId, row.cwd), entry.at);
       row.conversationId = conversationId;
       changes.created.add(conversationId);
     }
@@ -519,4 +525,134 @@ export function startTerminalSessionSync(database: WorkbenchDatabase, options: T
       for (const watcher of watchers) watcher.close();
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code hook events
+
+/** The hook payload fields Workbench reads, plus the provider the hook script adds. */
+export type TerminalHookPayload = {
+  provider: 'claude';
+  hook_event_name: 'SessionStart' | 'UserPromptSubmit' | 'Stop';
+  session_id: string;
+  cwd?: string | null;
+  prompt_id?: string;
+  prompt?: string;
+  last_assistant_message?: string;
+  /** CLAUDE_CODE_ENTRYPOINT as the hook script saw it; `sdk-*` marks a `claude -p` run. */
+  entrypoint?: string;
+};
+
+export type TerminalHookResult =
+  | { status: 'applied'; conversationId: string; created: boolean; changed: boolean }
+  | { status: 'skipped'; reason: string };
+
+const DEFAULT_TERMINAL_TITLE = 'Terminal session';
+
+/** The registered project a working directory belongs to, matched by directory name. */
+function projectForCwd(database: WorkbenchDatabase, cwd: string | null): string | null {
+  const key = cwd ? projectKey(basename(cwd)) : '';
+  if (!key) return null;
+  const direct = database.prepare('SELECT name FROM projects WHERE key = ?').get(key) as { name: string } | undefined;
+  if (direct) return direct.name;
+  const alias = database.prepare('SELECT p.name FROM project_aliases a JOIN projects p ON p.id = a.project_id WHERE a.alias_key = ?').get(key) as { name: string } | undefined;
+  return alias?.name ?? null;
+}
+
+type HookSession = { status: 'terminal' | 'skipped'; skip_reason: string | null; conversation_id: string | null };
+
+function skipReasonFor(database: WorkbenchDatabase, payload: TerminalHookPayload): string | null {
+  if (payload.entrypoint?.startsWith('sdk')) return 'workbench run';
+  if (payload.cwd && isManagedRunWorktree(payload.cwd)) return 'workbench worktree';
+  const owned = database.prepare(`
+    SELECT 1 FROM shared_conversations WHERE claude_session_id = ?
+    UNION SELECT 1 FROM agent_sessions WHERE agent = 'claude' AND provider_session_id = ?
+  `).get(payload.session_id, payload.session_id);
+  return owned ? 'workbench session' : null;
+}
+
+/**
+ * Finds or creates the hook session row and its conversation. A conversation
+ * the transcript sync already created for this session is adopted so the
+ * session never produces two, and its transcript rows stop importing.
+ */
+function ensureHookSession(database: WorkbenchDatabase, payload: TerminalHookPayload, at: string): { session: HookSession; created: boolean } {
+  const existing = database.prepare('SELECT status, skip_reason, conversation_id FROM terminal_hook_sessions WHERE provider = ? AND session_id = ?')
+    .get(payload.provider, payload.session_id) as HookSession | undefined;
+  if (existing) {
+    if (existing.status === 'terminal' && existing.conversation_id) {
+      const conversation = database.prepare('SELECT deleted_at FROM shared_conversations WHERE id = ?').get(existing.conversation_id) as { deleted_at: string | null } | undefined;
+      if (!conversation || conversation.deleted_at) return { session: { status: 'skipped', skip_reason: 'conversation deleted', conversation_id: existing.conversation_id }, created: false };
+    }
+    return { session: existing, created: false };
+  }
+  const cwd = payload.cwd ?? null;
+  const record = (session: HookSession) => {
+    database.prepare('INSERT INTO terminal_hook_sessions (provider, session_id, status, skip_reason, cwd, conversation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(payload.provider, payload.session_id, session.status, session.skip_reason, cwd, session.conversation_id, at);
+  };
+
+  const imported = database.prepare("SELECT conversation_id FROM terminal_session_imports WHERE provider = ? AND session_id = ? AND status = 'terminal' AND conversation_id IS NOT NULL LIMIT 1")
+    .get(payload.provider, payload.session_id) as { conversation_id: string } | undefined;
+  if (imported) {
+    database.prepare('UPDATE shared_conversations SET claude_session_id = ? WHERE id = ? AND claude_session_id IS NULL').run(payload.session_id, imported.conversation_id);
+    database.prepare("UPDATE terminal_session_imports SET status = 'skipped', skip_reason = 'hook bridge', updated_at = ? WHERE provider = ? AND session_id = ?")
+      .run(at, payload.provider, payload.session_id);
+    const session: HookSession = { status: 'terminal', skip_reason: null, conversation_id: imported.conversation_id };
+    record(session);
+    return { session, created: false };
+  }
+
+  const reason = skipReasonFor(database, payload);
+  if (reason) {
+    const session: HookSession = { status: 'skipped', skip_reason: reason, conversation_id: null };
+    record(session);
+    return { session, created: false };
+  }
+
+  const conversationId = randomUUID();
+  database.prepare('INSERT INTO shared_conversations (id, title, claude_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run(conversationId, DEFAULT_TERMINAL_TITLE, payload.session_id, at, at);
+  insertMessage(database, conversationId, 'system', syncMarker(payload.provider, payload.session_id, cwd, projectForCwd(database, cwd)), at);
+  const session: HookSession = { status: 'terminal', skip_reason: null, conversation_id: conversationId };
+  record(session);
+  return { session, created: true };
+}
+
+/**
+ * Applies one Claude Code hook event. Prompts and stops are keyed by
+ * `prompt_id`, so a hook that retries lands exactly once.
+ */
+export function applyTerminalHookEvent(database: WorkbenchDatabase, payload: TerminalHookPayload, now: () => Date = () => new Date()): TerminalHookResult {
+  const at = now().toISOString();
+  database.exec('BEGIN IMMEDIATE;');
+  try {
+    const { session, created } = ensureHookSession(database, payload, at);
+    if (session.status !== 'terminal' || !session.conversation_id) {
+      database.exec('COMMIT;');
+      return { status: 'skipped', reason: session.skip_reason ?? 'skipped' };
+    }
+    const conversationId = session.conversation_id;
+    let changed = created;
+    const kind = payload.hook_event_name === 'UserPromptSubmit' ? 'prompt' : payload.hook_event_name === 'Stop' ? 'stop' : null;
+    const text = (kind === 'prompt' ? payload.prompt : payload.last_assistant_message)?.trim() ?? '';
+    if (kind && payload.prompt_id && text) {
+      const seen = database.prepare('SELECT 1 FROM terminal_hook_events WHERE provider = ? AND session_id = ? AND prompt_id = ? AND kind = ?')
+        .get(payload.provider, payload.session_id, payload.prompt_id, kind);
+      if (!seen) {
+        if (kind === 'prompt') {
+          database.prepare('UPDATE shared_conversations SET title = ? WHERE id = ? AND title = ?').run(titleFromPrompt(text), conversationId, DEFAULT_TERMINAL_TITLE);
+        }
+        const messageId = insertMessage(database, conversationId, kind === 'prompt' ? 'jeffrey' : payload.provider, text, at);
+        database.prepare('INSERT INTO terminal_hook_events (provider, session_id, prompt_id, kind, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(payload.provider, payload.session_id, payload.prompt_id, kind, messageId, at);
+        changed = true;
+      }
+    }
+    database.exec('COMMIT;');
+    return { status: 'applied', conversationId, created, changed };
+  } catch (error) {
+    database.exec('ROLLBACK;');
+    throw error;
+  }
 }

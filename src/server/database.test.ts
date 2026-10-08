@@ -110,6 +110,7 @@ const EXPECTED_MIGRATIONS = [
   '094_consolidation_apply_results',
   '095_agent_sessions',
   '096_terminal_session_imports',
+  '097_terminal_hook_events',
 ];
 
 describe('openDatabase', () => {
@@ -506,6 +507,20 @@ describe('openDatabase', () => {
       .toEqual({ total: 2 });
     expect(() => upgraded.prepare(`INSERT INTO workspace_diff_snapshots (id, work_item_id, conversation_id, revision, diff_json, captured_at, repository_identity)
       VALUES ('duplicate-073', 'item-073', NULL, 'same-revision', '{}', '2026-08-31T00:00:03.000Z', '/right/.git')`).run()).toThrow();
+    upgraded.close();
+  });
+
+  it('adds the terminal hook tables to a database that recorded 096', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE terminal_hook_events; DROP TABLE terminal_hook_sessions;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '097_terminal_hook_events'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const tables = (upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'terminal_hook_%' ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name);
+    expect(tables).toEqual(['terminal_hook_events', 'terminal_hook_sessions']);
     upgraded.close();
   });
 

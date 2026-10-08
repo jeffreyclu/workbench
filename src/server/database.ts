@@ -2668,6 +2668,35 @@ const schemaMigrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Claude Code hooks reach Workbench without transcript files. One row per
+    // hooked session records its conversation or why it was skipped; one row
+    // per delivered prompt/stop makes a retried hook a no-op.
+    id: '097_terminal_hook_events',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS terminal_hook_sessions (
+          provider TEXT NOT NULL CHECK (provider IN ('claude')),
+          session_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('terminal', 'skipped')),
+          skip_reason TEXT,
+          cwd TEXT,
+          conversation_id TEXT,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (provider, session_id)
+        );
+        CREATE TABLE IF NOT EXISTS terminal_hook_events (
+          provider TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          prompt_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('prompt', 'stop')),
+          message_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (provider, session_id, prompt_id, kind)
+        );
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
