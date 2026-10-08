@@ -545,6 +545,7 @@ export class RunRepository {
     this.database.prepare(`
       UPDATE agent_runs SET waiting_reason = NULL
       WHERE waiting_reason IS NOT NULL
+        AND NOT (status = 'running' AND waiting_reason LIKE 'waiting for the session%')
         AND (status != 'queued' OR (${OPEN_PREREQUISITE_COUNT}) = 0)
     `).run();
   }

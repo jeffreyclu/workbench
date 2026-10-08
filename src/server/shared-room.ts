@@ -1845,6 +1845,48 @@ export function sessionTurnMessageId(turnId: string): string {
  * at the end, so a long-lived provider never carries a grant between turns.
  */
 export async function runSharedSessionTurn(input: SharedSessionTurnInput): Promise<SharedSessionTurnResult> {
+  const lockKey = `${input.conversationId}:${input.agent}`;
+  return withSessionTurnLock(lockKey, input.signal, () => {
+    if (input.runId) input.repository.updateRun(input.runId, { waitingReason: SESSION_TURN_WAITING_REASON });
+  }, async () => {
+    if (input.runId) input.repository.updateRun(input.runId, { waitingReason: null });
+    return runSessionTurnExclusive(input);
+  });
+}
+
+export const SESSION_TURN_WAITING_REASON = "waiting for the session's active turn";
+
+const sessionTurnTails = new Map<string, Promise<void>>();
+
+/**
+ * One session runs one turn at a time: chat replies and task runs share this
+ * per-session queue, so a task run never lands in another turn's directory and
+ * never overlaps its capability file. Waiters start in arrival order.
+ */
+async function withSessionTurnLock<T>(lockKey: string, signal: AbortSignal, onWait: () => void, run: () => Promise<T>): Promise<T> {
+  const previous = sessionTurnTails.get(lockKey);
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => { release = resolve; });
+  const tail = (previous ?? Promise.resolve()).then(() => mine);
+  sessionTurnTails.set(lockKey, tail);
+  try {
+    if (previous) {
+      onWait();
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => reject(new Error('Agent run canceled.'));
+        if (signal.aborted) return abort();
+        signal.addEventListener('abort', abort, { once: true });
+        void previous.then(() => { signal.removeEventListener('abort', abort); resolve(); });
+      });
+    }
+    return await run();
+  } finally {
+    release();
+    if (sessionTurnTails.get(lockKey) === tail) sessionTurnTails.delete(lockKey);
+  }
+}
+
+async function runSessionTurnExclusive(input: SharedSessionTurnInput): Promise<SharedSessionTurnResult> {
   const { repository, agent, conversationId } = input;
   const key = { conversationId, agent };
   if (input.fresh) {
@@ -1861,16 +1903,17 @@ export async function runSharedSessionTurn(input: SharedSessionTurnInput): Promi
   });
   const guard = sessionExternalActionGuard(key);
   const stopObserving = observeExternalActionRefusals(guard, input.onRefusal, { persistent: true });
-  writeTurnCapability(guard, turnCapabilityFor(input.authorization));
   const attempt = (sessionTurnAttempts.get(input.messageId) ?? 0) + 1;
   sessionTurnAttempts.set(input.messageId, attempt);
+  const turnId = `${input.messageId}#${attempt}`;
+  writeTurnCapability(guard, turnCapabilityFor(input.authorization), turnId);
   const reader = createSessionTurnReader(agent, input.sink);
   const cancel = () => { void interrupt(session).catch(() => { /* the host may already be gone */ }); };
   try {
     if (input.signal.aborted) throw new Error('Agent run canceled.');
     const accepted = await submitTurn(repository.database, session, {
       prompt: input.message,
-      turnId: `${input.messageId}#${attempt}`,
+      turnId,
       model: input.model,
       cwd: input.cwd,
     });
@@ -1900,7 +1943,7 @@ export async function runSharedSessionTurn(input: SharedSessionTurnInput): Promi
   } finally {
     input.signal.removeEventListener('abort', cancel);
     stopObserving();
-    try { clearTurnCapability(guard); } catch { /* the session directory is gone */ }
+    try { clearTurnCapability(guard, turnId); } catch { /* the session directory is gone */ }
   }
 }
 
@@ -1962,7 +2005,7 @@ export async function recoverSharedSessionTurns(repository: WorkItemRepository, 
       repository.updateSharedMessage(messageId, { status: 'failed', error: error instanceof Error ? error.message : 'Session recovery failed.' });
     } finally {
       clearInterval(lease);
-      try { clearTurnCapability(guard); } catch { /* best effort */ }
+      try { clearTurnCapability(guard, last.turnId); } catch { /* best effort */ }
     }
   }
   return recovered;

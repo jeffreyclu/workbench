@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GitHubPullRequestDiff, SharedMessage } from '../shared/contracts.js';
@@ -10,6 +10,7 @@ import { EXTERNAL_ACTION_CONTRACT, classificationForKind, hasDeferredExecutionRe
 import { resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
 import { reviewHarnessPrompt } from '../shared/review-harness.js';
 import { personaBody } from './personas.js';
+import { clearTurnCapability, writeTurnCapability } from './external-action-command-guard.js';
 import { ensureSession, readAgentSessionStatus, sessionExternalActionGuard, submitTurn } from './agent-session.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
 import { captureGateState, CAPTURE_GATE_PROMPT } from './capture-gate.js';
@@ -1367,6 +1368,51 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(message).toContain('persona: codebase-analyst');
   });
 
+  it('queues a task run behind an active chat turn, then starts it in its own worktree with a restart', async () => {
+    const conversation = repository.createConversation('Room');
+    const task = repository.create({ title: 'Edit things', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Edit things.');
+    const worktree = join(root, 'worktree');
+    mkdirSync(worktree);
+    const chat = turn(conversation.id, 'chat-1', 'slow chat reply');
+    await waitFor(() => spawns().length === 1);
+    const taskTurn = turn(conversation.id, 'task-1', 'task turn', { cwd: worktree, runId: run.id });
+    await waitFor(() => repository.getRun(run.id)?.waitingReason === "waiting for the session's active turn");
+    expect(spawns()).toHaveLength(1);
+    const chatResult = await chat;
+    const taskResult = await taskTurn;
+    expect(chatResult.reused).toBe(false);
+    expect(spawns()).toHaveLength(2);
+    expect(spawns()[1].args).toContain('--resume');
+    expect(taskResult.pid).not.toBe(chatResult.pid);
+    expect(repository.getRun(run.id)?.waitingReason).toBeNull();
+  });
+
+  it('never overlaps two turns on one session', async () => {
+    const conversation = repository.createConversation('Room');
+    const first = turn(conversation.id, 'message-1', 'slow first');
+    await waitFor(() => spawns().length === 1);
+    const second = turn(conversation.id, 'message-2', 'second');
+    await new Promise((wait) => setTimeout(wait, 150));
+    const eventsFile = join(root, 'agent-sessions', conversation.id, 'claude', 'events.jsonl');
+    const log = () => (existsSync(eventsFile) ? readFileSync(eventsFile, 'utf8') : '').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { source?: string; type?: string; turnId?: string });
+    expect(log().filter((event) => event.source === 'host' && event.type === 'turn_started')).toHaveLength(1);
+    await Promise.all([first, second]);
+    const lifecycle = log().filter((event) => event.source === 'host' && (event.type === 'turn_started' || event.type === 'turn_terminal')).map((event) => `${event.type}:${event.turnId}`);
+    expect(lifecycle).toEqual(['turn_started:message-1#1', 'turn_terminal:message-1#1', 'turn_started:message-2#1', 'turn_terminal:message-2#1']);
+  });
+
+  it('does not clear a capability file written by another turn', () => {
+    const guard = sessionExternalActionGuard({ conversationId: 'owned', agent: 'claude' });
+    const expiry = new Date(Date.now() + 60_000).toISOString();
+    writeTurnCapability(guard, { push: expiry }, 'turn-a');
+    writeTurnCapability(guard, { push: expiry }, 'turn-b');
+    clearTurnCapability(guard, 'turn-a');
+    expect(JSON.parse(readFileSync(guard.capabilityFile, 'utf8'))).toMatchObject({ push: expiry, __turnId: 'turn-b' });
+    clearTurnCapability(guard, 'turn-b');
+    expect(JSON.parse(readFileSync(guard.capabilityFile, 'utf8'))).toEqual({});
+  });
+
   it('answers three room messages from one claude process and streams tool events', async () => {
     const conversation = repository.createConversation('Room');
     const events: Array<{ kind: string; detail: string }> = [];
@@ -1420,7 +1466,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
         during = JSON.parse(readFileSync(guard.capabilityFile, 'utf8'));
       },
     });
-    expect(Object.keys(during!)).toEqual(['github.pr.comment']);
+    expect(Object.keys(during!).filter((name) => name !== '__turnId')).toEqual(['github.pr.comment']);
     const guard = sessionExternalActionGuard(key);
     expect(JSON.parse(readFileSync(guard.capabilityFile, 'utf8'))).toEqual({});
     expect(sessionExternalActionGuard(key).capabilityFile).toBe(guard.capabilityFile);

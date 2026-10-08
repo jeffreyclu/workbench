@@ -17,14 +17,30 @@ export type ExternalActionProcessGuard = {
   eventFile: string;
 };
 
-export function writeTurnCapability(guard: ExternalActionProcessGuard, capability: Record<string, string>): void {
+/** Key naming the turn that wrote the file; its value is not a date, so the guard script never treats it as a grant. */
+export const CAPABILITY_OWNER_KEY = '__turnId';
+
+/** `turnId` records the writing turn so only that turn may clear the file (clearTurnCapability). */
+export function writeTurnCapability(guard: ExternalActionProcessGuard, capability: Record<string, string>, turnId?: string): void {
   const temporaryFile = `${guard.capabilityFile}.${process.pid}.tmp`;
-  writeFileSync(temporaryFile, JSON.stringify(capability), { encoding: 'utf8', mode: 0o600 });
+  const serialized = turnId ? { ...capability, [CAPABILITY_OWNER_KEY]: turnId } : capability;
+  writeFileSync(temporaryFile, JSON.stringify(serialized), { encoding: 'utf8', mode: 0o600 });
   renameSync(temporaryFile, guard.capabilityFile);
   guard.capability = { ...capability };
 }
 
-export function clearTurnCapability(guard: ExternalActionProcessGuard): void {
+function capabilityOwner(guard: ExternalActionProcessGuard): string | null {
+  try {
+    const owner = (JSON.parse(readFileSync(guard.capabilityFile, 'utf8')) as Record<string, unknown>)[CAPABILITY_OWNER_KEY];
+    return typeof owner === 'string' ? owner : null;
+  } catch {
+    return null;
+  }
+}
+
+/** With `turnId`, a file written by a different turn is left alone. */
+export function clearTurnCapability(guard: ExternalActionProcessGuard, turnId?: string): void {
+  if (turnId && capabilityOwner(guard) !== turnId) return;
   writeTurnCapability(guard, {});
 }
 
