@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Runtime boundary for Git/GitHub mutations launched by provisioned agents. */
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -56,7 +56,10 @@ export function requiredExternalCapability(command, values) {
 
 function activeCapabilities(now = Date.now()) {
   try {
-    const parsed = JSON.parse(process.env.WORKBENCH_EXTERNAL_CAPABILITY || '{}');
+    const serialized = process.env.WORKBENCH_EXTERNAL_CAPABILITY_FILE
+      ? readFileSync(process.env.WORKBENCH_EXTERNAL_CAPABILITY_FILE, 'utf8')
+      : process.env.WORKBENCH_EXTERNAL_CAPABILITY || '{}';
+    const parsed = JSON.parse(serialized);
     return Object.fromEntries(Object.entries(parsed).filter(([, expiresAt]) => Date.parse(String(expiresAt)) > now));
   } catch {
     return {};

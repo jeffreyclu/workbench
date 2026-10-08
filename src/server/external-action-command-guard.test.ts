@@ -1,21 +1,34 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './database.js';
 import { WorkItemRepository } from './repository.js';
-import { createExternalActionProcessGuard, observeExternalActionRefusals, recordExternalActionRefusal } from './external-action-command-guard.js';
+import { clearTurnCapability, createExternalActionProcessGuard, externalActionGuardEnvironment, observeExternalActionRefusals, recordExternalActionRefusal, writeTurnCapability } from './external-action-command-guard.js';
 
 const guard = fileURLToPath(new URL('../../scripts/agent-bin/external-action-command-guard.mjs', import.meta.url));
 const bin = (name: 'git' | 'gh') => fileURLToPath(new URL(`../../scripts/agent-bin/${name}`, import.meta.url));
 const temporaryDirectories: string[] = [];
 
+function environmentWithoutCapabilityFile(): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  delete environment.WORKBENCH_EXTERNAL_CAPABILITY_FILE;
+  return environment;
+}
+
 function check(name: 'git' | 'gh', args: string[], capability: Record<string, string> = {}) {
   return spawnSync(process.execPath, [guard, bin(name), ...args], {
     encoding: 'utf8',
-    env: { ...process.env, WORKBENCH_EXTERNAL_ACTION_GUARD_CHECK_ONLY: '1', WORKBENCH_EXTERNAL_CAPABILITY: JSON.stringify(capability) },
+    env: { ...environmentWithoutCapabilityFile(), WORKBENCH_EXTERNAL_ACTION_GUARD_CHECK_ONLY: '1', WORKBENCH_EXTERNAL_CAPABILITY: JSON.stringify(capability) },
+  });
+}
+
+function checkWithGuard(name: 'git' | 'gh', args: string[], processGuard: ReturnType<typeof createExternalActionProcessGuard>) {
+  return spawnSync(process.execPath, [guard, bin(name), ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, ...externalActionGuardEnvironment(processGuard), WORKBENCH_EXTERNAL_ACTION_GUARD_CHECK_ONLY: '1' },
   });
 }
 
@@ -52,6 +65,33 @@ describe('external action command guard', () => {
     expect(check('git', ['push'], { push: new Date(Date.now() - 1).toISOString() }).status).toBe(126);
   });
 
+  it('reads the current turn capability from a mode-0600 file', () => {
+    const processGuard = createExternalActionProcessGuard({ granted: false, operation: null });
+    temporaryDirectories.push(dirname(processGuard.capabilityFile));
+    writeTurnCapability(processGuard, { push: new Date(Date.now() + 60_000).toISOString() });
+    expect(statSync(processGuard.capabilityFile).mode & 0o777).toBe(0o600);
+    expect(checkWithGuard('git', ['push'], processGuard).status).toBe(0);
+  });
+
+  it('refuses a push after the turn capability file is cleared', () => {
+    const processGuard = createExternalActionProcessGuard({ granted: false, operation: null });
+    temporaryDirectories.push(dirname(processGuard.capabilityFile));
+    writeTurnCapability(processGuard, { push: new Date(Date.now() + 60_000).toISOString() });
+    clearTurnCapability(processGuard);
+    expect(checkWithGuard('git', ['push'], processGuard).status).toBe(126);
+  });
+
+  it('refuses an expired capability from the turn file', () => {
+    const processGuard = createExternalActionProcessGuard({ granted: false, operation: null });
+    temporaryDirectories.push(dirname(processGuard.capabilityFile));
+    writeTurnCapability(processGuard, { push: new Date(Date.now() - 1).toISOString() });
+    expect(checkWithGuard('git', ['push'], processGuard).status).toBe(126);
+  });
+
+  it('keeps the environment-only capability fallback', () => {
+    expect(check('git', ['push'], { push: new Date(Date.now() + 60_000).toISOString() }).status).toBe(0);
+  });
+
   it('accepts the existing scoped capabilities that include the guarded operation', () => {
     const active = new Date(Date.now() + 60_000).toISOString();
     expect(check('git', ['push'], { pr_create: active }).status).toBe(0);
@@ -69,7 +109,7 @@ describe('external action command guard', () => {
     const processGuard = createExternalActionProcessGuard({ granted: false, operation: null });
     const stop = observeExternalActionRefusals(processGuard, (refusal) => recordExternalActionRefusal(repository, run, refusal));
     const result = spawnSync(process.execPath, [guard, bin('git'), 'push'], {
-      encoding: 'utf8', env: { ...process.env, WORKBENCH_EXTERNAL_CAPABILITY: '{}', WORKBENCH_EXTERNAL_ACTION_EVENT_FILE: processGuard.eventFile },
+      encoding: 'utf8', env: { ...process.env, ...externalActionGuardEnvironment(processGuard) },
     });
     stop();
     expect(result.status).toBe(126);
@@ -91,7 +131,7 @@ describe('external action command guard', () => {
     const result = spawnSync(bin('git'), ['push', 'origin', 'HEAD:refs/heads/main'], {
       cwd: source,
       encoding: 'utf8',
-      env: { ...process.env, WORKBENCH_EXTERNAL_CAPABILITY: JSON.stringify({ push: new Date(Date.now() + 60_000).toISOString() }) },
+      env: { ...environmentWithoutCapabilityFile(), WORKBENCH_EXTERNAL_CAPABILITY: JSON.stringify({ push: new Date(Date.now() + 60_000).toISOString() }) },
     });
     expect(result.status, result.stderr).toBe(0);
     expect(spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', 'refs/heads/main']).status).toBe(0);
