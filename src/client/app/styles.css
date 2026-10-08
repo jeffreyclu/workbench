@@ -230,6 +230,8 @@ nav { display: grid; gap: 3px; }
 .agent-outcome-canceled { color: #aaa9a2; background: #252522; border-color: #41413b; }
 .agent-outcome-promoting { color: #8bb8ff; background: #17263a; }
 .agent-outcome-waiting_promotion { color: #8bb8ff; background: #17263a; }
+.agent-outcome-unverified { color: #ffd37a; background: #4a3205; border-color: #ffb534; }
+.unverified-claim-badge { display: inline-flex; align-items: center; padding: 2px 7px; color: #ffd37a; background: #4a3205; border: 1px solid #ffb534; border-radius: 4px; font: 700 9px/1.2 'DM Mono'; letter-spacing: .04em; text-transform: uppercase; }
 .agent-outcome-in_progress { color: #f2d26b; background: #3a3018; }
 .queue-item.outcome-finished { background: linear-gradient(90deg, #1c2812 0, #121318 48%); border-left: 5px solid #a9e52e; }
 .queue-item.outcome-follow_ups { background: linear-gradient(90deg, #30280f 0, #121318 50%); border-left: 5px solid #f0c83d; }

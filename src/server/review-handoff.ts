@@ -1,4 +1,5 @@
 import type { AgentRun, AgentRunReviewHandoff } from '../shared/contracts.js';
+import { claimsCompletion } from './final-response-policy.js';
 import { extractMemoryCitations } from './repositories/memory-usage-repository.js';
 
 export interface ObservedRunEvent {
@@ -81,6 +82,7 @@ export function buildAgentRunReviewHandoff(run: AgentRun, output: string, events
     blockers: unique([...blockersFromOutput(output), ...refused]).slice(0, MAX_LIST_ITEMS),
     learnings: learnings.slice(0, MAX_LIST_ITEMS),
     priorArt: priorArt.slice(0, MAX_LIST_ITEMS),
+    unverifiedClaim: verification.length === 0 && claimsCompletion(output),
     createdAt,
   };
 }

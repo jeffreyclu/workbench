@@ -90,3 +90,17 @@ export async function editFinalResponse(
   if (!finalResponsePolicyViolation(normalized, verbose)) return normalized;
   return fallbackFinalResponse(draft, objective, verbose);
 }
+
+const COMPLETION_CLAIM = /\b(?:done|fixed|works|verified)\b/gi;
+// A claim word is negated by "not", "never", "no", "without" or any "n't"
+// contraction within the two words before it ("not yet verified").
+const NEGATED_BEFORE = /(?:\b(?:not|never|no|cannot|without)|n['’]t)(?:\s+[\w'’]+){0,2}\s+$/i;
+
+/** True when the final answer asserts completion ("done", "fixed", "works", "verified") without negating it. */
+export function claimsCompletion(output: string): boolean {
+  const prose = output.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ');
+  for (const match of prose.matchAll(COMPLETION_CLAIM)) {
+    if (!NEGATED_BEFORE.test(prose.slice(Math.max(0, match.index - 40), match.index))) return true;
+  }
+  return false;
+}

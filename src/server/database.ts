@@ -2526,6 +2526,17 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // Records that a run's final answer claimed completion with no observed
+    // verification command, so the task card and reply can badge it.
+    id: '089_agent_run_handoff_unverified_claim',
+    apply(database) {
+      const columns = database.prepare('PRAGMA table_info(agent_run_review_handoffs)').all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'unverified_claim')) {
+        database.exec('ALTER TABLE agent_run_review_handoffs ADD COLUMN unverified_claim INTEGER NOT NULL DEFAULT 0;');
+      }
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {

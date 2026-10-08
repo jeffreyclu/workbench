@@ -49,6 +49,7 @@ function mapReviewHandoffRow(row: Record<string, string | null>): AgentRunReview
     blockers: JSON.parse(row.handoff_blockers_json ?? '[]') as string[],
     learnings: JSON.parse(row.handoff_learnings_json ?? '[]') as string[],
     priorArt: JSON.parse(row.handoff_prior_art_json ?? '[]') as string[],
+    unverifiedClaim: Number(row.handoff_unverified_claim ?? 0) === 1,
     createdAt: row.handoff_created_at!,
   };
 }
@@ -122,6 +123,7 @@ export class RunRepository {
         handoff.blockers_json AS handoff_blockers_json,
         handoff.learnings_json AS handoff_learnings_json,
         handoff.prior_art_json AS handoff_prior_art_json,
+        handoff.unverified_claim AS handoff_unverified_claim,
         handoff.created_at AS handoff_created_at
         FROM agent_runs
         LEFT JOIN agent_run_review_handoffs AS handoff ON handoff.agent_run_id = agent_runs.id
@@ -134,13 +136,13 @@ export class RunRepository {
     this.database.prepare(`INSERT INTO agent_run_review_handoffs (
       agent_run_id, format_version, summary, changes_json, acceptance_criteria_json,
       contract_changes_json, verification_json, uncertainties_json, tradeoffs_json,
-      blockers_json, learnings_json, prior_art_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      blockers_json, learnings_json, prior_art_json, unverified_claim, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(handoff.agentRunId, handoff.formatVersion, handoff.summary,
         JSON.stringify(handoff.changes), JSON.stringify(handoff.acceptanceCriteria),
         JSON.stringify(handoff.contractChanges), JSON.stringify(handoff.verification),
         JSON.stringify(handoff.uncertainties), JSON.stringify(handoff.tradeoffs),
-        JSON.stringify(handoff.blockers), JSON.stringify(handoff.learnings), JSON.stringify(handoff.priorArt), handoff.createdAt);
+        JSON.stringify(handoff.blockers), JSON.stringify(handoff.learnings), JSON.stringify(handoff.priorArt), handoff.unverifiedClaim ? 1 : 0, handoff.createdAt);
   }
 
   get(id: string): AgentRun | null {

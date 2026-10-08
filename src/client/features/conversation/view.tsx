@@ -1511,6 +1511,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
                   >
                     <Search size={11} /> {memoryBadge.label}
                   </button>}
+                  {showSummaryBadges && message.unverifiedClaim && <span className="unverified-claim-badge" title="This reply says done, fixed, works, or verified, but no test, build, typecheck, or lint command was observed.">Claimed, not verified</span>}
                   {showSummaryBadges && isAgentMessage && <RunElapsedTimer status={message.status} createdAt={message.createdAt} completedAt={message.completedAt} />}
                   {showSummaryBadges && <span className="header-badge-row">
                     {message.model && <span className="model-badge" title={formatRunTelemetry(message)}>{replyBadge(message)}</span>}

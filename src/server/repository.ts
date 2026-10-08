@@ -689,7 +689,14 @@ export class WorkItemRepository {
       interjectionStreamOffset: row.interjection_stream_offset === null || row.interjection_stream_offset === undefined ? null : Number(row.interjection_stream_offset),
       retrievedMemoryCount: row.retrieved_memory_count === null || row.retrieved_memory_count === undefined ? null : Number(row.retrieved_memory_count),
       kind: row.kind ? (row.kind as SharedMessage['kind']) : null,
+      ...(row.status === 'completed' && row.author !== 'jeffrey' && row.author !== 'system' && this.messageClaimsUnverified(String(row.id)) ? { unverifiedClaim: true } : {}),
     };
+  }
+
+  private messageClaimsUnverified(messageId: string): boolean {
+    return Boolean(this.database.prepare(`SELECT 1 FROM agent_runs
+      JOIN agent_run_review_handoffs AS handoff ON handoff.agent_run_id = agent_runs.id
+      WHERE agent_runs.message_id = ? AND handoff.unverified_claim = 1 LIMIT 1`).get(messageId));
   }
 
   /**
@@ -1656,7 +1663,14 @@ export class WorkItemRepository {
           : recentStatuses.some(({ status }) => status === 'completed')
             ? (this.getPendingExecutionPlan(item.id) ? 'follow_ups' : 'finished')
             : null;
-    return { ...item, agentOutcome };
+    const latestHandoff = agentOutcome === 'finished' || agentOutcome === 'follow_ups'
+      ? this.database.prepare(`SELECT handoff.unverified_claim AS flag FROM agent_runs
+        JOIN agent_run_review_handoffs AS handoff ON handoff.agent_run_id = agent_runs.id
+        WHERE agent_runs.work_item_id = ? AND agent_runs.status = 'completed'
+        ORDER BY agent_runs.created_at DESC, agent_runs.rowid DESC LIMIT 1`).get(item.id) as { flag: number } | undefined
+      : undefined;
+    const unverifiedClaim = latestHandoff?.flag === 1;
+    return { ...item, agentOutcome, ...(unverifiedClaim ? { unverifiedClaim } : {}) };
   }
 
   searchLinear(query: string, limit = 20): WorkItem[] {

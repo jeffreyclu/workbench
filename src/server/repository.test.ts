@@ -5,6 +5,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { WorkItemDependencyError, WorkItemRepository, WorkItemVersionConflictError } from './repository.js';
 import { cancelSharedReply, deliverPendingSharedInterjections, dispatchNextSharedTurn, interjectQueuedSharedMessage, interjectionSteeringPrompt, isRetryableSynthesisMessage, isSharedReplyActive, registerActiveReplySteering, runSharedBackgroundJob, superviseConversationAfterReply, synthesisSource } from './shared-room.js';
+import { buildAgentRunReviewHandoff } from './review-handoff.js';
 import { setEmbedder } from './memory-index.js';
 import { deterministicTestEmbedder } from './memory-index.test-helpers.js';
 import { fakeAgentDirectory } from './test-fake-agent.js';
@@ -77,6 +78,24 @@ describe('WorkItemRepository', () => {
 
     expect(duplicate.id).toBe(first.id);
     expect(repository.listWorkspaceDiffSnapshots({ workItemId: item.id })).toEqual([expect.objectContaining({ id: first.id, diff, originatingAgentRunId: run.id, commitHash: '0123456789abcdef' })]);
+  });
+
+  it('badges the task and its reply only when a completion claim has no observed verification', () => {
+    const claim = (output: string, events: Array<{ command: string; exitCode: number }>) => {
+      const item = repository.create({ title: 'Claim', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
+      const conversation = repository.createConversation('Claim', item.id);
+      const message = repository.createSharedMessage('claude', output, 'completed', conversation.id);
+      const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Do it.', conversation.id, message.id);
+      repository.updateRun(run.id, { status: 'completed', completedAt: '2026-01-01T00:00:00.000Z', output });
+      repository.recordRunReviewHandoff(buildAgentRunReviewHandoff(repository.getRun(run.id)!, output, events.map((event) => ({ category: 'agent_tool_use' as const, detail: 'Bash', ...event })), '2026-01-01T00:00:00.000Z'));
+      return { item: repository.get(item.id)!, message: repository.getSharedMessageById(message.id)! };
+    };
+    const unverified = claim('Done. Everything works.', []);
+    expect(unverified.item.unverifiedClaim).toBe(true);
+    expect(unverified.message.unverifiedClaim).toBe(true);
+    const verified = claim('Done. Everything works.', [{ command: 'npx vitest run a.test.ts', exitCode: 0 }]);
+    expect(verified.item.unverifiedClaim).toBeUndefined();
+    expect(verified.message.unverifiedClaim).toBeUndefined();
   });
 
   it('keeps a record per repository when two checkouts produce the same revision', () => {

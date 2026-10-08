@@ -102,6 +102,7 @@ const EXPECTED_MIGRATIONS = [
   '086_memory_usage_metrics',
   '087_agent_run_handoff_v2',
   '088_agent_run_failure_kind',
+  '089_agent_run_handoff_unverified_claim',
 ];
 
 describe('openDatabase', () => {
@@ -1216,6 +1217,18 @@ describe('openDatabase', () => {
     expect(upgraded.prepare("SELECT format_version, summary, blockers_json, learnings_json, prior_art_json FROM agent_run_review_handoffs WHERE agent_run_id = 'run-old'").get())
       .toEqual({ format_version: 1, summary: 'Old run.', blockers_json: '[]', learnings_json: '[]', prior_art_json: '[]' });
     expect(() => upgraded.prepare("UPDATE agent_run_review_handoffs SET summary = 'x'").run()).toThrow(/immutable/);
+    upgraded.close();
+  });
+
+  it('adds the unverified-claim flag to a database that recorded migration 088', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TRIGGER IF EXISTS agent_run_review_handoffs_immutable; ALTER TABLE agent_run_review_handoffs DROP COLUMN unverified_claim;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '089_agent_run_handoff_unverified_claim'").run();
+    current.close();
+    const upgraded = openDatabase(path);
+    expect((upgraded.prepare('PRAGMA table_info(agent_run_review_handoffs)').all() as Array<{ name: string }>).some((column) => column.name === 'unverified_claim')).toBe(true);
     upgraded.close();
   });
 

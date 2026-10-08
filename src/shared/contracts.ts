@@ -94,6 +94,8 @@ export const workItemSchema = z.object({
   parentWorkItemId: z.string().nullable(),
   completionStatus: z.enum(['incomplete', 'completed']),
   agentOutcome: z.enum(['finished', 'follow_ups', 'needs_attention', 'canceled', 'promoting', 'waiting_promotion']).nullable(),
+  /** The latest completed run claimed completion without any observed verification command. */
+  unverifiedClaim: z.boolean().optional(),
   classificationKind: z.string().nullable().optional(),
   classificationComplex: z.boolean().optional(),
   sourceIdentifier: z.string().nullable(),
@@ -1090,6 +1092,8 @@ export interface AgentRunReviewHandoff {
   learnings: string[];
   /** Citation ids (`file.md#N`) the run cited in its output. */
   priorArt: string[];
+  /** The final answer claimed done/fixed/works/verified while `verification` is empty. Display only. */
+  unverifiedClaim?: boolean;
   createdAt: string;
 }
 
@@ -1296,6 +1300,8 @@ export interface SharedMessage {
   retrievedMemoryCount: number | null;
   /** Execution type this reply was dispatched under (research/analysis/strategy/execute/review/bugfix), set for both linked and standalone conversations. Null for messages created before this field existed, or for non-agent messages (e.g. jeffrey's own turns, system notices). */
   kind?: z.infer<typeof runKindSchema> | null;
+  /** This reply claimed completion but its run observed no verification command. */
+  unverifiedClaim?: boolean;
 }
 
 export interface SharedAttachment { name: string; path: string; mimeType: string; size: number; }
