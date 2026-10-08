@@ -25,7 +25,7 @@ import { publishRunMarkdown } from './run-artifact-publish.js';
 import { describeReviewHarness, recordReviewHarnessVerdicts, resolveReviewHarness, reviewPullRequestUrl } from './review-harness-runner.js';
 import { evidencePromptBlock, type ExternalEvidence } from './external-evidence.js';
 import { carryReviewLedger, reviewHarnessPrompt } from '../shared/review-harness.js';
-import { FINAL_RESPONSE_CONTRACT, verboseResponseRequested } from './final-response-policy.js';
+import { FINAL_RESPONSE_CONTRACT, NO_UI_SURFACE_BADGE, namesUiSurface, verboseResponseRequested, writesClientFiles } from './final-response-policy.js';
 import { ProviderTurnWatchdog, claudeResponseSettleMs, providerTurnTimeouts, type ProviderTurnTimeoutReason } from './provider-turn-watchdog.js';
 import { DEFAULT_DURABLE_MEMORY_SOURCES, durableMemoryPrompt, durableMemoryQuery, durableMemoryRetrievalPlan, isExplicitMemoryRequest, isPersonalLongTermMemoryRequest, memoryRetrievalEntries, retrievedMemoryCountForAttempt, selectDurableMemoryEvidence, shouldPrefetchDurableMemory } from './memory-retrieval.js';
 import { palmyraModel } from './providers/palmyra.js';
@@ -2449,6 +2449,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const draftEvidence = () => ({
       investigated: observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_read'),
       executed: observedRunEvents.some((event) => event.streamKind === 'tool' || event.streamKind === 'file_write'),
+      clientFilesWritten: writesClientFiles(observedFiles(observedRunEvents)),
     });
     const verbose = verboseResponseRequested(`${item.title}\n${run.instructions}`);
     const draftDecision = superviseDraft(run.kind, result.output, draftEvidence(), { verbose, reviewHarness });
@@ -2589,10 +2590,13 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       }
     }
     const completedAt = new Date().toISOString();
+    // The one retry already ran; a UI-affecting run still without the line is badged, not failed.
+    const noUiSurface = run.kind === 'execute' && writesClientFiles(observedFiles(observedRunEvents)) && !namesUiSurface(output);
+    if (noUiSurface) repository.addActivity(item.id, 'system', 'progress', `Run changed client files but named no UI surface (${NO_UI_SURFACE_BADGE}).`);
     const finishPatch = { agent: result.agent, status: 'completed' as const, output, completedAt, ...telemetry };
     // Every run kind saves a handoff, so its summary, blockers, and learnings
     // are on record for the next agent and for Jeffrey.
-    const finished = repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt, captureGateLine));
+    const finished = repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt, captureGateLine, noUiSurface ? NO_UI_SURFACE_BADGE : undefined));
     if (!finished) return;
     repository.recordMemoryCitations(output, { runId: run.id, messageId: run.messageId, conversationId: run.conversationId });
     if (executionPlan) repository.createExecutionPlan(item.id, executionPlan.summary, executionPlan.tasks);

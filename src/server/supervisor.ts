@@ -5,6 +5,7 @@ import {
   fallbackFinalResponse,
   finalResponseEditingEnabled,
   finalResponsePolicyViolation,
+  namesUiSurface,
   normalizeFinalResponse,
   responseStyleViolation,
 } from './final-response-policy.js';
@@ -160,7 +161,7 @@ export function hasDeferredExecutionResponse(output: string): boolean {
 
 export type SupervisorDraftDecision = { accepted: true } | {
   accepted: false;
-  code: 'missing_review_passes' | 'review_harness' | 'response_style' | 'premature_evidence_request' | 'deferred_execution' | 'unverified_completion';
+  code: 'missing_review_passes' | 'review_harness' | 'response_style' | 'premature_evidence_request' | 'deferred_execution' | 'unverified_completion' | 'missing_where_to_see_it';
   reason: string;
   recoveryRequirement: string;
 };
@@ -169,13 +170,14 @@ export function supervisedRetryPrompt(originalPrompt: string, decision: Exclude<
   // Presentation repair must never replay a task that already used tools or
   // mutated state. The rejected draft is embedded in the recovery requirement,
   // so a fresh provider can rewrite it without receiving the executable task.
-  return decision.code === 'response_style'
+  return decision.code === 'response_style' || decision.code === 'missing_where_to_see_it'
     ? decision.recoveryRequirement
     : `${originalPrompt}\n\n${decision.recoveryRequirement}`;
 }
 
 export function supervisorRetryError(decision: SupervisorDraftDecision): string | null {
-  if (decision.accepted || decision.code === 'response_style') return null;
+  // A missing UI surface is badged by the runner after the retry, not failed.
+  if (decision.accepted || decision.code === 'response_style' || decision.code === 'missing_where_to_see_it') return null;
   return `${decision.reason} The response was rejected after one automatic supervisor retry.`;
 }
 
@@ -183,7 +185,7 @@ export function reviewHarnessRequirement(draft: string, problems: string[]): str
   return `Review harness retry: the prior draft was rejected because its ledger did not prove every Review Director decision was checked in every pass:\n${problems.map((problem) => `- ${problem}`).join('\n')}\nReturn one complete replacement review, not a continuation. Run the review harness algorithm again from Pass 1, keep the exact \`### Pass 1\` through \`### Pass 5\` headings, and end with exactly one valid <review-ledger> block that lists every required decision in every pass. Preserve verified findings and do not claim evidence you did not inspect.\n\nRejected draft:\n${draft}`;
 }
 
-export function superviseDraft(kind: AgentRun['kind'], output: string, evidence: { investigated: boolean; executed: boolean }, options: { verbose?: boolean; reviewHarness?: ReviewHarness | null } = {}): SupervisorDraftDecision {
+export function superviseDraft(kind: AgentRun['kind'], output: string, evidence: { investigated: boolean; executed: boolean; clientFilesWritten?: boolean }, options: { verbose?: boolean; reviewHarness?: ReviewHarness | null } = {}): SupervisorDraftDecision {
   if (kind === 'review') {
     const missing = missingReviewPasses(output);
     if (missing.length) return {
@@ -215,6 +217,11 @@ export function superviseDraft(kind: AgentRun['kind'], output: string, evidence:
     accepted: false, code: 'deferred_execution',
     reason: 'Agent returned a plan or promise instead of executing the selected execute turn.',
     recoveryRequirement: 'Recovery requirement: the selected category is execute. Perform the requested action now with the available tools. Do not return another plan, ask for confirmation, or promise later work. Report only a concrete tool error if blocked.',
+  };
+  if (kind === 'execute' && evidence.clientFilesWritten && !namesUiSurface(output)) return {
+    accepted: false, code: 'missing_where_to_see_it',
+    reason: 'Run changed client files but the answer has no "Where to see it:" line.',
+    recoveryRequirement: `Formatting-only retry: this run wrote client UI files, so the answer must include a line starting \`Where to see it:\` that names the screen, the tab, and the preconditions needed to see the change. Do not call tools, repeat file edits, rerun commands, or repeat external actions. Return one complete replacement answer that keeps every material result, adds that line inside the Context section, and keeps the Problem, Solution, Context structure.\n\nRejected draft:\n${output}`,
   };
   if (!evidence.executed && hasUnverifiedCompletionClaim(output)) return {
     accepted: false, code: 'unverified_completion',

@@ -104,3 +104,22 @@ export function claimsCompletion(output: string): boolean {
   }
   return false;
 }
+
+export const NO_UI_SURFACE_BADGE = 'no UI surface named';
+
+const WHERE_TO_SEE_IT = /^[ \t>*_-]*(?:\*\*)?Where to see it:(?:\*\*)?[ \t]*\S/im;
+const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$|\/__tests__\//;
+// Client UI roots per repository: workbench `src/client`, writer-monorepo
+// `frontend/src`, fe.web-app `src`. fe.web-app shares `src` with nothing else
+// in its repo, so it is recognised by the repository directory name.
+const CLIENT_PATH = /(?:^|\/)src\/client\/|(?:^|\/)frontend\/src\/|(?:^|\/)fe\.web-app(?:-[0-9a-f]+)?\/(?:[^/]+\/)*?src\//;
+
+/** True when any observed file write landed in a client UI directory (tests excluded). */
+export function writesClientFiles(paths: readonly string[]): boolean {
+  return paths.some((path) => !TEST_FILE.test(path) && CLIENT_PATH.test(path.replace(/\\/g, '/')));
+}
+
+/** True when the answer has a line starting `Where to see it:` that names something. */
+export function namesUiSurface(output: string): boolean {
+  return WHERE_TO_SEE_IT.test(output);
+}

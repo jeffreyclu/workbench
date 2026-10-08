@@ -52,7 +52,7 @@ export function learningsFromEvents(events: ObservedRunEvent[]): string[] {
  * The final model message is a navigation summary only: it cannot establish
  * that a test, build, or any other command ran successfully.
  */
-export function buildAgentRunReviewHandoff(run: AgentRun, output: string, events: ObservedRunEvent[], createdAt: string, captureGate?: string): AgentRunReviewHandoff {
+export function buildAgentRunReviewHandoff(run: AgentRun, output: string, events: ObservedRunEvent[], createdAt: string, captureGate?: string, badge?: string): AgentRunReviewHandoff {
   const files = observedFiles(events);
   const decisions = unique(events.filter((event) => event.streamKind === 'decision').map((event) => event.detail));
   const verification = events
@@ -81,7 +81,7 @@ export function buildAgentRunReviewHandoff(run: AgentRun, output: string, events
     uncertainties: verification.length === 0 ? ['No completed test, build, typecheck, or lint command was observed by the runner.'] : [],
     tradeoffs: decisions.map((decision) => ({ decision, rationale: 'Recorded by the agent debugger during this run.' })),
     blockers: unique([...blockersFromOutput(output), ...refused]).slice(0, MAX_LIST_ITEMS),
-    learnings: [...learnings.slice(0, MAX_LIST_ITEMS), ...(captureGate ? [captureGate] : [])],
+    learnings: [...learnings.slice(0, MAX_LIST_ITEMS), ...(captureGate ? [captureGate] : []), ...(badge ? [badge] : [])],
     priorArt: priorArt.slice(0, MAX_LIST_ITEMS),
     unverifiedClaim: verification.length === 0 && claimsCompletion(output),
     createdAt,
