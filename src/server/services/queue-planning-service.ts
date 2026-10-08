@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Activity, QueueItemExplanation, QueueOrderChange, QueueProposal, QueueSignalKey, WorkItem } from '../../shared/contracts.js';
+import { readKnowledgeDriftReport } from '../knowledge-drift-store.js';
 import { learnFeedbackWeights, planQueue, type FeedbackWeight, type QueueContext, type QueuePlan } from '../queue-intelligence.js';
 import type { WorkbenchDatabase } from '../database.js';
 import type { UnitOfWork } from '../unit-of-work.js';
@@ -193,7 +194,12 @@ export class QueuePlanningService {
       sourceChanges.set(row.id, `new ${row.provider} activity landed since the last plan`);
     }
 
-    return { now, openChildren, openDependents, activeRuns, unresolvedBlockers, sourceChanges, feedback: this.getQueueFeedbackWeights(), timeZone: this.timeZone };
+    return { now, openChildren, openDependents, activeRuns, unresolvedBlockers, sourceChanges, feedback: this.getQueueFeedbackWeights(), timeZone: this.timeZone, knowledgeDrift: this.readKnowledgeDrift() };
+  }
+
+  private readKnowledgeDrift() {
+    try { return readKnowledgeDriftReport(this.database); }
+    catch { return null; }
   }
 
   /** Weights learned from the proposals Jeffrey accepted or rejected. */

@@ -1,4 +1,5 @@
 import type { QueueItemExplanation, QueueSignal, QueueSignalKey, WorkItem } from '../shared/contracts.js';
+import { knowledgeDriftProposalSentence, type KnowledgeDriftSummary } from '../shared/knowledge-drift.js';
 import { dueDaysFromToday, dueState, type DueState } from '../shared/due-date.js';
 
 /**
@@ -47,6 +48,8 @@ export interface QueueContext {
   feedback: Map<QueueSignalKey, FeedbackWeight>;
   /** IANA timezone used to interpret calendar-date deadlines. */
   timeZone?: string;
+  /** Latest nightly knowledge drift report; degraded or failed adds a sentence to the rationale. */
+  knowledgeDrift?: KnowledgeDriftSummary | null;
 }
 
 export interface FeedbackWeight { weight: number; accepted: number; rejected: number; }
@@ -209,7 +212,8 @@ export function planQueue(items: WorkItem[], context: QueueContext): QueuePlan {
     }).join(' ')
     : 'No meaningful new task context justified changing yesterday’s order.';
 
-  return { orderedItemIds, explanations, rationale };
+  const driftSentence = knowledgeDriftProposalSentence(context.knowledgeDrift);
+  return { orderedItemIds, explanations, rationale: driftSentence ? `${rationale} ${driftSentence}` : rationale };
 }
 
 /**

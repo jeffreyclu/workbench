@@ -103,4 +103,14 @@ describe('system router desktop notifications', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(report);
   });
+
+  it('re-checks knowledge drift on demand and stores the report as the latest', async () => {
+    const response = await fetch(`${baseUrl}/api/system/knowledge-drift/check`, { method: 'POST' });
+    expect(response.status).toBe(200);
+    const report = await response.json() as { status: string; checks: Record<string, unknown> };
+    expect(['healthy', 'degraded', 'failed']).toContain(report.status);
+    expect(Object.keys(report.checks)).toContain('indexRows');
+    const latest = await (await fetch(`${baseUrl}/api/system/knowledge-drift`)).json();
+    expect(latest).toEqual(report);
+  });
 });

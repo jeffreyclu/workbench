@@ -14,7 +14,8 @@ import { parseAiProviderChoice } from '../../shared/ai-providers.js';
 import { getMemoryDiagnostics } from '../memory-diagnostics.js';
 import { readMcpQualityHistory } from '../mcp-quality-history.js';
 import { getMcpQualityAutomationStatus } from '../mcp-quality-monitor.js';
-import { readKnowledgeDriftReport } from '../knowledge-drift-store.js';
+import { runKnowledgeDriftCheck } from '../knowledge-drift.js';
+import { readKnowledgeDriftReport, storeKnowledgeDriftReport } from '../knowledge-drift-store.js';
 
 export function createHealthRouter({ repository, capabilities, buildId }: RouteContext) {
   const router = Router();
@@ -91,6 +92,15 @@ export function createSystemRouter({ repository, database }: RouteContext) {
   });
   router.get('/api/system/knowledge-drift', (_request, response) => {
     response.json(readKnowledgeDriftReport(database));
+  });
+  // Manual re-check. The nightly monitor stays the primary path; this runs the
+  // same check and stores it as the latest report.
+  router.post('/api/system/knowledge-drift/check', async (_request, response, next) => {
+    try {
+      const report = await runKnowledgeDriftCheck();
+      storeKnowledgeDriftReport(database, report);
+      response.json(report);
+    } catch (error) { next(error); }
   });
   router.get('/api/audit-log', (request, response) => {
     const input = listAuditLogQuerySchema.parse(request.query);

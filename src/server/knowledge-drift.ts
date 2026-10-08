@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { analyzeMemoryFile, isMemoryTier, MEMORY_TIERS, parseCatalogue, type MemoryTier } from '../shared/memory-catalogue.js';
 
-export type KnowledgeDriftStatus = 'healthy' | 'degraded' | 'failed';
+import type { KnowledgeDriftStatus } from '../shared/knowledge-drift.js';
+export type { KnowledgeDriftStatus };
 
 export interface KnowledgeDriftSource {
   file: string;

@@ -164,4 +164,32 @@ describe('queue intelligence', () => {
 
     expect(plan.explanations[0].signals).toContainEqual({ key: 'deadline', delta: 8, detail: 'it is due today' });
   });
+
+  describe('knowledge drift sentence', () => {
+    const report = (status: 'healthy' | 'degraded' | 'failed') => ({
+      checkedAt: '2026-10-08T06:00:00.000Z',
+      status,
+      checks: {
+        indexRows: { status: 'healthy' as const, reason: 'Every memory file has an index row.' },
+        oversizedFiles: { status: status === 'healthy' ? 'healthy' as const : 'degraded' as const, reason: '1 file exceeds the 60-entry threshold.' },
+        tierHeaders: { status: status === 'failed' ? 'failed' as const : 'healthy' as const, reason: '2 files have a missing or invalid tier header.' },
+      },
+    });
+
+    it('adds nothing when the report is healthy or absent', () => {
+      expect(planQueue([], context({ knowledgeDrift: report('healthy') })).rationale).not.toContain('Knowledge drift');
+      expect(planQueue([], context({ knowledgeDrift: null })).rationale).not.toContain('Knowledge drift');
+      expect(planQueue([], context()).rationale).not.toContain('Knowledge drift');
+    });
+
+    it('names the worst check when degraded', () => {
+      const { rationale } = planQueue([], context({ knowledgeDrift: report('degraded') }));
+      expect(rationale).toContain('Knowledge drift is degraded; the worst check is File size: 1 file exceeds the 60-entry threshold.');
+    });
+
+    it('names the failed check ahead of a degraded one', () => {
+      const { rationale } = planQueue([], context({ knowledgeDrift: report('failed') }));
+      expect(rationale).toContain('Knowledge drift is failed; the worst check is Tier headers: 2 files have a missing or invalid tier header.');
+    });
+  });
 });

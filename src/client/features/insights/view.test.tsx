@@ -31,7 +31,8 @@ function selectTab(name: 'Overview' | 'Agents' | 'Usage' | 'System') {
 function stubInsightsFetch(insightsPayload: unknown, memoryPayload: unknown = healthyMemoryDiagnostics, mcpPayload: unknown = healthyMcpQuality) {
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
     const url = String(input);
-    const payload = url.includes('/api/insights/memory') ? memoryPayload
+    const payload = url.includes('/api/system/knowledge-drift') ? null
+      : url.includes('/api/insights/memory') ? memoryPayload
       : url.includes('/api/insights/mcp-quality') ? mcpPayload
         : insightsPayload;
     return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });

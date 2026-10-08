@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Info, LineChart } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../../data/api';
@@ -6,6 +6,7 @@ import { InsightsSkeleton } from '../../components/skeleton/skeleton';
 import type { InsightsTimeframe, RunInsights, RunInsightsAgentFit, RunInsightsByAgent, RunInsightsByKind, RunInsightsTokenUsage } from '../../../shared/contracts';
 import { MemoryDiagnosticsPanel } from './memory-diagnostics';
 import { McpQualityPanel } from './mcp-quality';
+import { KnowledgeDriftPanel } from './knowledge-drift';
 import { Tabs } from '../../components/tabs/tabs';
 import { readInsightsTab, writeInsightsTab, type InsightsTab } from '../../lib/preferences';
 
@@ -174,6 +175,9 @@ export function InsightsView() {
   const [selectedTab, setSelectedTab] = useState<InsightsTab>(readInsightsTab);
   const insights = useQuery({ queryKey: ['insights', timeframe], queryFn: () => api.getInsights(timeframe), enabled: selectedTab !== 'system' });
   const memoryDiagnostics = useQuery({ queryKey: ['memory-diagnostics'], queryFn: api.getMemoryDiagnostics, enabled: selectedTab === 'system' });
+  const queryClient = useQueryClient();
+  const knowledgeDrift = useQuery({ queryKey: ['knowledge-drift'], queryFn: api.getKnowledgeDrift, enabled: selectedTab === 'system' });
+  const recheckKnowledgeDrift = useMutation({ mutationFn: api.recheckKnowledgeDrift, onSuccess: (report) => queryClient.setQueryData(['knowledge-drift'], report) });
   const mcpQuality = useQuery({ queryKey: ['mcp-quality'], queryFn: api.getMcpQualityHistory, enabled: selectedTab === 'system' });
   const data = insights.data;
   const selectTab = (tab: InsightsTab) => {
@@ -208,6 +212,15 @@ export function InsightsView() {
               loading={memoryDiagnostics.isLoading}
               error={memoryDiagnostics.isError}
               onRetry={() => { void memoryDiagnostics.refetch(); }}
+            />
+            <KnowledgeDriftPanel
+              data={knowledgeDrift.data}
+              loading={knowledgeDrift.isLoading}
+              error={knowledgeDrift.isError}
+              onRetry={() => { void knowledgeDrift.refetch(); }}
+              onRecheck={() => recheckKnowledgeDrift.mutate()}
+              rechecking={recheckKnowledgeDrift.isPending}
+              recheckFailed={recheckKnowledgeDrift.isError}
             />
             <McpQualityPanel
               data={mcpQuality.data}
