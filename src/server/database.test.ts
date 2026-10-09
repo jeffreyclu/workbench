@@ -522,7 +522,8 @@ describe('openDatabase', () => {
 
     const upgraded = openDatabase(path);
     const tables = (upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'terminal_hook_%' ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name);
-    expect(tables).toEqual(['terminal_hook_events', 'terminal_hook_sessions']);
+    // 099 adds terminal_hook_replies on the same upgrade path.
+    expect(tables).toEqual(['terminal_hook_events', 'terminal_hook_replies', 'terminal_hook_sessions']);
     upgraded.close();
   });
 

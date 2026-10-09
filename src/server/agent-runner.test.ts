@@ -1324,7 +1324,9 @@ fi`,
     const assistantOne = '{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":40}}}';
     const assistantTwo = '{"type":"assistant","message":{"usage":{"input_tokens":200,"output_tokens":60}}}';
     const result = '{"type":"result","result":"done","usage":{"input_tokens":300,"output_tokens":100}}';
-    fakeAgentDirectory('exit 1', `cat > /dev/null\nprintf '%s\\n%s\\n%s\\n' '${assistantOne}' '${assistantTwo}' '${result}'`);
+    // The runner keeps a Claude child's stdin open for interjections, so the
+    // fake must not drain stdin (`cat` would block until the parent exits).
+    fakeAgentDirectory('exit 1', `printf '%s\\n%s\\n%s\\n' '${assistantOne}' '${assistantTwo}' '${result}'`);
 
     const run = await runAgentCommandWithFallback('claude', tmpdir(), 'Report usage.');
 
