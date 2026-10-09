@@ -117,11 +117,12 @@ export function TaskClassificationSelect({ itemId, kind, compact = false, disclo
  * A finished agent run gives the card no hint at what Jeffrey should do
  * next, so infer one from task metadata: an open dependency outranks
  * everything else, a strategy/scoping run produced a plan to approve, and
- * every other finished run defaults to reading the agent's reply.
+ * a run that recommended follow-ups asks for them to be created, and every other finished run defaults to reading the agent's reply.
  */
-export function nextActionSummary(item: Pick<WorkItem, 'status' | 'classificationKind'>, openDependencyCount: number): { Icon: typeof AlertTriangle; text: string } {
+export function nextActionSummary(item: Pick<WorkItem, 'status' | 'classificationKind'> & Partial<Pick<WorkItem, 'agentOutcome'>>,openDependencyCount: number): { Icon: typeof AlertTriangle; text: string } {
   if (openDependencyCount > 0 || item.status === 'blocked') return { Icon: AlertTriangle, text: 'Resolve blocker' };
   if (item.classificationKind === 'strategy') return { Icon: Sparkles, text: 'Approve plan' };
+  if (item.agentOutcome === 'follow_ups') return { Icon: Sparkles, text: 'Create follow-ups' };
   return { Icon: MessageSquareText, text: 'Review reply' };
 }
 
@@ -154,7 +155,7 @@ export function SortableQueueItem({ item, index, selected, focused, draggable, o
   const openDependencies = (item.blockedBy ?? []).filter((dependency) => dependency.isOpen);
   const visibleOutcome = item.agentOutcome ?? (item.status === 'in_progress' ? 'in_progress' : null);
   const unverified = Boolean(item.unverifiedClaim) && (visibleOutcome === 'finished' || visibleOutcome === 'follow_ups');
-  const isAwaiting = visibleOutcome === 'finished' && !item.archivedAt;
+  const isAwaiting = (visibleOutcome === 'finished' || visibleOutcome === 'follow_ups') && !item.archivedAt;
   const nextAction = isAwaiting ? nextActionSummary(item, openDependencies.length) : null;
   return <div ref={setNodeRef} data-work-item-id={item.id} style={style} role="listitem" tabIndex={focused ? 0 : -1} className={`stack-card queue-item ${visibleOutcome ? `outcome-${visibleOutcome}` : ''} ${isHumanOnly ? 'human-only' : ''} ${item.projectName ? 'project-colored' : ''} ${hasFollowUps || isFollowUp ? 'relationship-family' : ''} ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`} onClick={onSelect} onFocus={onFocus} onKeyDown={onKeyDown}>
     {draggable ? <button className="drag-handle" onClick={(event) => event.stopPropagation()} aria-label={`Reorder ${item.title}`} {...attributes} {...listeners}><GripVertical size={15} /></button> : <span className="rank">{String(index + 1).padStart(2, '0')}</span>}

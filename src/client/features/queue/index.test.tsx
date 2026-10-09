@@ -155,6 +155,7 @@ describe('next-action summary on Awaiting cards', () => {
     [{ agentOutcome: 'finished', classificationKind: 'strategy' }, 'Approve plan'],
     [{ agentOutcome: 'finished', blockedBy: [{ id: 'dependency-id', title: 'A prerequisite', status: 'blocked', archivedAt: null, completedAt: null, isOpen: true }] }, 'Resolve blocker'],
     [{ agentOutcome: 'finished', status: 'blocked' }, 'Resolve blocker'],
+    [{ agentOutcome: 'follow_ups' }, 'Create follow-ups'],
   ];
 
   it.each(nextActionCases)('shows a compact one-line summary for %o', (overrides, expectedText) => {
