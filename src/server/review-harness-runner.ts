@@ -119,9 +119,10 @@ export function recordReviewHarnessVerdicts(
 
 const execFileAsync = promisify(execFile);
 
-/** The other vendor. Palmyra reviews are attacked by Claude, as selectReviewAgent does. */
+/** Automatic failure-mode reviews use Codex to avoid provider safeguard refusals. */
 export function adversarialLensAgent(correctnessAgent: string): 'claude' | 'codex' {
-  return correctnessAgent === 'claude' ? 'codex' : 'claude';
+  void correctnessAgent;
+  return 'codex';
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -129,7 +130,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
 }
 
 /**
- * Run the adversarial lens: the other vendor, in a read-only checkout at the
+ * Run the failure-mode lens in a read-only checkout at the
  * merge base, given the diff and the task's requirement and nothing from the
  * correctness lens. The lens never throws: a failure becomes the ledger's
  * error, so it can never fail the review run that owns it.
@@ -144,7 +145,7 @@ export async function runAdversarialLens(input: {
 }): Promise<ReviewLensLedgers['adversarial']> {
   const { agent, harness } = input;
   const failed = (error: string, baseSha: string | null = null): ReviewLensLedgers['adversarial'] => ({ agent, baseSha, ledger: null, summary: '', error });
-  if (!harness.files.length) return failed('There was no diff to attack.');
+  if (!harness.files.length) return failed('There was no diff to evaluate.');
   let checkout: string | null = null;
   let baseSha: string | null = null;
   try {

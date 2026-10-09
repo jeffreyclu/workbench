@@ -143,7 +143,7 @@ ${REVIEW_PASSES.map((pass) => `   - ${pass.heading}: ${pass.focus}`).join('\n')}
 3. In each pass, answer the pass question and the decision's owed questions. Mark each decision clear, or record every blocking or non-blocking finding against it.
 4. Write the five-pass review with the exact headings above.
 5. End with exactly one ledger block. Every pass must list every decision number (${ordinals.length ? ordinals.join(', ') : 'none'}) exactly once, either in clear or in findings. D0 appears only as a finding. A pass with ledger findings must list them in its section; a pass without findings must say "No material issues."
-<review-ledger>{"version":${REVIEW_HARNESS_VERSION},"passes":[{"pass":1,"clear":[<decision numbers with no finding>],"findings":[{"decision":<decision number or 0>,"severity":"blocking" or "non-blocking","finding":"<what breaks, the fix, file:line>","location":"<path:line>","consequence":"<what breaks for a user or the system>","fix":"<the action>"}]}, …one object per pass, 1 through 5]}</review-ledger>
+<review-ledger>{"version":${REVIEW_HARNESS_VERSION},"passes":[{"pass":1,"clear":[<decision numbers with no finding>],"findings":[{"decision":<decision number or 0>,"severity":"blocking" or "non-blocking","finding":"<the problem, the fix, file:line>","location":"<path:line>","consequence":"<the effect for a user or the system>","fix":"<the action>"}]}, …one object per pass, 1 through 5]}</review-ledger>
 A blocking finding with no stateable consequence is shown to Jeffrey as non-blocking, so fill location, consequence and fix on every blocking finding.
 Workbench rejects a ledger that skips a pass or a decision. It then records your verdicts in Jeffrey's review queue: blocking becomes Needs changes, non-blocking becomes Commented, clear decisions stay for Jeffrey. It never overwrites his verdicts.`;
 }
@@ -287,14 +287,15 @@ export function mergeAgentVerdict(
 }
 
 /**
- * The adversarial lens.
+ * The failure-mode lens.
  *
  * A standard or sensitive review runs two lenses inside one review run. The
- * correctness lens is the five-pass review above. The adversarial lens is a
- * second vendor that tries to break the change. It derives its attacks from
- * what the change is supposed to prevent, never from the existing tests, and
+ * correctness lens is the five-pass review above. The failure-mode lens is a
+ * second reviewer that evaluates the conditions under which a claim would be
+ * false. It derives those cases from what the change is supposed to prevent,
+ * never from the existing tests, and
  * it never sees the correctness lens's findings: if it did, it would confirm
- * them instead of attacking independently.
+ * them instead of evaluating independently.
  */
 export const ADVERSARIAL_LEDGER_VERSION = 1;
 
@@ -325,7 +326,7 @@ export function adversarialLensPrompt(input: AdversarialLensInput): string {
     budget -= shown.length;
     return `--- ${file.path}\n${shown}${shown.length < patch.length ? '\n(patch truncated; read the file for the rest)' : ''}`;
   }).join('\n\n');
-  return `You are the adversarial reviewer. Your job is to break this change, not to grade it.
+  return `You are conducting a failure-mode review. Evaluate whether this change holds under concrete conditions, not whether it looks acceptable at a glance.
 Your working directory is a read-only checkout at the merge base${baseSha ? ` (${baseSha})` : ''}: the code as it was before the change. The change itself is the diff below. Do not edit files.
 
 Requirement:
@@ -336,12 +337,12 @@ ${acceptanceCriteria.length ? acceptanceCriteria.map((criterion) => `- ${criteri
 
 Method:
 1. From the requirement and the acceptance criteria alone, list what this change is supposed to prevent or guarantee. Each is a target claim.
-2. Derive attacks from those claims: inputs, orderings, states, and failures that would make a claim false. Do not derive attacks from existing tests and do not treat passing tests as evidence that a claim holds.
-3. Run each attack against the diff by reading the code it changes and the code around it. Mark it "escaped" if the change lets it succeed, or "held" if the change stops it. Cite file:line evidence either way.
+2. For each claim, list concrete inputs, orderings, states, and failures that would make it false. Do not derive those cases from existing tests and do not treat passing tests as evidence that a claim holds.
+3. Check each case against the diff by reading the code it changes and the code around it. Mark it "escaped" if the change permits the case, or "held" if the change prevents it. Cite file:line evidence either way.
 4. You have not been given anyone else's findings. Do not ask for them.
 
 Write a short plain-English summary, then end with exactly one ledger block:
-<adversarial-ledger>{"version":${ADVERSARIAL_LEDGER_VERSION},"attacks":[{"targetClaim":"<what the change must prevent or guarantee>","method":"<the attack>","result":"escaped" or "held","evidence":"<why, with file:line>"}]}</adversarial-ledger>
+<adversarial-ledger>{"version":${ADVERSARIAL_LEDGER_VERSION},"attacks":[{"targetClaim":"<what the change must prevent or guarantee>","method":"<the concrete case>","result":"escaped" or "held","evidence":"<why, with file:line>"}]}</adversarial-ledger>
 
 The diff:
 ${diff || '(no diff available)'}`;

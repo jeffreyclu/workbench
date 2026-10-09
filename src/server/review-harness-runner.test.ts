@@ -28,8 +28,8 @@ describe('runAdversarialLens', () => {
     return { cwd: directory, harness };
   }
 
-  it('uses the other vendor', () => {
-    expect([adversarialLensAgent('claude'), adversarialLensAgent('codex'), adversarialLensAgent('palmyra')]).toEqual(['codex', 'claude', 'claude']);
+  it('uses Codex for automatic failure-mode review', () => {
+    expect([adversarialLensAgent('claude'), adversarialLensAgent('codex'), adversarialLensAgent('palmyra')]).toEqual(['codex', 'codex', 'codex']);
   });
 
   it('attacks from a read-only checkout at the merge base and removes it afterwards', async () => {

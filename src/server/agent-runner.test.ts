@@ -873,13 +873,13 @@ fi`;
 
   it('dispatches a sensitive review automatically when an execute run changes src/server/database.ts', async () => {
     const completed = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Added the column.' } });
-    const review = JSON.stringify({ type: 'result', result: withDecisionsClearLedger('## Problem\nReview found one gap.\n\n## Solution\n### Pass 1\nBlocking: Pass 1 found a gap.\n\n### Pass 2\nNo material issues.\n\n### Pass 3\nNo material issues.\n\n### Pass 4\nNo material issues.\n\n### Pass 5\nNo material issues.\n\n## Context\nStatic review only.', 'Pass 1 found a gap.') });
+    const review = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: withDecisionsClearLedger('## Problem\nReview found one gap.\n\n## Solution\n### Pass 1\nBlocking: Pass 1 found a gap.\n\n### Pass 2\nNo material issues.\n\n### Pass 3\nNo material issues.\n\n### Pass 4\nNo material issues.\n\n### Pass 5\nNo material issues.\n\n## Context\nStatic review only.', 'Pass 1 found a gap.') } });
     const adversarial = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Attacked.\n<adversarial-ledger>{"version":1,"attacks":[{"targetClaim":"Schema upgrades","method":"Open an old database","result":"escaped","evidence":"database.ts:1"}]}</adversarial-ledger>' } });
-    // The same fake codex serves two roles: it implements, and from a read-only
-    // adversarial checkout it attacks.
+    // Claude implements; Codex handles both automatic review lenses.
     const { directory, log } = fakeAgentDirectory(
-      `case "$PWD" in *workbench-adversarial-*) printf '%s\\n' '${adversarial}';; *) printf 'export const added = true;\\n' >> src/server/database.ts\nprintf '%s\\n' '${completed}';; esac`,
-      `printf '%s\\n' '${review}'`,
+      `case "$PWD" in *workbench-adversarial-*) printf '%s\\n' '${adversarial}';; *) printf '%s\\n' '${review}';; esac`,
+      `printf 'export const added = true;\\n' >> src/server/database.ts
+printf '%s\\n' '${completed}'`,
     );
     // Git must stay reachable for the diff stats; the fake agents still win.
     process.env.PATH = `${directory}:/usr/bin:/bin`;
@@ -894,7 +894,7 @@ fi`;
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
     const task = repository.create({ title: 'Add a column', description: '', priority: 1, status: 'ready', projectName: 'Other', workspacePath: workspace, dueDate: null });
-    const run = repository.createRun(task.id, 'execute', 'codex', 'codex', 'Add the column.');
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Add the column.');
 
     await executeAgentRun(repository, run, 'test-owner', 60_000);
 
@@ -905,21 +905,21 @@ fi`;
       files: ['src/server/database.ts'], changedLines: 1, reviewRunId: expect.any(String),
     }));
     const reviewRun = repository.getRun(executed.reviewDispatch!.reviewRunId!)!;
-    expect(reviewRun).toEqual(expect.objectContaining({ workItemId: task.id, kind: 'review', agent: 'claude' }));
+    expect(reviewRun).toEqual(expect.objectContaining({ workItemId: task.id, kind: 'review', agent: 'codex' }));
     expect(reviewRun.instructions).toContain('Sensitive tier');
     expect(repository.listActivity(task.id).map((entry) => entry.body)).toContain(
-      'Review dispatched automatically to claude (chosen because implementer was codex): review: always / sensitive, because it touches data (src/server/database.ts).',
+      'Review dispatched automatically to codex (defaulted to Codex for automatic review): review: always / sensitive, because it touches data (src/server/database.ts).',
     );
     await waitFor(() => !isAgentRunActive(reviewRun.id) && repository.getRun(reviewRun.id)!.status !== 'queued', 10_000);
-    // The execute run, then both lenses of the one review run: Claude's correctness lens and the other vendor's adversarial lens.
+    // The Claude execute run is followed by Codex correctness and failure-mode lenses.
     const invocations = readFileSync(log, 'utf8').trim().split('\n');
-    expect(invocations[0]).toBe('codex');
-    expect(invocations.slice(1, 3).sort()).toEqual(['claude', 'codex']);
+    expect(invocations[0]).toBe('claude');
+    expect(invocations.slice(1, 3)).toEqual(['codex', 'codex']);
     const lensed = repository.getRun(reviewRun.id)!;
     expect(lensed.error).toBe('');
     expect(lensed.status).toBe('completed');
     expect(lensed.reviewLenses?.tier).toBe('sensitive');
-    expect(lensed.reviewLenses?.correctness.agent).toBe('claude');
+    expect(lensed.reviewLenses?.correctness.agent).toBe('codex');
     expect(lensed.reviewLenses?.correctness.ledger?.passes[0].findings[0].finding).toBe('Pass 1 found a gap.');
     expect(lensed.reviewLenses?.adversarial.agent).toBe('codex');
     expect(lensed.reviewLenses?.adversarial.ledger?.attacks[0]).toEqual(expect.objectContaining({ result: 'escaped', evidence: 'database.ts:1' }));
@@ -928,21 +928,28 @@ fi`;
     database.close();
   });
 
-  it('stores a Claude safeguard refusal as the run error and activity blocker', async () => {
+  it('retries a Claude review refusal on Codex without exposing provider text in the conversation', async () => {
     const refusal = 'Claude safeguards flagged this message. Please try again.\nDetails: [reasoning_extraction]\nRequest ID: req_123';
     const terminalEvent = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: refusal });
-    const { directory } = fakeAgentDirectory('exit 1', `printf '%s\\n' '${terminalEvent}'`);
+    const review = withWholeChangeLedger('## Problem\nReview completed.\n\n## Solution\n### Pass 1\nBlocking: The diff is unavailable.\n\n### Pass 2\nNo material issues.\n\n### Pass 3\nNo material issues.\n\n### Pass 4\nNo material issues.\n\n### Pass 5\nNo material issues.\n\n## Context\nStatic review only.', 'The diff is unavailable.');
+    const completed = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: review } });
+    const { directory } = fakeAgentDirectory(`printf '%s\\n' '${completed}'`, `printf '%s\\n' '${terminalEvent}'`);
     const database = openDatabase(':memory:');
     const repository = new WorkItemRepository(database);
     const task = repository.create({ title: 'Handle provider refusal', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
-    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Implement it.');
+    const conversation = repository.getOrCreateWorkConversation(task.id, task.title);
+    const reply = repository.createSharedMessage('claude', '', 'running', conversation.id);
+    const run = repository.createRun(task.id, 'review', 'claude', 'claude', 'Review it.', conversation.id, reply.id);
 
     await executeAgentRun(repository, run, 'test-owner', 60_000);
 
     expect(repository.getRun(run.id)).toEqual(expect.objectContaining({
-      status: 'failed', failureKind: 'provider_refusal', error: refusal,
+      status: 'completed', agent: 'codex', fallbackFrom: 'claude',
+      fallbackReason: 'Review on Claude was declined by the provider safeguard; rerun on Codex.', error: refusal,
     }));
-    expect(repository.listActivity(task.id).find((entry) => entry.kind === 'blocker')?.body).toBe(`execute failed: ${refusal}`);
+    const messages = repository.listSharedMessages(100, null, conversation.id).messages;
+    expect(messages.map((message) => message.body)).toContain('Review on Claude was declined by the provider safeguard; rerun on Codex.');
+    expect(messages.map((message) => `${message.body}\n${message.error ?? ''}`).join('\n')).not.toContain('safeguards flagged');
     database.close();
   });
 
@@ -1451,11 +1458,11 @@ fi`,
     expect(classifyExecution(item('Review a complex cross-team PR', 'x'.repeat(2_000))).kind).toBe('review');
   });
 
-  it('routes review to the vendor independent from the latest completed implementation', () => {
+  it('routes automatic reviews to Codex', () => {
     const execute = (agent: AgentRun['agent']) => ({ kind: 'execute', status: 'completed', agent } as AgentRun);
-    expect(selectReviewAgent([execute('codex')])).toMatchObject({ agent: 'claude', reason: 'chosen because implementer was codex' });
-    expect(selectReviewAgent([execute('claude')])).toMatchObject({ agent: 'codex', reason: 'chosen because implementer was claude' });
-    expect(selectReviewAgent([])).toMatchObject({ agent: 'claude', implementer: null });
+    expect(selectReviewAgent([execute('codex')])).toMatchObject({ agent: 'codex', reason: 'defaulted to Codex for automatic review' });
+    expect(selectReviewAgent([execute('claude')])).toMatchObject({ agent: 'codex', reason: 'defaulted to Codex for automatic review' });
+    expect(selectReviewAgent([])).toMatchObject({ agent: 'codex', implementer: null });
   });
 
   it('labels a capacity fallback that returns review to the implementer', () => {

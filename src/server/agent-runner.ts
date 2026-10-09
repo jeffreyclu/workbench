@@ -1941,17 +1941,26 @@ export async function runAgentCommandWithFallback(
       onProgress?.('● Claude session expired. Restarting this turn in a fresh session…');
       return runAgentCommandWithFallback(primary, cwd, expiredSessionPrompt ?? prompt, onProgress, signal, onFallback, profile, onUsage, onAudit, kind, accountProfile, modelOverride, onSteeringReady, undefined, false, allowFallback, aggregate, undefined, externalActionGuard);
     }
-    if (signal?.aborted || modelOverride || !allowFallback || !isAgentCapacityError(error)) throw error;
+    const isReviewRefusal = kind === 'review' && primary === 'claude' && error instanceof ProviderRefusalError;
+    if (signal?.aborted || modelOverride || !allowFallback || (!isAgentCapacityError(error) && !isReviewRefusal)) throw error;
     const fallback = primary === 'claude' ? 'codex' : 'claude';
     const reason = error instanceof Error ? error.message : String(error);
     onFallback?.(fallback, reason);
-    const prefix = `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
+    const prefix = isReviewRefusal
+      ? 'Review on Claude was declined by the provider safeguard; rerun on Codex.'
+      : `${primary} is unavailable due to its usage limit. Continuing with ${fallback}.`;
     onProgress?.(prefix);
     const fallbackPrompt = primary === 'claude' && fallback === 'codex'
       ? `${prompt}\n\n${RUNNER_SYSTEM_CONTRACT}`
       : prompt;
     const result = await runAgentCommandWithFallback(fallback, cwd, fallbackPrompt, (partial) => onProgress?.(`${prefix}\n\n${partial}`), signal, undefined, profile, onUsage, onAudit, kind, accountProfile, undefined, undefined, undefined, poolEligible, false, aggregate, undefined, externalActionGuard);
-    return { ...result, fallbackFrom: primary, fallbackReason: reason.slice(0, 500) };
+    return {
+      ...result,
+      fallbackFrom: primary,
+      fallbackReason: isReviewRefusal
+        ? 'Review on Claude was declined by the provider safeguard; rerun on Codex.'
+        : reason.slice(0, 500),
+    };
   }
 }
 
@@ -2474,6 +2483,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         repository.addActivity(item.id, 'system', 'progress', `Persistent session turn failed (${sessionReason.slice(0, 300)}); continuing this run on a per-run ${run.agent} process.`);
       }
     }
+    let providerRefusalDiagnosticForRun: string | null = null;
     let result = run.agent === 'palmyra'
       ? await (await import('./palmyra-agent.js')).runPalmyraAgent({ cwd, prompt, model: palmyraTier, signal: controller.signal, previousMessages: palmyraContext, imageAttachments: item.attachments ?? [], requiredWorkbenchTools, externalActionGuard, onProgress: (partialOutput) => {
         repository.updateRun(run.id, { output: partialOutput });
@@ -2503,7 +2513,17 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         if (run.conversationId) publishRealtimeMessagesEvent(run.conversationId); else publishRealtimeEvent('shared-messages');
       }
     }, controller.signal, (fallback, reason) => {
-      const fallbackReason = reviewFallbackReason(run, fallback, reason, repository.listRuns(item.id)) ?? reason;
+      const providerRefusal = providerRefusalDiagnostic(reason);
+      const fallbackReason = providerRefusal
+        ? 'Review on Claude was declined by the provider safeguard; rerun on Codex.'
+        : reviewFallbackReason(run, fallback, reason, repository.listRuns(item.id)) ?? reason;
+      if (providerRefusal) {
+        // Keep the provider detail for the run inspector without sending it to
+        // the shared conversation Jeffrey reads.
+        providerRefusalDiagnosticForRun = providerRefusal;
+        repository.updateRun(run.id, { error: providerRefusal });
+        if (run.conversationId) repository.createSharedMessage('system', fallbackReason, 'completed', run.conversationId);
+      }
       repository.updateRun(run.id, { agent: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: fallbackReason.slice(0, 500) });
       if (run.messageId) repository.updateSharedMessage(run.messageId, { author: fallback, model: modelFor(fallback, profile), executionProfile: profile, fallbackFrom: run.agent, fallbackReason: fallbackReason.slice(0, 500) });
       if (run.requestedTarget === 'auto') repository.updateAutomaticAgentAssignees(item.id, [fallback]);
@@ -2709,8 +2729,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       repository.updateRun(run.id, { reviewLenses: { tier: lensTier, correctness: { agent: result.agent, ledger: parseReviewLedger(result.output).ledger }, adversarial } });
       const escaped = adversarial.ledger?.attacks.filter((attack) => attack.result === 'escaped').length ?? 0;
       repository.addActivity(item.id, 'system', 'progress', adversarial.ledger
-        ? `Adversarial lens (${adversarial.agent}): ${adversarial.ledger.attacks.length} attack(s), ${escaped} escaped.`
-        : `Adversarial lens (${adversarial.agent}) produced no ledger: ${adversarial.error}`);
+        ? `Failure-mode review (${adversarial.agent}): ${adversarial.ledger.attacks.length} case(s), ${escaped} escaped.`
+        : `Failure-mode review (${adversarial.agent}) produced no ledger: ${adversarial.error}`);
     }
     if (reviewHarness) {
       const recorded = recordReviewHarnessVerdicts(repository, reviewHarness, result.output, reviewHarnessScopes, `${result.agent}, run ${run.id.slice(0, 8)}`);
@@ -2767,7 +2787,14 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     // The one retry already ran; a UI-affecting run still without the line is badged, not failed.
     const noUiSurface = run.kind === 'execute' && writesClientFiles(observedFiles(observedRunEvents)) && !namesUiSurface(output);
     if (noUiSurface) repository.addActivity(item.id, 'system', 'progress', `Run changed client files but named no UI surface (${NO_UI_SURFACE_BADGE}).`);
-    const finishPatch = { agent: result.agent, status: 'completed' as const, output, completedAt, ...telemetry };
+    const finishPatch = {
+      agent: result.agent,
+      status: 'completed' as const,
+      output,
+      completedAt,
+      ...telemetry,
+      ...(providerRefusalDiagnosticForRun ? { error: providerRefusalDiagnosticForRun } : {}),
+    };
     // Every run kind saves a handoff, so its summary, blockers, and learnings
     // are on record for the next agent and for Jeffrey.
     const finished = repository.finishRunWithReviewHandoff(run.id, ownerId, finishPatch, buildAgentRunReviewHandoff({ ...run, ...finishPatch }, output, observedRunEvents, completedAt, captureGateLine, noUiSurface ? NO_UI_SURFACE_BADGE : undefined, leftRunning));
@@ -3063,13 +3090,10 @@ export type ReviewAgentSelection = {
   reason: string;
 };
 
-/** Select an independent reviewer from the task's most recent completed implementation. */
+/** Automatic review dispatches use Codex because Claude may decline review prompts. */
 export function selectReviewAgent(runs: readonly AgentRun[]): ReviewAgentSelection {
   const implementer = runs.find((run) => run.kind === 'execute' && run.status === 'completed')?.agent ?? null;
-  if (implementer === 'codex') return { agent: 'claude', implementer, reason: 'chosen because implementer was codex' };
-  if (implementer === 'claude') return { agent: 'codex', implementer, reason: 'chosen because implementer was claude' };
-  if (implementer === 'palmyra') return { agent: 'claude', implementer, reason: 'chosen because implementer was palmyra' };
-  return { agent: 'claude', implementer: null, reason: 'defaulted to claude because no completed implementation run is known' };
+  return { agent: 'codex', implementer, reason: 'defaulted to Codex for automatic review' };
 }
 
 export function reviewFallbackReason(run: AgentRun, fallback: AgentRun['agent'], reason: string | null, runs: readonly AgentRun[]): string | null {

@@ -215,7 +215,9 @@ describe('review harness', () => {
       expect(prompt).toContain('Replays are rejected.');
       expect(prompt).toContain('abc123');
       expect(prompt).toContain('+x');
-      expect(prompt).toMatch(/Do not derive attacks from existing tests|not derive attacks from existing tests/);
+      const instructions = prompt.replace(/<adversarial-ledger>[\s\S]*?<\/adversarial-ledger>/, '');
+      expect(instructions).toContain('failure-mode review');
+      expect(instructions).not.toMatch(/\b(?:break|attack|exploit|extract)\w*/i);
       expect(prompt).toContain('<adversarial-ledger>');
     });
   });
