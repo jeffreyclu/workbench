@@ -112,6 +112,7 @@ const EXPECTED_MIGRATIONS = [
   '096_terminal_session_imports',
   '097_terminal_hook_events',
   '098_agent_run_failure_kind_runtime_promoted',
+  '099_terminal_hook_replies',
 ];
 
 describe('openDatabase', () => {
@@ -543,6 +544,21 @@ describe('openDatabase', () => {
     const upgraded = openDatabase(path);
     expect((upgraded.prepare("SELECT sql FROM sqlite_master WHERE name = 'agent_runs'").get() as { sql: string }).sql).toContain("'runtime_promoted'");
     expect(upgraded.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: 'ok' });
+    upgraded.close();
+  });
+
+  it('adds terminal hook reply bindings when upgrading from 098', () => {
+    directory = mkdtempSync(join(tmpdir(), 'workbench-db-test-'));
+    const path = join(directory, 'workbench.db');
+    const current = openDatabase(path);
+    current.exec('DROP TABLE terminal_hook_replies;');
+    current.prepare("DELETE FROM schema_migrations WHERE id = '099_terminal_hook_replies'").run();
+    current.close();
+
+    const upgraded = openDatabase(path);
+    const columns = (upgraded.prepare('PRAGMA table_info(terminal_hook_replies)').all() as Array<{ name: string }>).map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(['provider', 'session_id', 'prompt_id', 'message_id', 'expires_at', 'created_at']));
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_terminal_hook_replies_expiry'").get()).toBeTruthy();
     upgraded.close();
   });
 

@@ -59,6 +59,33 @@ describe('Claude Code hook bridge', () => {
     expect(messages(conversations()[0].id).at(-1)).toEqual({ author: 'claude', body: 'working… Read: {"content":"hello","token":"[redacted]"}' });
   });
 
+  it('attaches a late PostToolUse to its completed reply exactly once', () => {
+    const promptId = 'p-late';
+    applyTerminalHookEvent(database, event('UserPromptSubmit', { prompt_id: promptId, prompt: 'Inspect this' }));
+    applyTerminalHookEvent(database, event('PreToolUse', { prompt_id: promptId, tool_use_id: 'tool-late', tool_name: 'Read', tool_input: { file_path: '/tmp/a' } }));
+    applyTerminalHookEvent(database, event('Stop', { prompt_id: promptId, last_assistant_message: 'Inspection complete.' }));
+    const post = event('PostToolUse', { prompt_id: promptId, tool_use_id: 'tool-late', tool_name: 'Read', tool_response: { content: 'hello' } });
+    applyTerminalHookEvent(database, post);
+    applyTerminalHookEvent(database, post);
+
+    const [conversation] = conversations();
+    expect(messages(conversation.id).at(-1)).toEqual({ author: 'claude', body: 'Inspection complete.' });
+    expect(streamEvents(conversation.id)).toEqual([
+      { kind: 'file_read', detail: 'Read: {"file_path":"/tmp/a"}' },
+      { kind: 'file_read', detail: 'Read: {"content":"hello"}' },
+    ]);
+  });
+
+  it('creates a pending reply when a tool hook arrives before its prompt', () => {
+    applyTerminalHookEvent(database, event('PostToolUse', {
+      prompt_id: 'p-before-prompt', tool_use_id: 'tool-before-prompt', tool_name: 'Bash', tool_response: { output: 'ok' },
+    }));
+
+    const [conversation] = conversations();
+    expect(messages(conversation.id).at(-1)).toEqual({ author: 'claude', body: 'working… Bash: {"output":"ok"}' });
+    expect(streamEvents(conversation.id)).toEqual([{ kind: 'tool', detail: 'Bash: {"output":"ok"}' }]);
+  });
+
   it('skips sdk tool hooks on every event', () => {
     const result = applyTerminalHookEvent(database, event('PreToolUse', { entrypoint: 'sdk-cli', tool_use_id: 'tool-1', tool_name: 'Bash', tool_input: { command: 'echo hi' } }));
     expect(result).toEqual({ status: 'skipped', reason: 'workbench run' });

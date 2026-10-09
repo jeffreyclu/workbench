@@ -594,6 +594,7 @@ export type TerminalHookResult =
 
 const DEFAULT_TERMINAL_TITLE = 'Terminal session';
 const SECRET_KEY = /token|secret|password|key/i;
+const TERMINAL_HOOK_REPLY_RETENTION_MS = 10 * 60_000;
 
 function redactHookValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactHookValue);
@@ -623,13 +624,44 @@ function activeHookReply(database: WorkbenchDatabase, conversationId: string, pr
   return row?.id ?? null;
 }
 
+function hookReplyForPrompt(database: WorkbenchDatabase, payload: TerminalHookPayload, conversationId: string, at: string): string | null {
+  if (!payload.prompt_id) return activeHookReply(database, conversationId, payload.provider);
+  database.prepare('DELETE FROM terminal_hook_replies WHERE expires_at IS NOT NULL AND expires_at < ?').run(at);
+  const existing = database.prepare(`SELECT message_id FROM terminal_hook_replies
+    WHERE provider = ? AND session_id = ? AND prompt_id = ?`)
+    .get(payload.provider, payload.session_id, payload.prompt_id) as { message_id: string } | undefined;
+  if (existing) return existing.message_id;
+
+  // A completed mapping was pruned, so a later retry must not create a new
+  // pending reply for a turn that is already outside the retention window.
+  const stopped = database.prepare(`SELECT 1 FROM terminal_hook_events
+    WHERE provider = ? AND session_id = ? AND prompt_id = ? AND kind = 'stop'`)
+    .get(payload.provider, payload.session_id, payload.prompt_id);
+  if (stopped) return null;
+
+  const messageId = insertPendingReply(database, conversationId, payload.provider, at);
+  database.prepare(`INSERT INTO terminal_hook_replies
+    (provider, session_id, prompt_id, message_id, expires_at, created_at)
+    VALUES (?, ?, ?, ?, NULL, ?)`)
+    .run(payload.provider, payload.session_id, payload.prompt_id, messageId, at);
+  return messageId;
+}
+
+function retainHookReply(database: WorkbenchDatabase, payload: TerminalHookPayload, at: string): void {
+  if (!payload.prompt_id) return;
+  const expiresAt = new Date(Date.parse(at) + TERMINAL_HOOK_REPLY_RETENTION_MS).toISOString();
+  database.prepare(`UPDATE terminal_hook_replies SET expires_at = ?
+    WHERE provider = ? AND session_id = ? AND prompt_id = ?`)
+    .run(expiresAt, payload.provider, payload.session_id, payload.prompt_id);
+}
+
 function recordHookToolEvent(database: WorkbenchDatabase, payload: TerminalHookPayload, conversationId: string, at: string): boolean {
   if (!payload.tool_name || !payload.tool_use_id) return false;
   const phase = payload.hook_event_name === 'PreToolUse' ? 'prompt' : 'stop';
   const seen = database.prepare('SELECT 1 FROM terminal_hook_events WHERE provider = ? AND session_id = ? AND prompt_id = ? AND kind = ?')
     .get(payload.provider, payload.session_id, payload.tool_use_id, phase);
   if (seen) return false;
-  const messageId = activeHookReply(database, conversationId, payload.provider);
+  const messageId = hookReplyForPrompt(database, payload, conversationId, at);
   if (!messageId) return false;
   const isStart = payload.hook_event_name === 'PreToolUse';
   const summary = hookSummary(isStart ? payload.tool_input : payload.tool_response);
@@ -764,11 +796,14 @@ export function applyTerminalHookEvent(database: WorkbenchDatabase, payload: Ter
         }
         const messageId = kind === 'prompt'
           ? insertMessage(database, conversationId, 'jeffrey', text, at)
-          : activeHookReply(database, conversationId, payload.provider) ?? insertPendingReply(database, conversationId, payload.provider, at);
-        if (kind === 'prompt') insertPendingReply(database, conversationId, payload.provider, at);
-        else database.prepare("UPDATE shared_messages SET body = ?, status = 'completed', completed_at = ? WHERE id = ?").run(text, at, messageId);
+          : hookReplyForPrompt(database, payload, conversationId, at);
+        if (kind === 'prompt') hookReplyForPrompt(database, payload, conversationId, at);
+        else if (messageId) {
+          database.prepare("UPDATE shared_messages SET body = ?, status = 'completed', completed_at = ? WHERE id = ?").run(text, at, messageId);
+          retainHookReply(database, payload, at);
+        }
         database.prepare('INSERT INTO terminal_hook_events (provider, session_id, prompt_id, kind, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(payload.provider, payload.session_id, payload.prompt_id, kind, messageId, at);
+          .run(payload.provider, payload.session_id, payload.prompt_id, kind, messageId ?? '', at);
         changed = true;
       }
     }

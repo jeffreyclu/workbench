@@ -2723,6 +2723,27 @@ const schemaMigrations: readonly Migration[] = [
       }
     },
   },
+  {
+    // Hook delivery is asynchronous: a PostToolUse can arrive after the Stop
+    // for its prompt. Keep the reply identity briefly after completion so the
+    // late stream event still belongs to that completed reply.
+    id: '099_terminal_hook_replies',
+    apply(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS terminal_hook_replies (
+          provider TEXT NOT NULL CHECK (provider IN ('claude')),
+          session_id TEXT NOT NULL,
+          prompt_id TEXT NOT NULL,
+          message_id TEXT NOT NULL REFERENCES shared_messages(id) ON DELETE CASCADE,
+          expires_at TEXT,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (provider, session_id, prompt_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_terminal_hook_replies_expiry
+          ON terminal_hook_replies(expires_at) WHERE expires_at IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 function applyMigrations(database: DatabaseSync) {
