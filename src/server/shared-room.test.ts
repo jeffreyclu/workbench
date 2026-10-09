@@ -15,7 +15,7 @@ import { ensureSession, readAgentSessionStatus, sessionExternalActionGuard, subm
 import { fakeAgentDirectory } from './test-fake-agent.js';
 import { HEARTBEAT_MS, LEASE_MS, OWNER_ID } from './scheduler.js';
 import { captureGateState, CAPTURE_GATE_PROMPT } from './capture-gate.js';
-import { dispatchingMessageForSharedReply, observedEventsFromSessionLog, accountProfileForSharedReply, isFanOutReply, persistentSessionsEnabled, usesPersistentSession, usesTaskRunSession, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, SESSION_TURN_WAITING_REASON, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { dispatchingMessageForSharedReply, observedEventsFromSessionLog, accountProfileForSharedReply, isFanOutReply, persistentSessionsEnabled, usesPersistentSession, usesTaskRunSession, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, hasLiveSessionTurn, recoverSharedSessionTurns, SESSION_TURN_WAITING_REASON, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -1524,6 +1524,58 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(hostLifecycle(conversation.id)).toEqual([`turn_started:${message.id}#1`, `turn_terminal:${message.id}#1`, 'turn_started:restart-task-1#1', 'turn_terminal:restart-task-1#1']);
     expect(repository.getRun(run.id)?.waitingReason).toBeNull();
   }, 30_000);
+
+  it('finishes a chat-linked run into its reply after a promotion instead of failing it', async () => {
+    const conversation = repository.createConversation('Room');
+    const message = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+    const task = repository.create({ title: 'Chat work', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Chat work.', conversation.id, message.id);
+    repository.claimRun(run.id, 'previous-runtime', 60_000);
+    repository.claimSharedMessage(message.id, 'previous-runtime', 60_000);
+    const session = await ensureSession(database, { conversationId: conversation.id, agent: 'claude', cwd: root });
+    await submitTurn(database, session, { prompt: 'slow recover', turnId: `${message.id}#1` });
+
+    repository.interruptOwnedWork('previous-runtime', 'Runtime promoted.', { workspaceMissing: () => false, hasLiveSessionTurn: (id) => hasLiveSessionTurn(repository, id) });
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'queued', waitingReason: 'runtime promoted; resuming' });
+    expect(repository.getSharedMessageById(message.id)).toMatchObject({ status: 'running' });
+    expect(database.prepare('SELECT owner_id FROM shared_messages WHERE id = ?').get(message.id)).toEqual({ owner_id: null });
+
+    expect(await recoverSharedSessionTurns(repository, { claimRetryMs: 0 })).toEqual([message.id]);
+    expect(repository.getSharedMessageById(message.id)).toMatchObject({ status: 'completed' });
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'completed' });
+    expect(repository.getRun(run.id)?.output).toMatch(/^reply 1 from \d+$/);
+    expect(hostLifecycle(conversation.id)).toEqual([`turn_started:${message.id}#1`, `turn_terminal:${message.id}#1`]);
+    expect(spawns()).toHaveLength(1);
+  }, 30_000);
+
+  it('still fails a chat-linked run whose session has no live turn', async () => {
+    const conversation = repository.createConversation('Room');
+    const message = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+    const task = repository.create({ title: 'Chat work', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Chat work.', conversation.id, message.id);
+    repository.claimRun(run.id, 'previous-runtime', 60_000);
+    repository.claimSharedMessage(message.id, 'previous-runtime', 60_000);
+
+    const result = repository.interruptOwnedWork('previous-runtime', 'Runtime promoted.', { workspaceMissing: () => false, hasLiveSessionTurn: (id) => hasLiveSessionTurn(repository, id) });
+
+    expect(result).toMatchObject({ failedRunIds: [run.id], messageIds: [message.id], requeuedRunIds: [] });
+    expect(repository.getSharedMessageById(message.id)).toMatchObject({ status: 'failed' });
+  });
+
+  it('fails a promoted reply that recovery cannot adopt instead of leaving it running', async () => {
+    const conversation = repository.createConversation('Room');
+    const message = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+    const task = repository.create({ title: 'Chat work', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: null, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Chat work.', conversation.id, message.id);
+    repository.claimRun(run.id, 'previous-runtime', 60_000);
+    repository.claimSharedMessage(message.id, 'previous-runtime', 60_000);
+    repository.interruptOwnedWork('previous-runtime', 'Runtime promoted.', { workspaceMissing: () => false, hasLiveSessionTurn: () => true });
+
+    await recoverSharedSessionTurns(repository, { claimRetryMs: 0 });
+
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'failed' });
+    expect(repository.getSharedMessageById(message.id)).toMatchObject({ status: 'failed' });
+  });
 
   it('recovers unfinished replies on different conversations in parallel', async () => {
     const messages: string[] = [];
