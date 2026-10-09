@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { ClipboardCheck, ExternalLink, FileDiff, FolderSearch, GitBranch, GitCommitHorizontal, GitPullRequest, History, RefreshCw, X } from 'lucide-react';
+import { ClipboardCheck, ExternalLink, NotebookPen, FileDiff, FolderSearch, GitBranch, GitCommitHorizontal, GitPullRequest, History, RefreshCw, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
 import { Skeleton, SkeletonText } from '../../components/skeleton/skeleton.js';
@@ -22,11 +22,14 @@ import { DiffReviewSummaryView } from '../diff-review/summary-view.js';
 import { DiffReviewSearch } from '../diff-review/diff-search-bar.js';
 import type { DiffSearchMatch } from '../diff-review/diff-search.js';
 import { DiffReviewChangeMap } from '../diff-review/change-map.js';
+import { ReviewNotesDrawer, type PendingNote } from '../review-notes/notes-drawer.js';
+import { nextUnresolvedNote, type ResolvedReviewNote } from '../review-notes/notes-logic.js';
+import { useReviewNotes } from '../review-notes/use-review-notes.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { useGitHubPullRequestDiff, useGitHubPullRequestFile } from '../github-diff/hooks.js';
 import { pullRequestLabel, pullRequestUrls } from '../github-diff/logic.js';
 import { useDiffHunkReviews, useUpsertDiffHunkReview, useWorkspaceCommitDiff, useWorkspaceDiff, useWorkspaceDiffChanges, useWorkspaceDiffSnapshots, useWorkspaceFileSource, useWorkspaceRefCommits, useWorkspaceRefDiff, useWorkspaceRefs, workspaceExplorerQueryKey } from './hooks.js';
-import { workspaceDiffScopeKeys } from './data.js';
+import { workspaceDiffScopeKey, workspaceDiffScopeKeys } from './data.js';
 // Tier routing and the delegated sweep, reached across to the review stack.
 // These four are pure policy over a `ReviewDecision` — no block splitting, no
 // block rows, none of the machinery that is deliberately kept out of Changes.
@@ -652,6 +655,25 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   }, [readingMode, selectDecision]);
   const clearSearchHit = useCallback(() => setSearchHit(null), []);
 
+  // Local draft notes. They are stored per review scope in this browser and
+  // anchored to lines by hunk, so they are looked up against every file's hunks
+  // rather than only the selected decision's.
+  const noteHunksByFile = useMemo(() => new Map((displayedDiff?.files ?? []).map((file) => [file.path, buildFileDiffHunks(file)] as const)), [displayedDiff?.files]);
+  const reviewNotes = useReviewNotes(workspaceDiffScopeKey(scope), noteHunksByFile);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [pendingNote, setPendingNote] = useState<PendingNote | null>(null);
+  const [lastJumpedNoteId, setLastJumpedNoteId] = useState<string | null>(null);
+  const jumpToNote = useCallback((entry: ResolvedReviewNote) => {
+    if (!entry.target) return;
+    const decisionId = decisions.find((decision) => decision.hunks.some((hunk) => hunk.id === entry.target?.hunkId))?.id;
+    if (!decisionId) return;
+    if (readingMode === 'file' || (readingMode === 'final' && entry.target.kind === 'deletion')) setReadingMode('diff');
+    setSearchHit({ filePath: entry.note.anchor.filePath, lineKey: entry.target.lineKey });
+    setLastJumpedNoteId(entry.note.id);
+    selectDecision(decisionId);
+  }, [decisions, readingMode, selectDecision]);
+  const startNote = useCallback((target: PendingNote) => { setPendingNote(target); setNotesOpen(true); }, []);
+
   const markSelectedReviewed = useCallback(() => {
     if (selectedDecision) void saveDecision(selectedDecision, 'reviewed');
   }, [saveDecision, selectedDecision]);
@@ -911,6 +933,20 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
             : hunkReviews.isError ? <section className="diff-review-load-error" role="alert"><strong>Could not load review decisions.</strong><p>{hunkReviews.error.message}</p><button type="button" className="button secondary compact" onClick={() => void hunkReviews.refetch()} disabled={hunkReviews.isFetching}>Retry</button></section>
               : <div className="workspace-diff-layout diff-review-layout">
                 <DiffReviewSearch files={displayedDiff.files} decisions={decisions} onJump={jumpToSearchMatch} onClose={clearSearchHit} />
+                <button type="button" className="button secondary compact review-notes-toggle" aria-expanded={notesOpen} onClick={() => setNotesOpen((open) => !open)}><NotebookPen size={13} aria-hidden="true" /> Notes{reviewNotes.summary.unresolved > 0 ? ` (${reviewNotes.summary.unresolved})` : ''}</button>
+                {notesOpen && <ReviewNotesDrawer
+                  groups={reviewNotes.groups}
+                  summary={reviewNotes.summary}
+                  pending={pendingNote}
+                  saveFailed={reviewNotes.saveFailed}
+                  onSave={(body) => { if (pendingNote) reviewNotes.addNote(pendingNote.anchor, body); setPendingNote(null); }}
+                  onCancelPending={() => setPendingNote(null)}
+                  onJump={jumpToNote}
+                  onNextUnresolved={() => { const next = nextUnresolvedNote(reviewNotes.groups, lastJumpedNoteId); if (next) jumpToNote(next); }}
+                  onToggleResolved={reviewNotes.toggleResolved}
+                  onRemove={reviewNotes.removeNote}
+                  onClose={() => setNotesOpen(false)}
+                />}
                 <DiffReviewSummaryView decisions={decisions} />
                 <DiffReviewChangeMap map={changeMap} decisions={decisions} selectedId={selectedDecision?.id ?? null} riskBands={riskBands} onSelect={selectDecision} />
                 {autoScores.total > 0 && <p className="muted review-director-status" role="status">
@@ -950,7 +986,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                         remaining files stay readable as diffs underneath it
                         rather than disappearing with the mode switch. */}
                     {(readingMode === 'file' ? fileHunkGroups.slice(1) : fileHunkGroups).map(({ file, hunks }) =>
-                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} searchHit={searchHit?.filePath === file.path ? searchHit.lineKey : null} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onOpenLinesDetail={openLinesDecisionDetail} onToggleReadingMode={toggleReadingMode} />)}
+                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} searchHit={searchHit?.filePath === file.path ? searchHit.lineKey : null} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onOpenLinesDetail={openLinesDecisionDetail} onAddNote={startNote} onToggleReadingMode={toggleReadingMode} />)}
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={detailAnchor.simple ? undefined : <>
                       <DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />
                     </>} onClose={() => setDetailAnchor(null)}>

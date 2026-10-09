@@ -2544,3 +2544,28 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .diff-review-search-count { flex: 1; text-align: left; }
   .diff-review-search-result { grid-template-columns: 1fr; gap: 2px; min-height: 44px; padding: 8px; }
 }
+
+/* Local review notes: a right-hand drawer on desktop that stacks full-width
+ * under the diff chrome on a phone. */
+.review-notes-toggle { display: inline-flex; align-items: center; gap: 6px; justify-self: start; }
+.review-notes-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 30; display: flex; flex-direction: column; gap: 8px; width: min(380px, 100vw); padding: 14px; overflow-y: auto; color: #d5d4cd; background: #191916; border-left: 1px solid #33322c; box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4); font-size: 12px; }
+.review-notes-drawer header { display: flex; align-items: center; justify-content: space-between; }
+.review-notes-drawer h3 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; }
+.review-notes-drawer h4 { margin: 8px 0 4px; color: #a9a89f; font: 500 11px/1.4 'DM Mono'; overflow-wrap: anywhere; }
+.review-notes-drawer p { margin: 0; }
+.review-notes-drawer ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.review-notes-drawer li { display: grid; gap: 4px; padding: 8px; background: #1f1f1c; border: 1px solid #33322c; border-radius: 6px; }
+.review-notes-drawer li.resolved p { color: #8f8e86; text-decoration: line-through; }
+.review-notes-drawer li > div { display: flex; gap: 8px; }
+.review-notes-drawer li button, .review-notes-close { display: inline-flex; align-items: center; gap: 4px; color: #a9a89f; background: none; border: 0; cursor: pointer; font: inherit; }
+.review-notes-drawer li button:hover, .review-notes-close:hover { color: var(--acid); }
+.review-notes-jump { justify-self: start; color: var(--acid) !important; font-family: 'DM Mono'; }
+.review-notes-outdated, .review-notes-draft-label { color: #8f8e86; }
+.review-notes-warning { color: #e0a458; }
+.review-notes-composer { display: grid; gap: 6px; }
+.review-notes-composer label { display: grid; gap: 4px; }
+.review-notes-composer textarea { width: 100%; resize: vertical; color: inherit; background: #10100f; border: 1px solid #33322c; border-radius: 6px; padding: 6px; font: inherit; }
+.review-notes-composer > div { display: flex; gap: 6px; }
+@media (max-width: 719px) {
+  .review-notes-drawer { position: static; width: auto; max-height: none; border: 1px solid #33322c; border-radius: 7px; box-shadow: none; }
+}

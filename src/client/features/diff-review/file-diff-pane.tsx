@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, LoaderCircle, MessageSquare, MessageSquareText, TriangleAlert } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, LoaderCircle, MessageSquare, MessageSquareText, NotebookPen, TriangleAlert } from 'lucide-react';
 import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
 import { CHANGE_RELATION_LABELS, type ChangeMap } from '../../../shared/change-map.js';
 import { buildChangeLinkIndex, plainRelationText, type ChangeLink, type ChangeLinkSummary } from './change-map-logic.js';
@@ -8,6 +8,7 @@ import type { ReviewDecision, ReviewDiffHunk } from './logic.js';
 import { reviewStateLabel } from './logic.js';
 import { toFinalStateRows } from './final-state-lines.js';
 import { toSplitRows } from './split-rows.js';
+import { anchorForLines, type ReviewNoteAnchor } from '../review-notes/notes-logic.js';
 
 /** How a block's code is drawn. `diff` is the unified two-sided reading;
  * `split` lays the before and after side by side; `final` is the code as it
@@ -120,7 +121,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode: requestedMode = 'diff', modeTitle, searchHit = null, onSelect, onOpenDetail, onOpenLinesDetail, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode: requestedMode = 'diff', modeTitle, searchHit = null, onSelect, onOpenDetail, onOpenLinesDetail, onAddNote, onToggleReadingMode }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -172,6 +173,8 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
    * context from that range instead of the whole chunk the lines sit in.
    * Omitted, highlighting draws no handle. */
   onOpenLinesDetail?: (decisionId: string, lines: { hunkRange: string; startIndex: number; endIndex: number }, anchor: HTMLElement) => void;
+  /** Starts a local draft note on the highlighted lines. */
+  onAddNote?: (target: { anchor: ReviewNoteAnchor; label: string }) => void;
   /** Supplying this is what puts the reading-mode switch in the header: a
    * surface that cannot change the mode should not advertise a control. */
   onToggleReadingMode?: () => void;
@@ -679,6 +682,23 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
       >
         <MessageSquareText size={12} aria-hidden="true" />
         Review these lines
+      </button>,
+      document.body,
+    )}
+    {lineSelection && onAddNote && createPortal(
+      <button
+        type="button"
+        className="diff-review-lines-select-btn diff-review-note-btn"
+        style={{ position: 'fixed', top: Math.max(8, lineSelection.rect.top - 34), left: Math.min(window.innerWidth - 300, Math.max(8, lineSelection.rect.right - 280)) }}
+        aria-label={`Add a note on the ${lineSelection.endIndex - lineSelection.startIndex + 1} highlighted ${lineSelection.endIndex === lineSelection.startIndex ? 'line' : 'lines'}`}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => {
+          const target = anchorForLines(filePath, hunks, lineSelection);
+          if (target) onAddNote(target);
+        }}
+      >
+        <NotebookPen size={12} aria-hidden="true" />
+        Add note
       </button>,
       document.body,
     )}
