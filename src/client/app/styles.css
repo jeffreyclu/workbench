@@ -1655,10 +1655,13 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .attachment-preview-unsupported { margin: 0; padding: 12px; }
 .thread-filter-bar { position: absolute; top: 92px; right: 28px; left: 28px; z-index: 6; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: auto; margin: 0; padding: 0; pointer-events: none; }
 .thread-filter-bar > * { pointer-events: auto; }
-.terminal-drawer { position: absolute; top: 132px; right: 28px; z-index: 7; display: flex; flex-direction: column; gap: 8px; width: min(560px, calc(100% - 56px)); max-height: 60%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface, #fff); box-shadow: 0 8px 28px rgb(0 0 0 / 18%); }
-.terminal-panel { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
-.terminal-panel-header { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
-.terminal-panel-log { margin: 0; min-height: 120px; max-height: 320px; overflow: auto; padding: 8px; border-radius: 6px; background: #111; color: #e6e6e6; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.terminal-drawer { position: relative; z-index: 7; display: flex; flex: 0 1 auto; flex-direction: column; gap: 8px; box-sizing: border-box; width: min(900px, calc(100% - 56px)); max-height: 45%; margin: 44px auto 0; padding: 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-raised); color: var(--soft); box-shadow: 0 8px 28px rgb(0 0 0 / 18%); }
+.terminal-drawer-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.terminal-drawer-header .icon-button { flex: 0 0 auto; }
+.terminal-panel { display: flex; flex: 1 1 auto; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
+.terminal-panel-header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; font-size: 12px; color: var(--soft); }
+.terminal-panel-header [role="status"] { min-width: 0; overflow-wrap: anywhere; }
+.terminal-panel-log { margin: 0; flex: 1 1 auto; min-height: 120px; max-height: 320px; overflow: auto; padding: 8px; border-radius: 6px; background: #111; color: #e6e6e6; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
 .terminal-line-host { color: #8ab4ff; }
 .terminal-line-tool { color: #f0c674; }
 .terminal-line-result { color: #9aa0a6; }
@@ -2031,6 +2034,11 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
   .conversation-window-actions .conversation-delete-control { flex: 0 0 auto; }
   .mobile-review-toggle { position: fixed; top: 12px; left: 12px; z-index: 8; display: flex; align-items: center; padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; transition: top .2s ease; }
   .agent-console:has(.agent-console-header:not(.is-mobile-header-collapsed)) > .mobile-review-toggle { top: 140px; }
+  /* Full-width sheet in flow beneath the fixed review toggle, so it never covers conversation text. */
+  .terminal-drawer { width: auto; max-height: 45dvh; margin: 68px 0 0; border-width: 1px 0; border-radius: 0; box-shadow: none; }
+  .terminal-drawer-close.icon-button { width: 44px; height: 44px; }
+  .terminal-drawer .conversation-surface-tabs button { width: auto; min-width: 64px; padding: 0 14px; font-size: 12px; }
+  .terminal-panel-log { max-height: none; min-height: 0; overscroll-behavior: contain; }
   .thread-filter-bar { display: none; }
   .conversation-surface-tabs { flex: 0 0 auto; margin-right: 0; border: 1px solid #373731; border-radius: 8px; background: #171715; }
   .conversation-surface-tabs button { flex: 0 0 auto; justify-content: center; width: 44px; min-width: 44px; min-height: 44px; padding: 0; font-size: 0; }

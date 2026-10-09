@@ -80,3 +80,52 @@ test('a conversation with neither session says so, and each agent tab re-fetches
   await expect(drawer.getByLabel('codex session output')).toContainText('Codex reply');
   await expect(drawer.getByLabel('codex session output')).not.toContainText('Claude prompt');
 });
+
+test('@phone the Terminal toggle opens a full-width drawer that clears the conversation and scrolls its own log', async ({ page }) => {
+  const hook = (hook_event_name: string, extra: Record<string, unknown> = {}) => ({ provider: 'claude', session_id: 'mirror-session-phone', cwd: '/tmp/e2e-terminal', entrypoint: 'cli', hook_event_name, ...extra });
+  const longReply = Array.from({ length: 60 }, (_, index) => `reply line ${index}`).join('\n');
+  const applied = await page.request.post('/api/e2e/terminal-hook-events', { data: { events: [
+    hook('SessionStart'),
+    hook('UserPromptSubmit', { prompt_id: 'p1', prompt: 'Why is the build red?' }),
+    hook('Stop', { prompt_id: 'p1', last_assistant_message: longReply }),
+  ] } });
+  const conversationId = (await applied.json()).results.find((result: { conversationId?: string }) => result.conversationId).conversationId;
+
+  await page.goto(`/conversations/${conversationId}`);
+  const toggle = page.getByRole('button', { name: 'Terminal', exact: true });
+  expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await toggle.click();
+
+  const drawer = page.locator('.terminal-drawer');
+  const header = drawer.locator('.terminal-panel-header');
+  const log = drawer.getByLabel('claude session output');
+  await expect(header).toContainText('Mirrored from your terminal');
+  await expect(log).toBeVisible();
+
+  const viewport = page.viewportSize()!;
+  const drawerBox = (await drawer.boundingBox())!;
+  expect(drawerBox.x).toBeLessThanOrEqual(1);
+  expect(drawerBox.width).toBeGreaterThanOrEqual(viewport.width - 2);
+
+  await page.screenshot({ path: 'test-results/terminal-drawer/phone.png' });
+  const headerBox = (await header.boundingBox())!;
+  // Only the part of the first message inside the scroll area is visible, so clip it to the thread before comparing.
+  const thread = (await page.locator('.shared-thread').boundingBox())!;
+  const message = (await page.locator('.shared-message').first().boundingBox())!;
+  const visibleTop = Math.max(message.y, thread.y);
+  const visibleBottom = Math.min(message.y + message.height, thread.y + thread.height);
+  const intersects = headerBox.y < visibleBottom && visibleTop < headerBox.y + headerBox.height;
+  expect(intersects).toBe(false);
+  expect(headerBox.y + headerBox.height).toBeLessThanOrEqual(thread.y + 1);
+
+  const closeBox = (await drawer.getByRole('button', { name: 'Close terminal' }).boundingBox())!;
+  expect(closeBox.width).toBeGreaterThanOrEqual(44);
+  expect(closeBox.height).toBeGreaterThanOrEqual(44);
+
+  // The log scrolls on its own and the page never scrolls sideways.
+  expect(await log.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await drawer.getByRole('button', { name: 'Close terminal' }).click();
+  await expect(drawer).toBeHidden();
+});

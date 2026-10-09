@@ -16,8 +16,9 @@ export default defineConfig({
   projects: [
     { name: 'mobile-iphone', use: { ...devices['iPhone 13'] }, testIgnore: desktopSpecs },
     { name: 'mobile-webkit', use: { ...devices['iPhone 13'], browserName: 'webkit' }, testIgnore: desktopSpecs },
-    // Desktop-only chrome (the conversation toolbar's Terminal toggle is not rendered on a phone).
-    { name: 'desktop-chromium', use: { ...devices['Desktop Chrome'] }, testMatch: desktopSpecs },
+    // The drawer spec runs on desktop; its @phone case runs in a 375px touch viewport.
+    { name: 'desktop-chromium', use: { ...devices['Desktop Chrome'] }, testMatch: desktopSpecs, grepInvert: /@phone/ },
+    { name: 'phone-chromium', use: { ...devices['iPhone 13'], browserName: 'chromium', viewport: { width: 375, height: 812 } }, testMatch: desktopSpecs, grep: /@phone/ },
   ],
   // Starts the isolated e2e API + web servers before the suite and always tears
   // them down afterward, even on failure, so no dev process is left running.
