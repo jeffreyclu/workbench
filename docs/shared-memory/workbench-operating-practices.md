@@ -891,3 +891,9 @@ Node's child_process raises ENOENT with the message "spawn <cmd> ENOENT" when th
 Scripts that import src/server modules (agent-session.ts pulls in shared-room.ts, which loads personas) resolve docs/personas and ./data from process.cwd() at import time. Run from any other directory, they crash with ENOENT on docs/personas. The `workbench` shim therefore cds into the checkout and passes the user's directory as WORKBENCH_LAUNCH_CWD; `npm run` also starts in the package root, so INIT_CWD is the fallback. Also: the server's workspace picker only accepts sibling repos of the server checkout, so a terminal launcher pins an arbitrary cwd by writing shared_conversation_workspace_selection directly. Opening that conversation's Repo Explorer resets a non-sibling path (known risk). The renderer prints finished assistant text after the streamed deltas, so the launcher drops the repeat. Verified end to end 2026-10-09 against a local server on :45191 with real claude; the Codex path was not run.
 
 *Provenance: 1128361b-ff24-4b61-bc12-0d01fcd13046*
+
+### <a id="80"></a>80. Review queues must match the reviewed commit
+
+When a generated review ledger names a file absent from the supplied commit, verify the commit's changed-file list and mark the ledger item clear rather than reviewing an unrelated document. The terminal drawer review commit 8a9482a changed only five client/e2e files; its supplied docs/work-log.md decision was not applicable.
+
+*Provenance: f9cdb5fb-19a1-460e-85c3-3c919f6a1079*

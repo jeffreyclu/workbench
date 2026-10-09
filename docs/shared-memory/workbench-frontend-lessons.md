@@ -917,3 +917,13 @@ The Terminal drawer polls the session tail route at 1s, which only suits file-ba
 1) Every Playwright project in playwright.config.ts is an iPhone; the conversation toolbar's Terminal toggle (thread-filter-bar in conversation/view.tsx) is not rendered in the phone layout, so desktop-only chrome needs the desktop-chromium project (testMatch the spec, testIgnore it on mobile). 2) Terminal tails travel over the websocket request channel, not HTTP, so page.on('request') never sees /terminal?offset=; prove re-fetch by seeding content while a tab is hidden and asserting it appears on reselect. 3) webServer.url pointed at Vite (5175) became ready before the e2e API, so first requests got empty bodies; use ${baseURL}/api/health (proxied) so readiness needs both. Also: e2e-api.ts must set WORKBENCH_AGENT_SESSIONS_DIR to a temp dir, otherwise session logs resolve beside ./data/workbench.db (the live runtime). Open visual defect (unfixed): the drawer renders as a white popover with faint header text overlapping the conversation; phone layout has no Terminal toggle.
 
 *Provenance: d2336d00-432b-4434-bf8d-0137b81d09f1*
+
+### <a id="65"></a>65. Terminal drawer: in-flow layout, phone tab font-size trap, clipped bounding boxes in e2e
+
+Three non-obvious findings from the terminal drawer fix (work item f9cdb5fb):
+1. `var(--surface, #fff)` is undefined in Workbench's theme (tokens are --panel, --panel-raised, --line, --soft), so the drawer fell back to white and its light text was invisible. That was the "overlapping header" symptom; use --panel-raised.
+2. A floating drawer cannot satisfy "never overlays conversation text". Render it in the agent-console flex column before .conversation-review-layout (margin-top clears the absolute .thread-filter-bar on desktop, ~68px clears the fixed .mobile-review-toggle on phone).
+3. The phone block `(max-width: 820px) and (pointer: coarse)` sets `.conversation-surface-tabs button { font-size: 0; width: 44px }` (icon-only tabs). Any text tab group reusing that class renders blank on phone unless overridden.
+E2E: Playwright boundingBox() of a message scrolled inside .shared-thread extends past the visible scroll area, so a header-vs-message intersection check flaked; clip the message box to the thread box first. The phone case is a `@phone`-tagged test run by a `phone-chromium` project (iPhone 13, browserName chromium, 375px); desktop uses grepInvert /@phone/.
+
+*Provenance: f9cdb5fb-19a1-460e-85c3-3c919f6a1079*
