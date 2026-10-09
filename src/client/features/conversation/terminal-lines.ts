@@ -2,6 +2,14 @@ import type { TerminalLine } from '../../../shared/contracts';
 
 /** The panel keeps the most recent lines only; the full log stays in events.jsonl. */
 export const MAX_TERMINAL_LINES = 500;
+export const MAX_MERGED_DELTA_CHARS = 64_000;
+const TRIMMED_DELTA_MARKER = '\u2026 earlier output trimmed';
+
+function mergeDeltaText(previous: string, incoming: string): string {
+  const merged = previous + incoming;
+  if (merged.length <= MAX_MERGED_DELTA_CHARS) return merged;
+  return `${TRIMMED_DELTA_MARKER}${merged.slice(-(MAX_MERGED_DELTA_CHARS - TRIMMED_DELTA_MARKER.length))}`;
+}
 
 /** Streaming fragments extend the previous delta line instead of becoming one line per token. */
 export function appendTerminalLines(current: TerminalLine[], incoming: TerminalLine[]): TerminalLine[] {
@@ -9,7 +17,7 @@ export function appendTerminalLines(current: TerminalLine[], incoming: TerminalL
   const next = [...current];
   for (const line of incoming) {
     const last = next[next.length - 1];
-    if (line.kind === 'delta' && last?.kind === 'delta') next[next.length - 1] = { ...last, text: last.text + line.text };
+    if (line.kind === 'delta' && last?.kind === 'delta') next[next.length - 1] = { ...last, text: mergeDeltaText(last.text, line.text) };
     else next.push(line);
   }
   return next.length > MAX_TERMINAL_LINES ? next.slice(next.length - MAX_TERMINAL_LINES) : next;

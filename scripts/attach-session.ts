@@ -73,43 +73,25 @@ export function resolveSession(database: DatabaseSync, selector: string, agent: 
   return { conversationId: row.conversation_id, agent: row.agent, title: row.title, lastActiveAt: row.last_active_at };
 }
 
-function processParents(io: AttachIo): Map<number, number> {
-  const result = io.run('ps', ['-axo', 'pid=,ppid=']);
-  if (result.status !== 0) return new Map();
-  return new Map(result.stdout.trim().split('\n').flatMap((line) => {
-    const [pid, parent] = line.trim().split(/\s+/).map(Number);
-    return Number.isInteger(pid) && Number.isInteger(parent) ? [[pid, parent] as const] : [];
-  }));
-}
-
-export function findTmuxTarget(hostPid: number, panes: string, parents: Map<number, number>): string | null {
-  const paneByPid = new Map<number, string>();
-  for (const line of panes.trim().split('\n')) {
-    const [pidText, target] = line.split('\t');
-    const pid = Number(pidText);
-    if (Number.isInteger(pid) && target) paneByPid.set(pid, target);
-  }
-  for (let pid: number | undefined = hostPid; pid && pid > 1; pid = parents.get(pid)) {
-    const target = paneByPid.get(pid);
-    if (target) return target;
-  }
-  return null;
-}
-
 function attachTmux(session: ResolvedSession, io: AttachIo): boolean {
-  const status = readAgentSessionStatus(session);
-  if (!status || io.run('tmux', ['-V']).status !== 0) return false;
-  const panes = io.run('tmux', ['list-panes', '-a', '-F', '#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}']);
-  if (panes.status !== 0) return false;
-  const target = findTmuxTarget(status.hostPid, panes.stdout, processParents(io));
-  if (!target) return false;
-  const sessionTarget = target.split(':', 1)[0];
-  if (io.run('tmux', ['select-window', '-t', target]).status !== 0 || io.run('tmux', ['select-pane', '-t', target]).status !== 0) {
-    throw new Error(`tmux could not select ${target}.`);
+  if (!process.env.TMUX || io.run('tmux', ['-V']).status !== 0) return false;
+  const current = io.run('tmux', ['display-message', '-p', '#{session_name}']);
+  const sessionTarget = current.stdout.trim();
+  if (current.status !== 0 || !sessionTarget) return false;
+
+  const windowName = `conversation-${session.conversationId}`;
+  const windows = io.run('tmux', ['list-windows', '-t', sessionTarget, '-F', '#{window_name}\t#{window_id}']);
+  if (windows.status !== 0) return false;
+  const existing = windows.stdout.trim().split('\n').find((line) => line.split('\t', 1)[0] === windowName)?.split('\t')[1];
+  if (existing) {
+    if (io.run('tmux', ['select-window', '-t', existing]).status !== 0) throw new Error(`tmux could not select ${windowName}.`);
+    return true;
   }
-  const command = process.env.TMUX ? 'switch-client' : 'attach-session';
-  const attached = io.run('tmux', [command, '-t', sessionTarget]);
-  if (attached.status !== 0) throw new Error(`tmux ${command} failed for ${sessionTarget}.`);
+
+  const tailCommand = `env -u TMUX npm run session:attach -- ${session.conversationId} ${session.agent}`;
+  if (io.run('tmux', ['new-window', '-t', sessionTarget, '-n', windowName, tailCommand]).status !== 0) {
+    throw new Error(`tmux could not open ${windowName}.`);
+  }
   return true;
 }
 

@@ -4,7 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TerminalLine, TerminalSessionInfo } from '../../../shared/contracts';
 import { TerminalPanel } from './terminal-panel';
-import { appendTerminalLines, MAX_TERMINAL_LINES } from './terminal-lines';
+import { appendTerminalLines, MAX_MERGED_DELTA_CHARS, MAX_TERMINAL_LINES } from './terminal-lines';
 
 afterEach(cleanup);
 
@@ -51,5 +51,13 @@ describe('appendTerminalLines', () => {
     const result = appendTerminalLines([], many);
     expect(result).toHaveLength(MAX_TERMINAL_LINES);
     expect(result[0].text).toBe('5');
+  });
+
+  it('caps merged streaming output while preserving the newest text', () => {
+    const chunks = Array.from({ length: 10 }, (_, index) => line(index, 'delta', String(index).repeat(10_000)));
+    const [merged] = appendTerminalLines([], chunks);
+    expect(merged.text).toHaveLength(MAX_MERGED_DELTA_CHARS);
+    expect(merged.text.startsWith('\u2026 earlier output trimmed')).toBe(true);
+    expect(merged.text.endsWith('9'.repeat(10_000))).toBe(true);
   });
 });

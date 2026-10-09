@@ -1,8 +1,9 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
-import { findTmuxTarget, resolveSession, tailSession, type AttachIo, type ResolvedSession } from '../../scripts/attach-session.js';
+import { resolveSession, tailSession, type AttachIo, type ResolvedSession } from '../../scripts/attach-session.js';
 import { openDatabase } from './database.js';
 
 const root = join(process.cwd(), 'data', '.attach-session-test');
@@ -32,9 +33,39 @@ describe('attach-session', () => {
     database.close();
   });
 
-  it('finds the tmux pane that owns the session host ancestor', () => {
-    expect(findTmuxTarget(40, '10\twork:2.1\n20\tother:0.0', new Map([[40, 30], [30, 10], [10, 1]]))).toBe('work:2.1');
-    expect(findTmuxTarget(40, '20\tother:0.0', new Map([[40, 30], [30, 10]]))).toBeNull();
+  it('opens a conversation-named tmux window that tails the session instead of selecting the host pane', () => {
+    mkdirSync(root, { recursive: true });
+    const databasePath = join(root, 'workbench.db');
+    const database = openDatabase(databasePath);
+    database.prepare("INSERT INTO shared_conversations (id, title, created_at, updated_at) VALUES ('c1', 'Alpha terminal', '2026-10-08', '2026-10-08')").run();
+    database.prepare("INSERT INTO agent_sessions (conversation_id, agent, account_profile, cwd, profile, state, socket_path, started_at, last_active_at) VALUES ('c1', 'claude', 'default', '.', 'standard', 'idle', '/one.sock', '2026-10-08', '2026-10-08')").run();
+    database.close();
+
+    const bin = join(root, 'bin');
+    const argsPath = join(root, 'tmux-args.txt');
+    mkdirSync(bin);
+    const tmuxPath = join(bin, 'tmux');
+    writeFileSync(tmuxPath, [
+      '#!/bin/sh',
+      "printf '%s ' \"$@\" >> \"$TMUX_ARGS_FILE\"",
+      "printf '\\n' >> \"$TMUX_ARGS_FILE\"",
+      'case "$1" in',
+      "  -V) echo 'tmux 3.4' ;;",
+      "  display-message) echo 'work' ;;",
+      'esac',
+    ].join('\n'));
+    chmodSync(tmuxPath, 0o755);
+
+    const result = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/attach-session.ts', 'c1', 'claude'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: { ...process.env, DATABASE_PATH: databasePath, PATH: `${bin}:${process.env.PATH}`, TMUX: '/tmp/tmux-1/default,1,0', TMUX_ARGS_FILE: argsPath },
+    });
+
+    expect(result.status).toBe(0);
+    const commands = readFileSync(argsPath, 'utf8');
+    expect(commands).toContain('new-window -t work -n conversation-c1 env -u TMUX npm run session:attach -- c1 claude');
+    expect(commands).not.toContain('select-pane');
   });
 
   it('prints the same rendered lines as the terminal panel in once mode', async () => {
