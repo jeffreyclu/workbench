@@ -37,7 +37,7 @@ export function startRuntimePromotionWorker(
           // Promotion state must flip as soon as the new runtime is verified.
           // Cleanup is deliberately post-release so filesystem housekeeping can
           // never leave the UI claiming a successful release is still running.
-          void cleanupIntegratedRunWorktrees().catch(() => { /* The next promotion/GC retries safe cleanup. */ });
+          void cleanupIntegratedRunWorktrees({ getRun: (runId) => repository.getRun(runId) }).catch(() => { /* The next promotion/GC retries safe cleanup. */ });
           return result;
         },
         { claimQueuedPromotion: true },

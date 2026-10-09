@@ -8,9 +8,9 @@
  * needs to run, not a denylist of what it shouldn't have — new Workbench secrets are excluded by
  * default instead of requiring someone to remember to add them here.
  */
-import { existsSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 
 const RUNTIME_ENV_KEYS = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'NODE_ENV'];
 
@@ -35,6 +35,35 @@ export function agentSubprocessEnv(source: NodeJS.ProcessEnv = process.env): Nod
   return filtered;
 }
 
+/**
+ * The stable executable search path used by Workbench-owned and agent
+ * subprocesses. Runtime launchers do not always inherit an interactive shell,
+ * so retain the usual user and package-manager tool locations.
+ */
+export function serverExecutableEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = agentSubprocessEnv(source);
+  env.PATH = [env.PATH, join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
+    .filter(Boolean)
+    .join(delimiter);
+  return env;
+}
+
+/** Resolve an executable using the same search path passed to server children. */
+export function resolveServerExecutable(name: string, source: NodeJS.ProcessEnv = process.env): string {
+  for (const directory of (serverExecutableEnv(source).PATH ?? '').split(delimiter)) {
+    if (!directory) continue;
+    const candidate = join(directory, name);
+    try {
+      statSync(candidate);
+      // `statSync` proves it exists; `accessSync` verifies it can actually run.
+      // Importing it lazily keeps the ordinary environment filter small.
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch { /* Keep searching the server PATH. */ }
+  }
+  return name;
+}
+
 export type AgentAccount = 'default' | (string & {});
 
 export function accountProfileKey(account: string): string {
@@ -52,7 +81,7 @@ export function managedAccountDirectory(agent: 'codex' | 'claude', account: stri
 
 /** Select an isolated provider credential directory without putting credentials in prompts. */
 export function agentAccountEnv(agent: 'codex' | 'claude', account: AgentAccount = 'default', source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env = agentSubprocessEnv(source);
+  const env = serverExecutableEnv(source);
   const configured = managedAccountDirectory(agent, account, source);
   if (!configured) return env;
   if (!existsSync(configured) || !statSync(configured).isDirectory()) throw new Error(`No credential directory configured for ${agent} account profile "${account}".`);

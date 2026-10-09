@@ -125,7 +125,7 @@ export function startScheduler(repository: WorkItemRepository): { stop: () => vo
     workspaceMaintenanceRunning = true;
     const startedAt = Date.now();
     try {
-      const integratedRunWorktrees = await cleanupIntegratedRunWorktrees();
+      const integratedRunWorktrees = await cleanupIntegratedRunWorktrees({ getRun: (runId) => repository.getRun(runId) });
       const stale = await cleanupStaleLocalGitState();
       logSafely(
         'retention_cleanup',

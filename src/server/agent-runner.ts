@@ -6,7 +6,7 @@ import { DEFAULT_ACCOUNT_PROFILE, defaultAccountProfileForTask, plannedTaskDepen
 import { isWorkbenchProject, projectKey } from '../shared/project-name.js';
 
 import { describeAgentFallback, describeModelSelection, type ExecutionProfileSource } from './activity-log.js';
-import { agentAccountEnv, agentSubprocessEnv } from './agent-security.js';
+import { agentAccountEnv, serverExecutableEnv } from './agent-security.js';
 import { claimWarmProcess, hasPooledProcess, shutdownAgentPool, startPoolSweep, warmProcess } from './agent-pool.js';
 import { classifyExternalActionAuthorization, externalActionAttempted, hasUnsupportedCapabilityDenial, type ExternalActionAuthorization } from './external-action-authorization.js';
 import { createExternalActionProcessGuard, externalActionGuardEnvironment, observeExternalActionRefusals, recordExternalActionRefusal, type ExternalActionProcessGuard, type ExternalActionRefusal } from './external-action-command-guard.js';
@@ -181,7 +181,7 @@ export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountPr
   // palmyra-execution-parity LEGACY-AFFECTING: Palmyra executes tools inside
   // Workbench, so it shares the guarded subprocess environment without a
   // provider CLI credential directory.
-  const env = agent === 'palmyra' ? agentSubprocessEnv() : agentAccountEnv(agent, accountProfile);
+  const env = agent === 'palmyra' ? serverExecutableEnv() : agentAccountEnv(agent, accountProfile);
   // The resolved workspace is a starting directory, never an access boundary.
   // Keep only cross-repository safety shims and Writer's focused-test policy;
   // agents must be able to use normal Git in every local repository.
@@ -190,8 +190,7 @@ export function agentEnvironmentForWorkspace(agent: AgentRun['agent'], accountPr
   // Runtime launches do not necessarily inherit the interactive shell's PATH.
   // Keep normal user/Homebrew tools available so an agent does not waste a
   // turn rediscovering `uv`, `pnpm`, or a user-local CLI.
-  const executablePaths = [join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
-  env.PATH = [...guardPaths, env.PATH, ...executablePaths].filter(Boolean).join(delimiter);
+  env.PATH = [...guardPaths, env.PATH].filter(Boolean).join(delimiter);
   Object.assign(env, externalActionGuardEnvironment(externalActionGuard));
   // Claude snapshots the configured shell before it can emit its first
   // provider event. Jeffrey's interactive zsh exports thousands of functions

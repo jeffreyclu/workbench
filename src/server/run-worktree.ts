@@ -1,18 +1,22 @@
-import { execFile as execFileCallback, execFileSync, spawn } from 'node:child_process';
+import { execFile as execFileCallback, execFileSync, spawn, type ExecFileOptions } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { resolveServerExecutable, serverExecutableEnv } from './agent-security.js';
 
-const execFile = promisify(execFileCallback);
+const execFileAsync = promisify(execFileCallback);
+const execFile = (file: string, args: string[], options: ExecFileOptions = {}): Promise<{ stdout: string; stderr: string }> =>
+  execFileAsync(file === 'git' ? resolveServerExecutable('git') : file, args, { ...options, env: { ...serverExecutableEnv(), ...options.env } }) as Promise<{ stdout: string; stderr: string }>;
 let integrationTail: Promise<void> = Promise.resolve();
 const taskWorkspaceInFlight = new Map<string, Promise<string>>();
 
 export const DEVELOPMENT_ROOT = join(homedir(), 'dev');
 export const WORKBENCH_RUN_WORKTREE_ROOT = join(DEVELOPMENT_ROOT, '.workbench-worktrees');
 const LEGACY_RUN_WORKTREE_ROOT = join(homedir(), '.workbench', 'run-worktrees');
+export const RUN_WORKTREE_RETENTION_MS = 10 * 60_000;
 
 export interface RunWorkspaceBinding {
   /** Canonical checkout used only to match this binding back to ticket routing. */
@@ -150,7 +154,7 @@ const integrationPathspec = ['.', ':(exclude)node_modules', ':(exclude).workbenc
 function git(args: string[], options: { cwd: string; input?: string; timeout: number; maxBuffer?: number }): Promise<string> {
   const maxBuffer = options.maxBuffer ?? 1_000_000;
   return new Promise<string>((resolvePromise, rejectPromise) => {
-    const child = spawn('git', args, { cwd: options.cwd });
+    const child = spawn(resolveServerExecutable('git'), args, { cwd: options.cwd, env: serverExecutableEnv() });
     let stdout = '';
     let stderr = '';
     let overflowed = false;
@@ -522,8 +526,25 @@ export function integrateWorkbenchRunWorktree(sourceWorkspace: string, worktree:
 /** Remove only integrated, clean run worktrees. Never discard work merely
  * because a run ended: the detached commit must already be reachable from the
  * source repository's active branch, which is true after its patch has landed. */
-export async function cleanupIntegratedRunWorktrees(): Promise<number> {
+export interface RunWorktreeCleanupRun {
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
+  completedAt: string | null;
+}
+
+export interface RunWorktreeCleanupOptions {
+  getRun: (runId: string) => RunWorktreeCleanupRun | null;
+  now?: number;
+  retentionMs?: number;
+}
+
+/**
+ * Removes only old, terminal runs whose clean detached commit is integrated.
+ * A new run starts at an integrated commit too, so Git state alone cannot
+ * distinguish it from an already-finished run.
+ */
+export async function cleanupIntegratedRunWorktrees(options: RunWorktreeCleanupOptions): Promise<number> {
   let removed = 0;
+  const cutoff = (options.now ?? Date.now()) - (options.retentionMs ?? RUN_WORKTREE_RETENTION_MS);
   for (const root of [WORKBENCH_RUN_WORKTREE_ROOT, LEGACY_RUN_WORKTREE_ROOT]) {
     if (!existsSync(root)) continue;
     for (const repositoryDirectory of readdirSync(root, { withFileTypes: true })) {
@@ -531,6 +552,9 @@ export async function cleanupIntegratedRunWorktrees(): Promise<number> {
       const directory = join(root, repositoryDirectory.name);
       for (const runDirectory of readdirSync(directory, { withFileTypes: true })) {
         if (!runDirectory.isDirectory()) continue;
+        const run = options.getRun(runDirectory.name);
+        const completedAt = run?.completedAt ? Date.parse(run.completedAt) : Number.NaN;
+        if (!run || !['completed', 'failed', 'canceled'].includes(run.status) || !Number.isFinite(completedAt) || completedAt > cutoff) continue;
         const worktree = join(directory, runDirectory.name);
         try {
           const [{ stdout: status }, { stdout: listing }, { stdout: head }] = await Promise.all([

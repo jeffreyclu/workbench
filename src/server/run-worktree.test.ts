@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { authoritativeTaskWorkspace, cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, installRunWorktreeHooks, isolatedRunWorkspaces, provisionRunWorktreeDependencies, runWorktreeChangeStats, shouldIsolateRunWorkspace, WORKBENCH_RUN_WORKTREE_ROOT } from './run-worktree.js';
+import { authoritativeTaskWorkspace, cleanupIntegratedRunWorktrees, integrateWorkbenchRunWorktree, isolatedRunWorkspace, installRunWorktreeHooks, isolatedRunWorkspaces, provisionRunWorktreeDependencies, RUN_WORKTREE_RETENTION_MS, runWorktreeChangeStats, shouldIsolateRunWorkspace, WORKBENCH_RUN_WORKTREE_ROOT } from './run-worktree.js';
 
 const directories: string[] = [];
 
@@ -432,7 +432,7 @@ describe('isolatedRunWorkspace', () => {
     }
   });
 
-  it('removes only a clean worktree whose commit is already integrated into main', async () => {
+  it('keeps queued and running sibling worktrees while collecting only old terminal runs', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
     directories.push(directory);
     execFileSync('git', ['init', '-q'], { cwd: directory });
@@ -446,16 +446,60 @@ describe('isolatedRunWorkspace', () => {
     const previous = process.env.VITEST;
     delete process.env.VITEST;
     try {
-      const workspace = await isolatedRunWorkspace(directory, 'integrated-run', true);
-      expect(await cleanupIntegratedRunWorktrees()).toBeGreaterThanOrEqual(1);
-      expect(() => execFileSync('git', ['status'], { cwd: workspace, stdio: 'ignore' })).toThrow();
+      const [completed, queuedSibling, runningSibling, recentlyCompleted] = await Promise.all([
+        isolatedRunWorkspace(directory, 'completed-run', true),
+        isolatedRunWorkspace(directory, 'queued-sibling-run', true),
+        isolatedRunWorkspace(directory, 'running-sibling-run', true),
+        isolatedRunWorkspace(directory, 'recently-completed-run', true),
+      ]);
+      const now = Date.now();
+      const completedAt = new Date(now - RUN_WORKTREE_RETENTION_MS - 1).toISOString();
+      const runs = new Map([
+        ['completed-run', { status: 'completed' as const, completedAt }],
+        ['queued-sibling-run', { status: 'queued' as const, completedAt: null }],
+        ['running-sibling-run', { status: 'running' as const, completedAt: null }],
+        ['recently-completed-run', { status: 'completed' as const, completedAt: new Date(now).toISOString() }],
+      ]);
+
+      expect(await cleanupIntegratedRunWorktrees({ getRun: (runId) => runs.get(runId) ?? null, now })).toBe(1);
+      expect(() => execFileSync('git', ['status'], { cwd: completed, stdio: 'ignore' })).toThrow();
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: queuedSibling, encoding: 'utf8' })).toBe('');
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: runningSibling, encoding: 'utf8' })).toBe('');
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: recentlyCompleted, encoding: 'utf8' })).toBe('');
     } finally {
       if (previous === undefined) delete process.env.VITEST;
       else process.env.VITEST = previous;
     }
-    // Cleanup sweeps the real ~/.workbench/run-worktrees root, so this test's
-    // cost scales with however many run worktrees the machine has accumulated.
   }, 30_000);
+
+  it('integrates with the server executable PATH when the inherited PATH lacks git', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
+    directories.push(directory);
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    execFileSync('git', ['config', 'user.email', 'workbench@example.test'], { cwd: directory });
+    execFileSync('git', ['config', 'user.name', 'Workbench Test'], { cwd: directory });
+    writeFileSync(join(directory, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', 'seed.txt'], { cwd: directory });
+    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: directory });
+    execFileSync('git', ['branch', '-M', 'main'], { cwd: directory });
+
+    const previousVitest = process.env.VITEST;
+    const previousPath = process.env.PATH;
+    delete process.env.VITEST;
+    try {
+      const workspace = await isolatedRunWorkspace(directory, 'path-safe-run', true);
+      writeFileSync(join(workspace, 'seed.txt'), 'integrated\n');
+      process.env.PATH = '/does-not-contain-git';
+
+      await expect(integrateWorkbenchRunWorktree(directory, workspace, 'path-safe-run', true)).resolves.toEqual(expect.objectContaining({ integrated: true, blocked: null }));
+      expect(execFileSync('/usr/bin/git', ['show', 'HEAD:seed.txt'], { cwd: directory, encoding: 'utf8' })).toBe('integrated\n');
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousVitest === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previousVitest;
+    }
+  });
 
   it('keeps the event loop free while integrating, so other runs keep heartbeating', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'workbench-run-worktree-'));
