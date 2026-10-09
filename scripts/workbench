@@ -1,0 +1,14 @@
+#!/bin/sh
+# `workbench claude|codex`: runs an agent terminal session through Workbench's session host.
+# Symlink or `npm link` this file onto PATH. The server modules resolve docs/ and data/ from the
+# checkout, so this runs from there and hands the directory you launched in over as WORKBENCH_LAUNCH_CWD.
+SOURCE="$0"
+while [ -L "$SOURCE" ]; do
+  TARGET="$(readlink "$SOURCE")"
+  case "$TARGET" in /*) SOURCE="$TARGET" ;; *) SOURCE="$(dirname "$SOURCE")/$TARGET" ;; esac
+done
+ROOT="$(cd "$(dirname "$SOURCE")/.." && pwd)"
+WORKBENCH_LAUNCH_CWD="$PWD"
+export WORKBENCH_LAUNCH_CWD
+cd "$ROOT" || exit 1
+exec "$ROOT/node_modules/.bin/tsx" "$ROOT/scripts/workbench-cli.ts" "$@"

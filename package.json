@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "workbench": "scripts/workbench"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
@@ -15,6 +18,7 @@
     "share": "tsx scripts/share-local.ts",
     "share:workbench": "tsx scripts/share.ts",
     "session:attach": "tsx scripts/attach-session.ts",
+    "wb": "tsx scripts/workbench-cli.ts",
     "hooks:install": "tsx scripts/install-claude-hooks.ts",
     "runtime:promote": "tsx scripts/promote-runtime.ts",
     "runtime:start": "tsx scripts/start-runtime.ts",
