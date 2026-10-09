@@ -897,3 +897,37 @@ Scripts that import src/server modules (agent-session.ts pulls in shared-room.ts
 When a generated review ledger names a file absent from the supplied commit, verify the commit's changed-file list and mark the ledger item clear rather than reviewing an unrelated document. The terminal drawer review commit 8a9482a changed only five client/e2e files; its supplied docs/work-log.md decision was not applicable.
 
 *Provenance: f9cdb5fb-19a1-460e-85c3-3c919f6a1079*
+
+### <a id="81"></a>81. Offline strip already existed; gaps were dismissal and stale onLine hint
+
+Before building a connection indicator, check src/client/hooks/realtime.ts and features/navigation/app.tsx: useRealtimeNotifications already exposes state, browserOffline and retryNow, and app.tsx renders the realtime-status-banner with "Retry now". The real gaps were (1) no dismissal and (2) browserOffline was never cleared by a successful socket handshake, so a stale Navigator.onLine hint could keep the strip up while connected. Fix: clear the hint and re-arm dismissal when connectionState becomes 'connected'. API reads go over the same WebSocket, so socket 'reconnecting' covers "repeated API failures"; the query client sets refetchOnReconnect false by design. Not verified in a browser with DevTools offline.
+
+*Provenance: 3fb546af-2090-4abe-9909-6e1b592226b3*
+
+## <a id="82"></a>82. Automatic reviews on Claude trip the provider safeguard; route review lenses to Codex and never surface the raw API error
+
+Observed 2026-10-09: since automatic review dispatch and the two-model review (correctness lens plus a second lens on the other vendor) landed on 2026-10-08, 10 of 35 Claude review runs failed with "Sonnet/Opus 5.5's safeguards flagged this message … [reasoning_extraction]" while 14 of 14 Codex reviews completed. The second-lens prompt ("Your job is to break this change… derive attacks") is the trigger, and the failed run posted the raw API error into Jeffrey's own task conversation twice (CON-657 at 19:09, a backlog item at 19:22), which he hit directly. Rules: review prompts avoid "break/attack/exploit/extract/reveal reasoning" wording; automatic reviews and the second lens default to Codex; a provider refusal on a review retries once on the other vendor and shows a one-line system note, never the API error text (work item ec2649e9). Extends [workbench-operating-practices.md#37].
+
+### <a id="83"></a>83. Check for an existing next-action line before building one
+
+Backlog items can predate work already shipped. The queue card already had `nextActionSummary` (src/client/features/queue/view.tsx) with Review reply, Approve plan and Resolve blocker. The only gap was "Create follow-ups" for the `follow_ups` outcome, plus a 9px font on phones. The label is derived from status, classificationKind and agentOutcome, not from handoff text or waitingReason. Widening that function's param type breaks other callers (conversation/view.tsx passes only status and classificationKind), so new fields must be optional.
+
+*Provenance: 7d84c2aa-5039-4ca2-bcad-b3a20e71bfa7*
+
+### <a id="84"></a>84. Client vitest tests need --no-experimental-webstorage on Node 26
+
+On Node 26, jsdom client tests that touch window.localStorage fail with "Cannot read properties of undefined (reading 'clear')" because Node's native webstorage global shadows jsdom's. This fails existing tests too (e.g. workspace-diff/view.test.tsx), so it is environmental, not a regression. Run focused tests with NODE_OPTIONS=--no-experimental-webstorage npx vitest run <file>. Also: a .ts and .tsx file sharing a basename (diff-search.ts / diff-search.tsx) collide on the '.js' import specifier; name the component file differently (diff-search-bar.tsx).
+
+*Provenance: eb168bb4-7a9e-46a3-852b-ae1e21e79c95*
+
+### <a id="85"></a>85. Client jsdom tests need webstorage off on Node 26
+
+Under Node 26, jsdom client tests that use window.localStorage (preferences.test.ts, workspace-diff/view.test.tsx) fail with "Cannot read properties of undefined" because Node's built-in webstorage shadows jsdom's. Run touched files with NODE_OPTIONS=--no-experimental-webstorage; they then pass. Not caused by feature changes. Also: the diff pane's reading-mode cycle order lives in workspace-diff/view.tsx (toggleReadingMode), not use-keyboard-navigation.ts, which only calls onToggleReadingMode on 'd'. Line keys in the diff pane can break CSS attribute selectors in querySelectorAll; filter on dataset.lineKey in tests.
+
+*Provenance: 926f3daf-8de8-40ea-bb89-64d59cf68805*
+
+### <a id="86"></a>86. Automatic reviews use Codex and hide Claude safeguard refusals
+
+Automatic review dispatch and the independent failure-mode lens use Codex. If a legacy or manual Claude review receives a provider safeguard refusal, retry that review once on Codex, show only the neutral system status in the shared conversation, and retain the provider diagnostic on the run for inspection.
+
+*Provenance: ec2649e9-e644-4176-aa29-c468cb89c509*

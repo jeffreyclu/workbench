@@ -460,3 +460,9 @@ When a test asserts "the turn ran exactly once" using a fake provider's spawn co
 When guarding against a repeated turn after side effects, check every replay path, not just the one named. In src/server/agent-runner.ts the failure handler (~:2826) schedules a whole-run retry when RETRYABLE_KINDS.has(run.kind) && isTransientAgentError(error). The SessionTurnStartedError wrapper added in 79e8bf7 keeps the original message, so a mid-turn error that looks transient is still retried and commits/pushes can run twice. The wrapper also hides the original class from instanceof checks (ProviderRefusalError, AgentTerminalWarningError at ~:2834 and ~:2828). Also unfixed: the Claude-at-capacity to Codex fallback in runAgentCommandWithFallback. Reviewing a fix for duplicated side effects should enumerate all of: per-run fallback, transient retry, capacity fallback.
 
 *Provenance: 73ea0400-3361-441e-bd09-323fe909e172*
+
+### <a id="30"></a>30. App.test.tsx needs --localstorage-file under this Node; check backlog items for existing implementation
+
+Running src/client/app/App.test.tsx on the current Node fails in afterEach (window.localStorage.clear on undefined) unless NODE_OPTIONS="--localstorage-file=<path>" is set. This is an environment issue, not a code defect. Also, `vitest -t` with a pattern that matches nothing reports all tests skipped and exits clean, so confirm the target test actually ran ("1 passed"). Backlog item 'Stop auto-following when scrolled away' (2026-09-01) was already implemented in conversation/view.tsx (jump-to-latest-button, isNearThreadBottomRef, 120px threshold) and covered by the App.test.tsx test 'autoscrolls only the message thread...'; Jump to latest scrolls but does not move keyboard focus.
+
+*Provenance: 9ae3d893-6e3d-4cc4-802b-b37f3cc6fd24*

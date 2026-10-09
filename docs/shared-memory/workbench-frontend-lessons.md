@@ -927,3 +927,39 @@ Three non-obvious findings from the terminal drawer fix (work item f9cdb5fb):
 E2E: Playwright boundingBox() of a message scrolled inside .shared-thread extends past the visible scroll area, so a header-vs-message intersection check flaked; clip the message box to the thread box first. The phone case is a `@phone`-tagged test run by a `phone-chromium` project (iPhone 13, browserName chromium, 375px); desktop uses grepInvert /@phone/.
 
 *Provenance: f9cdb5fb-19a1-460e-85c3-3c919f6a1079*
+
+### <a id="66"></a>66. Failed composer sends use an inline polite status
+
+Verified 2026-10-09. A failed shared-conversation send must retain the draft, render its recovery control beside the composer as `role="status"` with `aria-live="polite"` and `aria-atomic="true"`, and avoid a disappearing toast. The Retry control prevents its mouse-down default so the editor retains focus. Cover the rejection and retry path in `src/client/app/App.test.tsx`.
+
+*Provenance: b0735087-a489-4042-9317-af477d42abcd*
+
+### <a id="67"></a>67. Pane freshness uses one FreshnessControl; full label shows "· Refresh", conversation stays compact
+
+Task detail, discovery and conversation panes all render src/client/components/freshness-control.tsx, fed by TanStack Query dataUpdatedAt/isFetching/refetch (app queries use staleTime Infinity, so Refresh is the explicit re-read). The full-size variant (task, discovery) shows "Updated 2m ago · Refresh"; the conversation pane keeps the compact "Now / 2m" label at the bottom right per Jeffrey's 2026-09-23 correction. Accessible name stays "Refresh data. <label>". Pane-level proof lives in src/client/features/discovery/view.test.tsx: seed the cache with setQueryData(..., { updatedAt: Date.now() - 120000 }), click Refresh, and assert new data in the same mounted header. Before re-implementing freshness, extend this component rather than adding a pane-local one.
+
+*Provenance: 72c97326-caca-4ad5-85f2-ac53858bf785*
+
+### <a id="68"></a>68. New Task drafts stay scoped to the current task context
+
+Confirmed 2026-10-09. New Task input is browser-local and must retain the mode, manual title and description, pasted URL, AI prompt, selected project, and task kind until successful creation. Store it behind the guarded `workbench:new-task-drafts` localStorage record, keyed by task context (`attention` or `workbench`), so entering a Workbench task never restores an Attention draft. Clear only when the exact submitted snapshot succeeds, so edits made while a request is pending are not erased.
+
+*Provenance: ecc6e92d-dc5c-474c-a78f-2d390132de51*
+
+### <a id="69"></a>69. Keyboard help reuses the focus-restoring modal
+
+The keyboard shortcut reference is `KeyboardHelpDialog` in `src/client/features/settings/view.tsx`. It must use `ModalDialog`, which traps focus and returns it to the opener on close. Its documented shortcuts must be kept in sync with `src/client/features/navigation/app.tsx`, `src/client/features/navigation/view.tsx`, `src/client/features/workspace-diff/use-keyboard-navigation.ts`, and `src/client/components/tabs/tabs.tsx`. The dialog's one-column layout at 560px supports phone screens.
+
+*Provenance: 957d47c8-44b1-4f18-8d91-0d2c5fec8ee4*
+
+### <a id="70"></a>70. Client tests: requestBlob bypasses the fetch test adapter, and jsdom Blob has no text()
+
+In src/client tests, `request()` is routed through the test adapter in src/client/test/socket-request-adapter.ts, which calls the stubbed global fetch. `requestBlob` in src/client/data/request.ts goes straight to socketTransport and does not use that adapter, so a fetch stub never reaches it. Mock it with vi.mock('../../data/request') and importOriginal. jsdom's Blob also lacks `.text()`, so a mocked blob needs `Object.defineProperty(blob, 'text', ...)`. Artifact preview (features/artifacts/preview-pane.tsx) reads the local source through same-origin /api/artifacts/raw because the published artifact URL is another origin and cannot be fetched from the client.
+
+*Provenance: 027a6f41-e9f8-4053-a124-7ff1932aab12*
+
+### <a id="71"></a>71. Review source selector uses toolbar focus
+
+Confirmed 2026-10-09. The source selector under Changes → Browse other changes is a WAI-ARIA toolbar, not a tablist: it retains one roving Tab stop, skips disabled History, and Arrow keys plus Home/End move focus without changing the current review source. Selection remains a click/activation action handled by `WorkspaceDiffView`; keep this distinction when adding a source.
+
+*Provenance: 8a6544e4-b19e-4410-a17d-a30f49ac8029*

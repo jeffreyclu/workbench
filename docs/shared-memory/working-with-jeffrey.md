@@ -719,3 +719,7 @@ attempt only burns the turn. Answer the question; he runs it.
 ### <a id="41"></a>41. Agent debugger discipline
 
 Before every tool call, emit one standalone `Decision: <human-readable rationale>` block explaining why that call is the next correct action. A single call may batch directly related bounded read-only checks; do not reuse a decision for unrelated later calls. Keep command and file reads bounded to the needed lines (start at 200 lines or 20 matches), retain only paths and decisive findings, and avoid carrying raw tool output forward. Work directly in the foreground run without delegation; use one focused verification pass and stop unless it identifies a concrete risk.
+
+### <a id="42"></a>42. Agent debugger: explicit tool decisions and bounded reads
+
+For Workbench runs, before every tool call emit one standalone `Decision: ...` text block explaining why that call is the next correct action. A decision cannot be reused for an unrelated call. Keep reads and command output bounded: begin with at most 200 lines or 20 matches, then reopen exact ranges only as needed. Retain only the command, relevant paths, and decisive finding; do not carry raw output into later turns.
