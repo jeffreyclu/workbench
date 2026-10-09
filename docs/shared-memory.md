@@ -6,7 +6,7 @@ Read these rows first, then open only matching files. Entry counts are generated
 | --- | ---: | --- | --- | --- | --- |
 | `discard-log.md` | 0 | workbench | archive | discarded entries | — |
 | `engineering-standards.md` | 43 | workbench | core | TypeScript conventions; feature flags | `working-with-jeffrey.md` |
-| `integration-constraints.md` | 14 | workbench | core | Tailscale; Slack Workflow Builder | — |
+| `integration-constraints.md` | 15 | workbench | core | Tailscale; Slack Workflow Builder | — |
 | `migration-log.md` | 1 | workbench | archive | 2026-08-23 consolidation | — |
 | `verification-and-debugging-method.md` | 29 | portable | core | root-cause validation; PR review | `workbench-operating-practices.md` |
 | `workbench-frontend-lessons.md` | 62 | workbench | context | buildId toast; virtualized row height | `workbench-product-decisions.md` |

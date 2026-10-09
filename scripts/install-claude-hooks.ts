@@ -3,13 +3,13 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Registers scripts/claude-hook-bridge.mjs for SessionStart, UserPromptSubmit,
-// and Stop in the Claude Code settings file. Existing hooks are kept; a previous
+// Registers scripts/claude-hook-bridge.mjs for session, prompt, tool, and stop
+// events in the Claude Code settings file. Existing hooks are kept; a previous
 // bridge entry is replaced, so re-running after a checkout moves is safe.
 const settingsPath = process.env.CLAUDE_SETTINGS_PATH ?? join(homedir(), '.claude', 'settings.json');
 const bridge = resolve(dirname(fileURLToPath(import.meta.url)), 'claude-hook-bridge.mjs');
 const command = `node ${JSON.stringify(bridge)}`;
-const EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop'];
+const EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd'];
 
 type HookEntry = { hooks?: Array<{ type?: string; command?: string; timeout?: number }> };
 

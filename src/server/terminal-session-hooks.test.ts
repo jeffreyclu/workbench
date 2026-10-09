@@ -18,6 +18,8 @@ describe('Claude Code hook bridge', () => {
 
   const conversations = () => database.prepare('SELECT id, title, claude_session_id FROM shared_conversations').all() as Array<{ id: string; title: string; claude_session_id: string }>;
   const messages = (id: string) => database.prepare('SELECT author, body FROM shared_messages WHERE conversation_id = ? ORDER BY created_at, rowid').all(id) as Array<{ author: string; body: string }>;
+  const streamEvents = (id: string) => database.prepare(`SELECT events.kind, events.detail FROM agent_stream_events events
+    JOIN shared_messages messages ON messages.id = events.message_id WHERE messages.conversation_id = ? ORDER BY events.rowid`).all(id);
 
   it('creates one conversation per session and titles it from the first prompt', () => {
     database.prepare("INSERT INTO projects (id, name, key, created_at, updated_at) VALUES ('p1', 'Workbench', 'workbench', 'now', 'now')").run();
@@ -41,7 +43,26 @@ describe('Claude Code hook bridge', () => {
     expect(messages(conversations()[0].id).slice(1)).toEqual([{ author: 'jeffrey', body: 'Say hi' }, { author: 'claude', body: 'Hi.' }]);
 
     applyTerminalHookEvent(database, event('UserPromptSubmit', { prompt_id: 'p-2', prompt: 'Again' }));
-    expect(messages(conversations()[0].id)).toHaveLength(4);
+    expect(messages(conversations()[0].id)).toHaveLength(5);
+  });
+
+  it('streams redacted tool starts and results onto the pending reply exactly once', () => {
+    applyTerminalHookEvent(database, event('UserPromptSubmit', { prompt_id: 'p-1', prompt: 'Inspect this' }));
+    const pre = event('PreToolUse', { tool_use_id: 'tool-1', tool_name: 'Read', tool_input: { file_path: '/tmp/a', apiKey: 'do-not-store' } });
+    const post = event('PostToolUse', { tool_use_id: 'tool-1', tool_name: 'Read', tool_input: { file_path: '/tmp/a' }, tool_response: { content: 'hello', token: 'also-secret' } });
+    for (const payload of [pre, pre, post, post]) applyTerminalHookEvent(database, payload);
+
+    expect(streamEvents(conversations()[0].id)).toEqual([
+      { kind: 'file_read', detail: 'Read: {"file_path":"/tmp/a","apiKey":"[redacted]"}' },
+      { kind: 'file_read', detail: 'Read: {"content":"hello","token":"[redacted]"}' },
+    ]);
+    expect(messages(conversations()[0].id).at(-1)).toEqual({ author: 'claude', body: 'working… Read: {"content":"hello","token":"[redacted]"}' });
+  });
+
+  it('skips sdk tool hooks on every event', () => {
+    const result = applyTerminalHookEvent(database, event('PreToolUse', { entrypoint: 'sdk-cli', tool_use_id: 'tool-1', tool_name: 'Bash', tool_input: { command: 'echo hi' } }));
+    expect(result).toEqual({ status: 'skipped', reason: 'workbench run' });
+    expect(conversations()).toHaveLength(0);
   });
 
   it('skips Workbench runs, managed worktrees, and sessions Workbench owns', () => {
@@ -74,7 +95,10 @@ describe('Claude Code hook bridge', () => {
     expect(conversations()[0].title).toBe('Terminal session');
     applyTerminalHookEvent(database, event('UserPromptSubmit', { prompt_id: 'p-1', prompt: 'Real question' }));
     expect(conversations()[0].title).toBe('Real question');
-    expect(messages(conversations()[0].id).slice(1)).toEqual([{ author: 'jeffrey', body: 'Real question' }]);
+    expect(messages(conversations()[0].id).slice(1)).toEqual([
+      { author: 'jeffrey', body: 'Real question' },
+      { author: 'claude', body: 'working…' },
+    ]);
   });
 
   it('does not resurrect a deleted conversation', () => {

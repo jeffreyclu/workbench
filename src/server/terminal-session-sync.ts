@@ -8,6 +8,7 @@ import type { WorkbenchDatabase } from './database.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent } from './realtime.js';
 import { projectKey } from '../shared/project-name.js';
 import { isManagedRunWorktree } from './run-worktree.js';
+import type { AgentStreamEvent } from '../shared/contracts.js';
 
 /**
  * Mirrors Claude Code and Codex sessions that Jeffrey starts in a terminal
@@ -313,6 +314,16 @@ function insertMessage(database: WorkbenchDatabase, conversationId: string, auth
   return id;
 }
 
+function insertPendingReply(database: WorkbenchDatabase, conversationId: string, provider: TerminalProvider, at: string): string {
+  const id = randomUUID();
+  database.prepare(`
+    INSERT INTO shared_messages (id, conversation_id, author, body, pinned, status, error, attachments_json, dispatch_target, created_at, completed_at)
+    VALUES (?, ?, ?, 'working…', 0, 'running', '', '[]', 'none', ?, NULL)
+  `).run(id, conversationId, provider, at);
+  database.prepare('UPDATE shared_conversations SET updated_at = MAX(updated_at, ?) WHERE id = ?').run(at, conversationId);
+  return id;
+}
+
 function applyEntry(database: WorkbenchDatabase, row: ImportRow, entry: TranscriptEntry, changes: ChunkChanges): void {
   if (entry.at < row.importSince) return;
   if (entry.kind === 'prompt') {
@@ -533,12 +544,17 @@ export function startTerminalSessionSync(database: WorkbenchDatabase, options: T
 /** The hook payload fields Workbench reads, plus the provider the hook script adds. */
 export type TerminalHookPayload = {
   provider: 'claude';
-  hook_event_name: 'SessionStart' | 'UserPromptSubmit' | 'Stop';
+  hook_event_name: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'Stop' | 'SessionEnd';
   session_id: string;
   cwd?: string | null;
   prompt_id?: string;
   prompt?: string;
   last_assistant_message?: string;
+  tool_name?: string;
+  tool_input?: unknown;
+  tool_response?: unknown;
+  tool_use_id?: string;
+  isSidechain?: boolean;
   /** CLAUDE_CODE_ENTRYPOINT as the hook script saw it; `sdk-*` marks a `claude -p` run. */
   entrypoint?: string;
 };
@@ -548,6 +564,55 @@ export type TerminalHookResult =
   | { status: 'skipped'; reason: string };
 
 const DEFAULT_TERMINAL_TITLE = 'Terminal session';
+const SECRET_KEY = /token|secret|password|key/i;
+
+function redactHookValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactHookValue);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .map(([key, child]) => [key, SECRET_KEY.test(key) ? '[redacted]' : redactHookValue(child)]));
+  return value;
+}
+
+function hookSummary(value: unknown): string {
+  const redacted = redactHookValue(value);
+  let text: string;
+  try { text = typeof redacted === 'string' ? redacted : JSON.stringify(redacted); }
+  catch { text = String(redacted); }
+  return text.replace(/((?:token|secret|password|key)\s*[=:]\s*["']?)[^\s,"'}]+/gi, '$1[redacted]').slice(0, 200);
+}
+
+function hookEventKind(toolName: string): AgentStreamEvent['kind'] {
+  if (toolName === 'Read') return 'file_read';
+  if (['Edit', 'Write', 'NotebookEdit'].includes(toolName)) return 'file_write';
+  return 'tool';
+}
+
+function activeHookReply(database: WorkbenchDatabase, conversationId: string, provider: TerminalProvider): string | null {
+  const row = database.prepare(`SELECT id FROM shared_messages
+    WHERE conversation_id = ? AND author = ? AND status = 'running'
+    ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(conversationId, provider) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+function recordHookToolEvent(database: WorkbenchDatabase, payload: TerminalHookPayload, conversationId: string, at: string): boolean {
+  if (!payload.tool_name || !payload.tool_use_id) return false;
+  const phase = payload.hook_event_name === 'PreToolUse' ? 'prompt' : 'stop';
+  const seen = database.prepare('SELECT 1 FROM terminal_hook_events WHERE provider = ? AND session_id = ? AND prompt_id = ? AND kind = ?')
+    .get(payload.provider, payload.session_id, payload.tool_use_id, phase);
+  if (seen) return false;
+  const messageId = activeHookReply(database, conversationId, payload.provider);
+  if (!messageId) return false;
+  const isStart = payload.hook_event_name === 'PreToolUse';
+  const summary = hookSummary(isStart ? payload.tool_input : payload.tool_response);
+  const detail = `${payload.tool_name}: ${summary || (isStart ? 'working…' : 'completed')}`;
+  database.prepare(`INSERT INTO agent_stream_events (id, message_id, run_id, kind, detail, created_at)
+    VALUES (?, ?, NULL, ?, ?, ?)`).run(randomUUID(), messageId, hookEventKind(payload.tool_name), detail, at);
+  database.prepare('INSERT INTO terminal_hook_events (provider, session_id, prompt_id, kind, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(payload.provider, payload.session_id, payload.tool_use_id, phase, messageId, at);
+  database.prepare("UPDATE shared_messages SET body = ? WHERE id = ? AND status = 'running'").run(`working… ${detail}`, messageId);
+  database.prepare('UPDATE shared_conversations SET updated_at = MAX(updated_at, ?) WHERE id = ?').run(at, conversationId);
+  return true;
+}
 
 /** The registered project a working directory belongs to, matched by directory name. */
 function projectForCwd(database: WorkbenchDatabase, cwd: string | null): string | null {
@@ -630,6 +695,7 @@ export function applyTerminalHookEvent(database: WorkbenchDatabase, payload: Ter
   // Jeffrey's words or as a second copy of the reply.
   if (payload.entrypoint?.startsWith('sdk')) return { status: 'skipped', reason: 'workbench run' };
   if (payload.cwd && isManagedRunWorktree(payload.cwd)) return { status: 'skipped', reason: 'workbench worktree' };
+  if (payload.isSidechain && (payload.hook_event_name === 'PreToolUse' || payload.hook_event_name === 'PostToolUse')) return { status: 'skipped', reason: 'subagent event' };
   const at = now().toISOString();
   database.exec('BEGIN IMMEDIATE;');
   try {
@@ -641,6 +707,20 @@ export function applyTerminalHookEvent(database: WorkbenchDatabase, payload: Ter
     const conversationId = session.conversation_id;
     let changed = created;
     const kind = payload.hook_event_name === 'UserPromptSubmit' ? 'prompt' : payload.hook_event_name === 'Stop' ? 'stop' : null;
+    if (payload.hook_event_name === 'PreToolUse' || payload.hook_event_name === 'PostToolUse') {
+      changed = recordHookToolEvent(database, payload, conversationId, at) || changed;
+      database.exec('COMMIT;');
+      return { status: 'applied', conversationId, created, changed };
+    }
+    if (payload.hook_event_name === 'SessionEnd') {
+      const messageId = activeHookReply(database, conversationId, payload.provider);
+      if (messageId) {
+        database.prepare("UPDATE shared_messages SET status = 'completed', completed_at = ? WHERE id = ? AND status = 'running'").run(at, messageId);
+        changed = true;
+      }
+      database.exec('COMMIT;');
+      return { status: 'applied', conversationId, created, changed };
+    }
     // A UserPromptSubmit hook also fires for text the harness injects on
     // Jeffrey's behalf (task notifications, system reminders). Those are not
     // his words and never title or populate the conversation.
@@ -653,7 +733,11 @@ export function applyTerminalHookEvent(database: WorkbenchDatabase, payload: Ter
           // Also replaces a title taken from injected text before this filter existed.
           database.prepare("UPDATE shared_conversations SET title = ? WHERE id = ? AND (title = ? OR title LIKE '<%')").run(titleFromPrompt(text), conversationId, DEFAULT_TERMINAL_TITLE);
         }
-        const messageId = insertMessage(database, conversationId, kind === 'prompt' ? 'jeffrey' : payload.provider, text, at);
+        const messageId = kind === 'prompt'
+          ? insertMessage(database, conversationId, 'jeffrey', text, at)
+          : activeHookReply(database, conversationId, payload.provider) ?? insertPendingReply(database, conversationId, payload.provider, at);
+        if (kind === 'prompt') insertPendingReply(database, conversationId, payload.provider, at);
+        else database.prepare("UPDATE shared_messages SET body = ?, status = 'completed', completed_at = ? WHERE id = ?").run(text, at, messageId);
         database.prepare('INSERT INTO terminal_hook_events (provider, session_id, prompt_id, kind, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
           .run(payload.provider, payload.session_id, payload.prompt_id, kind, messageId, at);
         changed = true;

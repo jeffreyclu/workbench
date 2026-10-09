@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Claude Code hook: forwards SessionStart, UserPromptSubmit, and Stop payloads
+// Claude Code hook: forwards session, prompt, tool, and stop payloads
 // to the local Workbench so terminal sessions appear without transcript files.
 // It must never block or fail the session: every error exits 0 silently.
 import { readFileSync } from 'node:fs';
@@ -12,9 +12,11 @@ try {
   const payload = JSON.parse(readFileSync(0, 'utf8'));
   const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT;
   // `claude -p` runs (Workbench's own agents) report an sdk-* entrypoint and are
-  // skipped by the server. WORKBENCH_HOOK_ALLOW_SDK=1 withholds it for end-to-end tests.
-  const body = { ...payload, provider: 'claude' };
-  if (entrypoint && process.env.WORKBENCH_HOOK_ALLOW_SDK !== '1') body.entrypoint = entrypoint;
+  // skipped by the server. WORKBENCH_HOOK_ALLOW_SDK=1 withholds both payload and
+  // environment forms for end-to-end tests.
+  const { entrypoint: payloadEntrypoint, ...hookPayload } = payload;
+  const body = { ...hookPayload, provider: 'claude' };
+  if (process.env.WORKBENCH_HOOK_ALLOW_SDK !== '1' && (entrypoint || payloadEntrypoint)) body.entrypoint = entrypoint || payloadEntrypoint;
   // Hand the request to a detached child and return at once, so a busy or
   // stopped Workbench never delays Jeffrey's prompt. The child gives up after
   // TIMEOUT_MS on its own.

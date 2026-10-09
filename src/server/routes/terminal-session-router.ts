@@ -7,12 +7,17 @@ import { applyTerminalHookEvent } from '../terminal-session-sync.js';
 
 const hookEventSchema = z.object({
   provider: z.literal('claude'),
-  hook_event_name: z.enum(['SessionStart', 'UserPromptSubmit', 'Stop']),
+  hook_event_name: z.enum(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd']),
   session_id: z.string().min(1).max(200),
   cwd: z.string().max(4096).nullish(),
   prompt_id: z.string().min(1).max(200).optional(),
   prompt: z.string().optional(),
   last_assistant_message: z.string().optional(),
+  tool_name: z.string().min(1).max(200).optional(),
+  tool_input: z.unknown().optional(),
+  tool_response: z.unknown().optional(),
+  tool_use_id: z.string().min(1).max(200).optional(),
+  isSidechain: z.boolean().optional(),
   entrypoint: z.string().max(100).optional(),
 }).passthrough();
 
