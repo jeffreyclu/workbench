@@ -16,7 +16,9 @@ describe('FreshnessControl', () => {
     expect(screen.getByText('Updated just now')).toBeTruthy();
     act(() => vi.advanceTimersByTime(120_000));
     expect(screen.getByText('Updated 2m ago')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh data. Updated 2m ago' }));
+    const refresh = screen.getByRole('button', { name: 'Refresh data. Updated 2m ago' });
+    expect(refresh).toHaveTextContent('Updated 2m ago· Refresh');
+    fireEvent.click(refresh);
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
@@ -28,5 +30,6 @@ describe('FreshnessControl', () => {
   it('offers a short label for constrained phone chrome', () => {
     render(<FreshnessControl updatedAt={Date.now()} isRefreshing={false} onRefresh={vi.fn()} compact />);
     expect(screen.getByText('Now')).toBeVisible();
+    expect(screen.queryByText('· Refresh')).toBeNull();
   });
 });

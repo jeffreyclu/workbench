@@ -31,6 +31,7 @@ export function FreshnessControl({ updatedAt, isRefreshing, onRefresh, compact =
   >
     <span className="freshness-status" aria-hidden="true" />
     <time dateTime={new Date(updatedAt).toISOString()} aria-live="polite">{label}</time>
+    {!compact && <span className="freshness-action" aria-hidden="true">· Refresh</span>}
     <RefreshCw className={isRefreshing ? 'spin' : undefined} size={12} aria-hidden="true" />
   </button>;
 }

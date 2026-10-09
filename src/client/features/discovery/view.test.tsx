@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryInbox } from '../../../shared/contracts';
 import { Toaster } from '../../components/toast/toast';
 import { toast } from '../../state/toast-store';
+import { discoveryQueryKeys } from './data';
 import { DiscoveryInboxView } from './view';
 
 const candidateId = '00000000-0000-4000-8000-000000000001';
@@ -58,6 +59,42 @@ describe('DiscoveryInboxView inbox query failures', () => {
     expect(await screen.findByText(inbox.candidates[0].title)).toBeInTheDocument();
     expect(screen.getByText('Focus')).toBeInTheDocument();
     expect(inboxRequests).toBe(2);
+  });
+});
+
+describe('DiscoveryInboxView freshness', () => {
+  it('shows the cache age and refetches current state in place when Refresh is clicked', async () => {
+    const refreshed: DiscoveryInbox = { ...inbox, candidates: [{ ...inbox.candidates[0], title: 'Refreshed review' }] };
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.startsWith('/api/discovery?view=pending')) return new Response(JSON.stringify(refreshed), { headers: { 'Content-Type': 'application/json' } });
+      if (url.startsWith('/api/work-items?')) return new Response(JSON.stringify({ items: [], nextCursor: null, totalCount: 0, proposal: null }), { headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    // Mirrors the app client: cached data never goes stale on its own, so
+    // Refresh is the only path that re-reads it.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const twoMinutesAgo = Date.now() - 120_000;
+    client.setQueryData(discoveryQueryKeys.inbox('pending'), inbox, { updatedAt: twoMinutesAgo });
+    client.setQueryData(discoveryQueryKeys.mergeTargets, { items: [], nextCursor: null, totalCount: 0, proposal: null }, { updatedAt: twoMinutesAgo });
+    render(<QueryClientProvider client={client}><DiscoveryInboxView onOpenTask={vi.fn()} onOpenStack={vi.fn()} /></QueryClientProvider>);
+
+    const header = screen.getByRole('heading', { name: 'Discovered overnight' }).closest('header');
+    expect(screen.getByText(inbox.candidates[0].title)).toBeInTheDocument();
+    const refresh = screen.getByRole('button', { name: 'Refresh data. Updated 2m ago' });
+    expect(refresh).toHaveTextContent('Updated 2m ago· Refresh');
+    expect(requests).toEqual([]);
+
+    fireEvent.click(refresh);
+
+    expect(await screen.findByText('Refreshed review')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Refresh data. Updated just now' })).toBeEnabled();
+    expect(requests.filter((url) => url.startsWith('/api/discovery?view=pending'))).toHaveLength(1);
+    expect(requests.filter((url) => url.startsWith('/api/work-items?'))).toHaveLength(1);
+    // The same mounted header received the new state: no remount or reload.
+    expect(screen.getByRole('heading', { name: 'Discovered overnight' }).closest('header')).toBe(header);
   });
 });
 
