@@ -1198,8 +1198,8 @@ describe('shared room', () => {
     fireEvent.click(screen.getByRole('button', { name: 'GitHub PR' }));
     fireEvent.change(await screen.findByLabelText('Pull request'), { target: { value: item.sourceUrl } });
     expect(await screen.findByRole('heading', { name: 'Conversation review' })).toBeTruthy();
-    // The queue chip and the diff block header. A lone decision has no relationships, so the change map contributes no node.
-    expect((await screen.findAllByRole('button', { name: /src\/client\/App\.tsx/ })).map((button) => button.getAttribute('aria-label'))).toEqual([
+    // The queue chip and the diff block header (the permalink buttons are not selection controls). A lone decision has no relationships, so the change map contributes no node.
+    expect((await screen.findAllByRole('button', { name: /^(Decision \d+|Select the decision).*src\/client\/App\.tsx/ })).map((button) => button.getAttribute('aria-label'))).toEqual([
       'Decision 1: Changes behavior in src/client/App.tsx. \u2014 Pending',
       'Select the decision at Lines 1\u20132 in src/client/App.tsx',
     ]);

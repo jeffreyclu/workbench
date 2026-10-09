@@ -12,24 +12,22 @@ const TITLES: Record<PaletteMode, { label: string; placeholder: string }> = {
   switcher: { label: 'Quick switcher', placeholder: 'Go to a file, task, or conversation…' },
 };
 
-/** Tasks and conversations are server data; they load only while the palette is open. */
+/** Tasks and conversations are server data; they load only while the palette is open. Keys sit under the `work-items` and `shared-conversations` roots so the app's existing realtime invalidation refreshes them. */
 function useRecordCommands(open: boolean, query: string, onOpenTask: (id: string) => void, onOpenConversation: (id: string) => void) {
   const search = useDebouncedValue(query.trim(), 200);
   const tasks = useQuery({
-    queryKey: ['command-palette-tasks', search],
+    queryKey: ['work-items', 'command-palette', search],
     queryFn: async () => {
       const [attention, workbench] = await Promise.all([api.listWorkItems('active', search), api.listWorkItems('workbench', search)]);
       // A task can sit in both stacks' results; the list needs one row per task.
       return [...new Map([...attention.items, ...workbench.items].map((task) => [task.id, task])).values()];
     },
     enabled: open,
-    staleTime: 15_000,
   });
   const conversations = useQuery({
-    queryKey: ['command-palette-conversations'],
+    queryKey: ['shared-conversations', 'command-palette'],
     queryFn: () => api.listSharedConversations('active'),
     enabled: open,
-    staleTime: 15_000,
   });
   const commands = useMemo<PaletteCommand[]>(() => [
     ...(tasks.data ?? []).map((task) => ({ id: `task:${task.id}`, group: 'Tasks' as const, label: task.title, detail: task.projectName ?? undefined, run: () => onOpenTask(task.id) })),

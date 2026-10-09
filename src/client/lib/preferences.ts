@@ -332,7 +332,7 @@ const MAX_COLLAPSED_FILES = 2000;
 
 const DEFAULT_REVIEW_STACK_DIFF_PREFERENCES: ReviewStackDiffPreferences = {
   readingMode: null,
-  wrapLongLines: false,
+  wrapLongLines: true,
   ignoreWhitespace: false,
   collapsedFiles: [],
 };
@@ -350,7 +350,7 @@ export function readReviewStackDiffPreferences(): ReviewStackDiffPreferences {
     const value = JSON.parse(raw ?? '{}') as Record<string, unknown>;
     return {
       readingMode: isReviewStackReadingMode(value.readingMode) ? value.readingMode : null,
-      wrapLongLines: value.wrapLongLines === true,
+      wrapLongLines: value.wrapLongLines !== false,
       ignoreWhitespace: value.ignoreWhitespace === true,
       collapsedFiles: Array.isArray(value.collapsedFiles)
         ? value.collapsedFiles.filter((path): path is string => typeof path === 'string' && path !== '').slice(0, MAX_COLLAPSED_FILES)

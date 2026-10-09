@@ -147,7 +147,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode: requestedMode = 'diff', modeTitle, searchHit = null, onSelect, onOpenDetail, onOpenLinesDetail, onAddNote, onToggleReadingMode, wrapLongLines = false, ignoreWhitespace = false, collapsed: fileCollapsed = false, onToggleWrapLongLines, onToggleIgnoreWhitespace, onToggleCollapsed, onCollapseAll, onExpandAll, onCopyLink }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode: requestedMode = 'diff', modeTitle, searchHit = null, onSelect, onOpenDetail, onOpenLinesDetail, onAddNote, onToggleReadingMode, wrapLongLines = true, ignoreWhitespace = false, collapsed: fileCollapsed = false, onToggleWrapLongLines, onToggleIgnoreWhitespace, onToggleCollapsed, onCollapseAll, onExpandAll, onCopyLink }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
