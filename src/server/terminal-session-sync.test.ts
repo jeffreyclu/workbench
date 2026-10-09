@@ -38,6 +38,12 @@ function conversations(database: WorkbenchDatabase) {
   return database.prepare('SELECT id, title FROM shared_conversations ORDER BY created_at').all() as Array<{ id: string; title: string }>;
 }
 
+function streamEvents(database: WorkbenchDatabase, conversationId: string) {
+  return database.prepare(`SELECT events.kind, events.detail FROM agent_stream_events events
+    JOIN shared_messages messages ON messages.id = events.message_id
+    WHERE messages.conversation_id = ? ORDER BY events.rowid`).all(conversationId);
+}
+
 describe('terminal session sync', () => {
   let directory: string;
   let claudeRoot: string;
@@ -93,13 +99,13 @@ describe('terminal session sync', () => {
     expect(imported[0].body).toContain('terminal Claude Code session in `/Users/jeffrey.lu/dev/workbench`');
     expect(imported.slice(1)).toEqual([
       { author: 'jeffrey', body: 'Why is the conversation list slow?' },
-      { author: 'claude', body: 'Checking the list query.\n\nThe cursor scan is unindexed.\n\n_1 tool call in the terminal session._' },
+      { author: 'claude', body: 'Checking the list query.\n\nThe cursor scan is unindexed.' },
       { author: 'jeffrey', body: 'Add the index.' },
       { author: 'claude', body: 'Added.' },
     ]);
   });
 
-  it('imports a terminal Codex session, dropping injected context and reasoning', async () => {
+  it('imports a terminal Codex session, dropping injected context and retaining live activity', async () => {
     writeFileSync(codexPath(), jsonl([
       codexMeta(),
       codexLine('event_msg', { type: 'thread_settings_applied' }, 0),
@@ -123,8 +129,43 @@ describe('terminal session sync', () => {
     expect(conversation.title).toBe('why is my computer slow');
     expect(messages(database, conversation.id).slice(1)).toEqual([
       { author: 'jeffrey', body: 'why is my computer slow' },
-      { author: 'codex', body: 'Docker is using 12 GB.\n\n_2 tool calls in the terminal session._' },
+      { author: 'codex', body: 'Docker is using 12 GB.' },
     ]);
+    expect(streamEvents(database, conversation.id)).toEqual([
+      { kind: 'decision', detail: 'Thinking: Thinking…' },
+      { kind: 'tool', detail: 'exec: top' },
+      { kind: 'tool', detail: 'Tool output: cpu 99%' },
+      { kind: 'tool', detail: 'shell: {}' },
+    ]);
+  });
+
+  it('streams a Codex rollout line by line and resumes after a restart without duplicates', async () => {
+    writeFileSync(codexPath(), `${jsonl([codexMeta(), codexLine('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'inspect the sync' }] }, 1)])}`);
+    await syncTerminalSessions(database, options);
+    const [conversation] = conversations(database);
+
+    appendFileSync(codexPath(), jsonl([codexLine('response_item', { type: 'reasoning', summary: [{ text: 'Checking the importer.' }] }, 2)]));
+    await syncTerminalSessions(database, options);
+    expect(messages(database, conversation.id).at(-1)).toEqual({ author: 'codex', body: 'working… Thinking: Checking the importer.' });
+
+    appendFileSync(codexPath(), jsonl([codexLine('response_item', { type: 'custom_tool_call', name: 'exec', input: 'rg token=secret' }, 3)]));
+    await syncTerminalSessions(database, options);
+    appendFileSync(codexPath(), jsonl([codexLine('response_item', { type: 'custom_tool_call_output', output: 'token=should-not-appear\nfound line' }, 4)]));
+    await syncTerminalSessions(database, options);
+
+    // A fresh sync call has no in-memory state. The saved byte offset keeps
+    // the prior pending reply and its activity exactly once.
+    await syncTerminalSessions(database, options);
+    expect(streamEvents(database, conversation.id)).toEqual([
+      { kind: 'decision', detail: 'Thinking: Checking the importer.' },
+      { kind: 'tool', detail: 'exec: rg token=[redacted]' },
+      { kind: 'tool', detail: 'Tool output: token=[redacted]\nfound line' },
+    ]);
+
+    appendFileSync(codexPath(), jsonl([codexLine('response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'The stream is live.' }] }, 5)]));
+    await syncTerminalSessions(database, options);
+    expect(messages(database, conversation.id).at(-1)).toEqual({ author: 'codex', body: 'The stream is live.' });
+    expect(database.prepare("SELECT status FROM shared_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(conversation.id)).toEqual({ status: 'completed' });
   });
 
   it('imports nothing twice and continues a live session from where it stopped', async () => {

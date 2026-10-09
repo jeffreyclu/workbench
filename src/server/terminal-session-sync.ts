@@ -23,7 +23,8 @@ export type TerminalProvider = 'claude' | 'codex';
 export type TranscriptEntry =
   | { kind: 'prompt'; text: string; at: string }
   | { kind: 'reply'; text: string; at: string }
-  | { kind: 'tool'; at: string };
+  | { kind: 'reasoning'; text: string; at: string }
+  | { kind: 'tool'; name: string; detail: string; eventKind: AgentStreamEvent['kind']; at: string };
 
 export type ParsedTranscriptLine = {
   /** Where the session came from, present on every line that can decide it. */
@@ -47,7 +48,7 @@ export type TerminalSessionSyncResult = {
 
 const DEFAULT_LOOKBACK_HOURS = 24;
 const CHUNK_BYTES = 4 * 1024 * 1024;
-const RESCAN_MS = 15_000;
+const RESCAN_MS = 2_000;
 const WATCH_DEBOUNCE_MS = 300;
 const TITLE_LENGTH = 80;
 
@@ -58,8 +59,8 @@ export function defaultTerminalSyncLookbackMs(): number {
 
 function resolveOptions(options: TerminalSessionSyncOptions) {
   return {
-    claudeProjectsRoot: options.claudeProjectsRoot ?? join(homedir(), '.claude', 'projects'),
-    codexSessionsRoot: options.codexSessionsRoot ?? join(homedir(), '.codex', 'sessions'),
+    claudeProjectsRoot: options.claudeProjectsRoot ?? (process.env.WORKBENCH_CLAUDE_PROJECTS_ROOT?.trim() || join(homedir(), '.claude', 'projects')),
+    codexSessionsRoot: options.codexSessionsRoot ?? (process.env.WORKBENCH_CODEX_SESSIONS_ROOT?.trim() || join(homedir(), '.codex', 'sessions')),
     lookbackMs: options.lookbackMs ?? defaultTerminalSyncLookbackMs(),
     now: options.now ?? Date.now,
   };
@@ -110,7 +111,10 @@ export function parseClaudeTranscriptLine(line: string): ParsedTranscriptLine | 
 
   if (record.type === 'user') {
     if (record.isMeta === true || record.isCompactSummary === true) return { session, entries: [] };
-    if (items.some((item) => item.type === 'tool_result')) return { session, entries: [] };
+    const toolResults = items.filter((item) => item.type === 'tool_result');
+    if (toolResults.length) return { session, entries: toolResults.map((item) => ({
+      kind: 'tool' as const, name: 'Tool output', detail: `Tool output: ${hookSummary(item.content) || 'completed'}`, eventKind: 'tool' as const, at,
+    })) };
     const texts = typeof content === 'string' ? [content] : items.filter((item) => item.type === 'text').map((item) => String(item.text ?? ''));
     const text = typedText(texts);
     return { session, entries: text ? [{ kind: 'prompt', text, at }] : [] };
@@ -120,7 +124,10 @@ export function parseClaudeTranscriptLine(line: string): ParsedTranscriptLine | 
   const entries: TranscriptEntry[] = [];
   for (const item of items) {
     if (item.type === 'text' && String(item.text ?? '').trim()) entries.push({ kind: 'reply', text: String(item.text).trim(), at });
-    else if (item.type === 'tool_use') entries.push({ kind: 'tool', at });
+    else if (item.type === 'tool_use') {
+      const name = typeof item.name === 'string' ? item.name : 'Tool';
+      entries.push({ kind: 'tool', name, detail: `${name}: ${hookSummary(item.input) || 'working…'}`, eventKind: hookEventKind(name), at });
+    }
   }
   return { session, entries };
 }
@@ -134,8 +141,21 @@ export function parseCodexTranscriptLine(line: string): ParsedTranscriptLine | n
   }
   if (record.type !== 'response_item') return null;
   const at = timestampOf(record);
-  // Reasoning and tool output are noise here; a call counts as tool activity.
-  if (typeof payload.type === 'string' && payload.type.endsWith('_call')) return { entries: [{ kind: 'tool', at }] };
+  if (payload.type === 'reasoning') {
+    const summary = Array.isArray(payload.summary)
+      ? payload.summary.map(asRecord).filter((item): item is Record<string, unknown> => item !== null)
+        .map((item) => String(item.text ?? item.summary ?? '')).filter(Boolean).join(' ')
+      : '';
+    return { entries: [{ kind: 'reasoning', text: summary || 'Thinking…', at }] };
+  }
+  if (typeof payload.type === 'string' && payload.type.endsWith('_call')) {
+    const name = typeof payload.name === 'string' ? payload.name : 'Tool';
+    return { entries: [{ kind: 'tool', name, detail: `${name}: ${hookSummary(payload.input ?? payload.arguments) || 'working…'}`, eventKind: hookEventKind(name), at }] };
+  }
+  if (payload.type === 'custom_tool_call_output' || payload.type === 'function_call_output') {
+    const output = payload.output ?? payload.content;
+    return { entries: [{ kind: 'tool', name: 'Tool output', detail: `Tool output: ${hookSummary(output) || 'completed'}`, eventKind: 'tool', at }] };
+  }
   if (payload.type !== 'message') return null;
   const items = Array.isArray(payload.content) ? payload.content.map(asRecord).filter((item): item is Record<string, unknown> => item !== null) : [];
   if (payload.role === 'user') {
@@ -290,12 +310,6 @@ function titleFromPrompt(text: string): string {
   return firstLine.slice(0, TITLE_LENGTH);
 }
 
-function replyBody(text: string, toolCount: number): string {
-  if (!toolCount) return text;
-  const activity = `_${toolCount} tool call${toolCount === 1 ? '' : 's'} in the terminal session._`;
-  return text ? `${text}\n\n${activity}` : activity;
-}
-
 type ChunkChanges = { created: Set<string>; updated: Set<string> };
 
 function syncMarker(provider: TerminalProvider, sessionId: string, cwd: string | null, project: string | null = null): string {
@@ -324,6 +338,17 @@ function insertPendingReply(database: WorkbenchDatabase, conversationId: string,
   return id;
 }
 
+function streamTranscriptEvent(database: WorkbenchDatabase, row: ImportRow, entry: Extract<TranscriptEntry, { kind: 'reasoning' | 'tool' }>): void {
+  const messageId = row.replyMessageId ?? insertPendingReply(database, row.conversationId!, row.provider, entry.at);
+  row.replyMessageId = messageId;
+  const kind = entry.kind === 'reasoning' ? 'decision' : entry.eventKind;
+  const detail = entry.kind === 'reasoning' ? `Thinking: ${entry.text.slice(0, 200)}` : entry.detail;
+  database.prepare(`INSERT INTO agent_stream_events (id, message_id, run_id, kind, detail, created_at)
+    VALUES (?, ?, NULL, ?, ?, ?)`).run(randomUUID(), messageId, kind, detail, entry.at);
+  database.prepare("UPDATE shared_messages SET body = ? WHERE id = ? AND status = 'running'").run(`working… ${detail}`, messageId);
+  database.prepare('UPDATE shared_conversations SET updated_at = MAX(updated_at, ?) WHERE id = ?').run(entry.at, row.conversationId);
+}
+
 function applyEntry(database: WorkbenchDatabase, row: ImportRow, entry: TranscriptEntry, changes: ChunkChanges): void {
   if (entry.at < row.importSince) return;
   if (entry.kind === 'prompt') {
@@ -344,11 +369,15 @@ function applyEntry(database: WorkbenchDatabase, row: ImportRow, entry: Transcri
   }
   // A reply only belongs to a conversation once one of its prompts landed.
   if (!row.conversationId) return;
-  if (entry.kind === 'reply') row.replyText = row.replyText ? `${row.replyText}\n\n${entry.text}` : entry.text;
-  else row.replyToolCount += 1;
-  const body = replyBody(row.replyText, row.replyToolCount);
+  if (entry.kind === 'reasoning' || entry.kind === 'tool') {
+    streamTranscriptEvent(database, row, entry);
+    changes.updated.add(row.conversationId);
+    return;
+  }
+  row.replyText = row.replyText ? `${row.replyText}\n\n${entry.text}` : entry.text;
+  const body = row.replyText;
   if (row.replyMessageId) {
-    database.prepare('UPDATE shared_messages SET body = ?, completed_at = ? WHERE id = ?').run(body, entry.at, row.replyMessageId);
+    database.prepare("UPDATE shared_messages SET body = ?, status = 'completed', completed_at = ? WHERE id = ?").run(body, entry.at, row.replyMessageId);
     database.prepare('UPDATE shared_conversations SET updated_at = MAX(updated_at, ?) WHERE id = ?').run(entry.at, row.conversationId);
   } else {
     row.replyMessageId = insertMessage(database, row.conversationId, row.provider, body, entry.at);
@@ -576,7 +605,7 @@ function redactHookValue(value: unknown): unknown {
 function hookSummary(value: unknown): string {
   const redacted = redactHookValue(value);
   let text: string;
-  try { text = typeof redacted === 'string' ? redacted : JSON.stringify(redacted); }
+  try { text = typeof redacted === 'string' ? redacted : JSON.stringify(redacted) ?? ''; }
   catch { text = String(redacted); }
   return text.replace(/((?:token|secret|password|key)\s*[=:]\s*["']?)[^\s,"'}]+/gi, '$1[redacted]').slice(0, 200);
 }
