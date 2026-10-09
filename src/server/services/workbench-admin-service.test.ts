@@ -95,7 +95,7 @@ describe('WorkbenchAdminService.startWorkItemExecution', () => {
     ]);
   });
 
-  it('routes a review to the vendor other than its completed implementation', async () => {
+  it('routes an automatic review to Codex regardless of the implementer', async () => {
     const task = repository.create({ title: 'Review routed task', description: '', priority: 2, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const implementation = repository.createRun(task.id, 'execute', 'auto', 'codex', 'Implement it.');
     repository.updateRun(implementation.id, { status: 'completed', completedAt: new Date().toISOString() });
@@ -103,8 +103,10 @@ describe('WorkbenchAdminService.startWorkItemExecution', () => {
 
     const result = await admin.startWorkItemExecution(task.id, { executionProfile: null, force: true });
 
-    expect('run' in result && result.run.agent).toBe('claude');
-    expect(repository.listActivity(task.id).find((entry) => entry.kind === 'execution_started')?.body).toContain('chosen because implementer was codex');
+    // Automatic reviews default to Codex (work item ec2649e9): Claude's provider
+    // safeguard declined review prompts and surfaced the error to Jeffrey.
+    expect('run' in result && result.run.agent).toBe('codex');
+    expect(repository.listActivity(task.id).find((entry) => entry.kind === 'execution_started')?.body).toContain('defaulted to Codex for automatic review');
   });
 
   it('never selects Palmyra for a task\'s first Auto execution', async () => {
