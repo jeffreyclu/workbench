@@ -450,14 +450,14 @@ nav { display: grid; gap: 3px; }
 .workspace-diff-file > header span { flex: 0 0 auto; color: #898880; text-transform: capitalize; }
 .diff-file-info { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
 .workspace-diff-file pre { min-width: 0; max-width: 100%; margin: 0; padding: 8px 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; background: #10100f; font: 11px/1.55 var(--code-font); tab-size: 2; }
-.diff-line { position: relative; display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; font-family: var(--code-font); font-variant-ligatures: none; tab-size: 2; white-space: pre-wrap; }
+.diff-line { position: relative; display: grid; grid-template-columns: 42px 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; font-family: var(--code-font); font-variant-ligatures: none; tab-size: 2; white-space: pre; }
 /* The handle that floats over a reviewer's own text highlight — portalled to
  * `body` and positioned from the selection's rect, so it reads exactly where
  * the highlight ends rather than at a fixed spot in the gutter. */
 .diff-review-lines-select-btn { display: flex; align-items: center; gap: 5px; z-index: 20; padding: 5px 9px; color: #d5d4cb; border: 1px solid var(--acid); border-radius: 6px; background: #17170f; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); font: 500 11px/1 var(--ui-font, inherit); white-space: nowrap; cursor: pointer; }
 .diff-review-lines-select-btn:hover, .diff-review-lines-select-btn:focus-visible { color: var(--acid); outline: 0; }
 .diff-line > span { padding: 0 8px; }
-.diff-line > span:last-child, .diff-line-code { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.diff-line > span:last-child, .diff-line-code { min-width: max-content; }
 /* A wrapped long line restarts at the code column, not under the gutter, and is
  * pushed past its own indentation so nesting still reads at a glance. */
 .diff-line > span:last-child { padding-left: calc(8px + 4ch); text-indent: -4ch; }
@@ -487,6 +487,9 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-line.final.was-removed { background: #241a1d; color: #a58b8f; }
 .diff-line.final.was-removed > span:first-child { color: #8d7276; background: #2f2024; border-right-color: #2f2024; }
 .diff-line.final.was-removed .diff-line-code { opacity: 0.6; text-decoration: line-through; text-decoration-color: #6b4b50; }
+.diff-review-file-diff-body { overflow-x: auto; }
+.diff-review-file-diff-body.wrap-lines .diff-line, .diff-review-file-diff-body.wrap-lines .diff-split-cell { white-space: pre-wrap; }
+.diff-review-file-diff-body.wrap-lines .diff-line > span:last-child, .diff-review-file-diff-body.wrap-lines .diff-line-code, .diff-review-file-diff-body.wrap-lines .diff-split-cell > span { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .diff-line-marker { padding-right: 2px; user-select: none; }
 .diff-block { margin: 4px 0; }
 .diff-summary-strip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; color: #aaa9a2; border: 1px solid #353530; border-radius: 999px; background: #1b1b18; font: 700 9px 'DM Mono'; }
@@ -876,6 +879,9 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-reading-mode:hover { border-color: #3c3c37; color: #deddd6; }
 .diff-review-reading-mode.mode-split { border-color: #2c3f4b; background: #121e26; color: #8fadb5; }
 .diff-review-reading-mode.mode-final { border-color: #2c4b39; background: #12261e; color: #8fb59c; }
+.diff-review-display-toggle { flex: 0 0 auto; min-height: 28px; padding: 3px 8px; color: #aaa9a2; border: 1px solid #2e2e2a; border-radius: 5px; background: #1c1c19; font: 10px 'DM Mono'; cursor: pointer; }
+.diff-review-display-toggle:hover, .diff-review-display-toggle:focus-visible, .diff-review-display-toggle[aria-pressed='true'] { color: var(--acid); border-color: #596234; outline: 0; }
+.diff-review-whitespace-note, .diff-review-whitespace-hidden { margin: 0; padding: 5px 10px; color: #aaa9a2; border-bottom: 1px solid #252522; background: #181816; font: 10px 'DM Mono'; }
 .diff-review-file-diff > header a { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; color: #aaa9a2; border: 1px solid #3c3c36; border-radius: 5px; }
 .diff-review-file-diff > header a:hover, .diff-review-file-diff > header a:focus-visible { color: var(--acid); border-color: #596234; outline: 0; }
 .diff-review-file-diff-body { max-height: min(72vh, 760px); overflow-y: auto; overscroll-behavior-y: contain; font: 11px/1.65 var(--code-font); scroll-padding-block: 60px; }
@@ -2527,9 +2533,9 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-search-result.kind-deletion code { color: #c9a3a7; }
 .diff-review-search-result mark { color: #10110f; background: var(--acid); border-radius: 2px; }
 .diff-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.diff-split-cell { display: grid; grid-template-columns: 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; font-family: var(--code-font); font-variant-ligatures: none; tab-size: 2; white-space: pre-wrap; }
+.diff-split-cell { display: grid; grid-template-columns: 42px minmax(0, 1fr); min-height: 18px; color: #c9c8c1; font-family: var(--code-font); font-variant-ligatures: none; tab-size: 2; white-space: pre; }
 .diff-split-cell.right { border-left: 1px solid #242421; }
-.diff-split-cell > span { padding: 0 8px; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.diff-split-cell > span { padding: 0 8px; min-width: max-content; }
 .diff-split-cell > span:first-child { color: #77766f; text-align: right; user-select: none; border-right: 1px solid #242421; }
 .diff-split-cell.addition { background: #12261e; }.diff-split-cell.addition > span:first-child { color: #8fb59c; background: #1b3626; border-right-color: #1b3626; }
 .diff-split-cell.deletion { background: #2d1f23; }.diff-split-cell.deletion > span:first-child { color: #c9a3a7; background: #3b252b; border-right-color: #3b252b; }
@@ -2537,6 +2543,8 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-review-split-note { margin: 0; padding: 4px 10px; font-size: 11px; }
 .diff-line.search-hit, .diff-split-cell.search-hit { outline: 1px solid var(--acid); outline-offset: -1px; box-shadow: inset 3px 0 0 var(--acid); }
 @media (max-width: 720px) {
+  .diff-review-file-diff > header { flex-wrap: wrap; }
+  .diff-review-display-toggle { min-height: 44px; padding: 0 12px; }
   .diff-review-search-toggle { min-height: 44px; padding: 0 14px; }
   .diff-review-search-bar { flex-wrap: wrap; }
   .diff-review-search-bar input { flex-basis: 100%; min-height: 44px; font-size: 16px; }

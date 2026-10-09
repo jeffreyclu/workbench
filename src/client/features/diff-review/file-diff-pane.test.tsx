@@ -549,3 +549,50 @@ describe('final-state reading mode', () => {
     });
   });
 });
+
+describe('diff display preferences', () => {
+  const whitespacePatch = ['@@ -1 +1 @@', '-  const value = call();', '+const    value=call();'].join('\n');
+  const whitespaceHunks = buildFileDiffHunks({ path: 'src/spacing.ts', patch: whitespacePatch, isBinary: false });
+
+  it('wraps a 120-character line and hides whitespace-only changes in unified, split and final readings', () => {
+    const longLine = `+const message = '${'x'.repeat(128)}';`;
+    const longHunks = buildFileDiffHunks({ path: 'src/long.ts', patch: ['@@ -1 +1 @@', longLine].join('\n'), isBinary: false });
+    const onToggleWrapLongLines = vi.fn();
+    const onToggleIgnoreWhitespace = vi.fn();
+
+    for (const readingMode of ['diff', 'split', 'final'] as const) {
+      const { container, unmount } = render(<DiffReviewFileDiffPane
+        filePath="src/long.ts"
+        editorUrl={null}
+        hunks={longHunks}
+        decisions={[{ ...decision(null), id: longHunks[0].decisionId }]}
+        activeDecisionId={longHunks[0].decisionId}
+        readingMode={readingMode}
+        wrapLongLines
+        onSelect={() => {}}
+        onToggleWrapLongLines={onToggleWrapLongLines}
+      />);
+      expect(container.querySelector('.diff-review-file-diff-body')).toHaveClass('wrap-lines');
+      expect(container.querySelector('.diff-line-code')?.textContent).toContain('x'.repeat(128));
+      unmount();
+    }
+
+    const { container } = render(<DiffReviewFileDiffPane
+      filePath="src/spacing.ts"
+      editorUrl={null}
+      hunks={whitespaceHunks}
+      decisions={[{ ...decision(null), id: whitespaceHunks[0].decisionId }]}
+      activeDecisionId={whitespaceHunks[0].decisionId}
+      ignoreWhitespace
+      onSelect={() => {}}
+      onToggleWrapLongLines={onToggleWrapLongLines}
+      onToggleIgnoreWhitespace={onToggleIgnoreWhitespace}
+    />);
+    expect(screen.getByRole('status')).toHaveTextContent('1 whitespace-only block hidden');
+    expect(container.querySelectorAll('.diff-line')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Wrap lines' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ignore whitespace' }));
+    expect(onToggleWrapLongLines).toHaveBeenCalledOnce();
+    expect(onToggleIgnoreWhitespace).toHaveBeenCalledOnce();
+  });
+});

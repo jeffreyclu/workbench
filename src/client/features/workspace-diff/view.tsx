@@ -40,7 +40,7 @@ import { useDelegatedReview } from '../review-stack/use-delegated-review.js';
 import { useReviewDirectorEnrichment } from '../review-stack/use-review-director-enrichment.js';
 import { fileSourceRevision } from '../review-stack/review-full-file.js';
 import { ReviewFullFilePane } from '../review-stack/review-full-file-pane.js';
-import { readReviewStackReadingMode, readWorkspaceDiffSelection, writeReviewStackReadingMode, writeWorkspaceDiffDecision, writeWorkspaceDiffSource, type ReviewStackReadingMode } from '../../lib/preferences.js';
+import { readReviewStackDiffPreferences, readWorkspaceDiffSelection, writeReviewStackDiffPreferences, writeWorkspaceDiffDecision, writeWorkspaceDiffSource, type ReviewStackReadingMode } from '../../lib/preferences.js';
 import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
 import { reviewPaletteCommands } from './palette-commands.js';
 import { usePaletteCommands } from '../command-palette';
@@ -501,13 +501,20 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // them because they answer the same question at different magnifications.
   // Changes keeps the unified diff as its default; the reviewer's own last
   // choice outranks it and survives remounting and reloading.
-  const [readingMode, setReadingMode] = useState<ReviewStackReadingMode>(() => readReviewStackReadingMode() ?? 'diff');
+  const [diffPreferences, setDiffPreferences] = useState(() => readReviewStackDiffPreferences());
+  const readingMode = diffPreferences.readingMode ?? 'diff';
+  const updateDiffPreferences = useCallback((updates: Partial<typeof diffPreferences>) => {
+    setDiffPreferences((current) => {
+      const next = { ...current, ...updates };
+      writeReviewStackDiffPreferences(next);
+      return next;
+    });
+  }, []);
   const toggleReadingMode = useCallback(() => {
     const order: ReviewStackReadingMode[] = ['diff', 'split', 'final', 'file'];
     const next = order[(order.indexOf(readingMode) + 1) % order.length]!;
-    setReadingMode(next);
-    writeReviewStackReadingMode(next);
-  }, [readingMode]);
+    updateDiffPreferences({ readingMode: next });
+  }, [readingMode, updateDiffPreferences]);
   // PR after-state is fetched from GitHub at its resolved head SHA. This must
   // not fall back to the local checkout: it may hold unrelated text at the
   // same path. Binary files stay in the diff-only reader.
@@ -651,10 +658,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   const jumpToSearchMatch = useCallback((match: DiffSearchMatch) => {
     // Whole-file reading draws no diff rows to land on, and final reading folds
     // a deleted line away, so a result in either needs the unified diff.
-    if (readingMode === 'file' || (readingMode === 'final' && match.kind === 'deletion')) setReadingMode('diff');
+    if (readingMode === 'file' || (readingMode === 'final' && match.kind === 'deletion')) updateDiffPreferences({ readingMode: 'diff' });
     setSearchHit({ filePath: match.filePath, lineKey: match.lineKey });
     selectDecision(match.decisionId);
-  }, [readingMode, selectDecision]);
+  }, [readingMode, selectDecision, updateDiffPreferences]);
   const clearSearchHit = useCallback(() => setSearchHit(null), []);
 
   // Local draft notes. They are stored per review scope in this browser and
@@ -669,11 +676,11 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     if (!entry.target) return;
     const decisionId = decisions.find((decision) => decision.hunks.some((hunk) => hunk.id === entry.target?.hunkId))?.id;
     if (!decisionId) return;
-    if (readingMode === 'file' || (readingMode === 'final' && entry.target.kind === 'deletion')) setReadingMode('diff');
+    if (readingMode === 'file' || (readingMode === 'final' && entry.target.kind === 'deletion')) updateDiffPreferences({ readingMode: 'diff' });
     setSearchHit({ filePath: entry.note.anchor.filePath, lineKey: entry.target.lineKey });
     setLastJumpedNoteId(entry.note.id);
     selectDecision(decisionId);
-  }, [decisions, readingMode, selectDecision]);
+  }, [decisions, readingMode, selectDecision, updateDiffPreferences]);
   const startNote = useCallback((target: PendingNote) => { setPendingNote(target); setNotesOpen(true); }, []);
 
   const markSelectedReviewed = useCallback(() => {
@@ -999,7 +1006,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                         remaining files stay readable as diffs underneath it
                         rather than disappearing with the mode switch. */}
                     {(readingMode === 'file' ? fileHunkGroups.slice(1) : fileHunkGroups).map(({ file, hunks }) =>
-                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} searchHit={searchHit?.filePath === file.path ? searchHit.lineKey : null} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onOpenLinesDetail={openLinesDecisionDetail} onAddNote={startNote} onToggleReadingMode={toggleReadingMode} />)}
+                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} searchHit={searchHit?.filePath === file.path ? searchHit.lineKey : null} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onOpenLinesDetail={openLinesDecisionDetail} onAddNote={startNote} onToggleReadingMode={toggleReadingMode} wrapLongLines={diffPreferences.wrapLongLines} ignoreWhitespace={diffPreferences.ignoreWhitespace} onToggleWrapLongLines={() => updateDiffPreferences({ wrapLongLines: !diffPreferences.wrapLongLines })} onToggleIgnoreWhitespace={() => updateDiffPreferences({ ignoreWhitespace: !diffPreferences.ignoreWhitespace })} />)}
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={detailAnchor.simple ? undefined : <>
                       <DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />
                     </>} onClose={() => setDetailAnchor(null)}>

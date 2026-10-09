@@ -15,10 +15,10 @@ const workspaceDiffSelectionsStorageKey = 'workbench:workspace-diff-selections';
  * own key. Sharing Changes' key would mean opening Review moves the file
  * Changes is showing — the one thing the review stack is not allowed to do. */
 const reviewStackSelectionsStorageKey = 'workbench:review-stack-selections';
-/** Reading mode is a habit, not a selection: it is remembered once for the
- * reviewer rather than per conversation, so moving between reviews does not
- * silently put the code pane back into interleaved diff. */
-const reviewStackReadingModeStorageKey = 'workbench:review-stack-reading-mode';
+/** Display choices are habits, not selections: they are remembered once for
+ * the reviewer rather than per conversation, so moving between reviews does
+ * not silently change how the code pane is read. */
+const reviewStackDiffPreferencesStorageKey = 'workbench:review-stack-reading-mode';
 const desktopNotificationsEnabledStorageKey = 'workbench:desktop-notifications-enabled';
 const insightsTabStorageKey = 'workbench:insights-tab';
 const lastOpenedItemStorageKeys = {
@@ -317,21 +317,53 @@ export function writeReviewStackSource(scope: string, source: string): void {
  * Declared here so preference storage does not depend on a feature component. */
 export type ReviewStackReadingMode = 'diff' | 'split' | 'final' | 'file';
 
-export function readReviewStackReadingMode(): ReviewStackReadingMode | null {
+export type ReviewStackDiffPreferences = {
+  readingMode: ReviewStackReadingMode | null;
+  wrapLongLines: boolean;
+  ignoreWhitespace: boolean;
+};
+
+const DEFAULT_REVIEW_STACK_DIFF_PREFERENCES: ReviewStackDiffPreferences = {
+  readingMode: null,
+  wrapLongLines: false,
+  ignoreWhitespace: false,
+};
+
+function isReviewStackReadingMode(value: unknown): value is ReviewStackReadingMode {
+  return value === 'diff' || value === 'split' || value === 'final' || value === 'file';
+}
+
+/** Reads the former mode-only value too, so existing reviewers retain their
+ * chosen reading without a one-time migration write. */
+export function readReviewStackDiffPreferences(): ReviewStackDiffPreferences {
   try {
-    const value = window.localStorage.getItem(reviewStackReadingModeStorageKey);
-    return value === 'diff' || value === 'split' || value === 'final' || value === 'file' ? value : null;
+    const raw = window.localStorage.getItem(reviewStackDiffPreferencesStorageKey);
+    if (isReviewStackReadingMode(raw)) return { ...DEFAULT_REVIEW_STACK_DIFF_PREFERENCES, readingMode: raw };
+    const value = JSON.parse(raw ?? '{}') as Record<string, unknown>;
+    return {
+      readingMode: isReviewStackReadingMode(value.readingMode) ? value.readingMode : null,
+      wrapLongLines: value.wrapLongLines === true,
+      ignoreWhitespace: value.ignoreWhitespace === true,
+    };
   } catch {
-    return null;
+    return DEFAULT_REVIEW_STACK_DIFF_PREFERENCES;
   }
 }
 
-export function writeReviewStackReadingMode(mode: ReviewStackReadingMode): void {
+export function writeReviewStackDiffPreferences(preferences: ReviewStackDiffPreferences): void {
   try {
-    window.localStorage.setItem(reviewStackReadingModeStorageKey, mode);
+    window.localStorage.setItem(reviewStackDiffPreferencesStorageKey, JSON.stringify(preferences));
   } catch {
-    // The mode still applies to this session even if it cannot be remembered.
+    // The choices still apply until the page is reloaded.
   }
+}
+
+export function readReviewStackReadingMode(): ReviewStackReadingMode | null {
+  return readReviewStackDiffPreferences().readingMode;
+}
+
+export function writeReviewStackReadingMode(mode: ReviewStackReadingMode): void {
+  writeReviewStackDiffPreferences({ ...readReviewStackDiffPreferences(), readingMode: mode });
 }
 
 export function writeReviewStackBlock(scope: string, revision: string, blockId: string): void {

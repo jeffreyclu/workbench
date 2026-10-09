@@ -9,6 +9,7 @@ import { reviewStateLabel } from './logic.js';
 import { toFinalStateRows } from './final-state-lines.js';
 import { toSplitRows } from './split-rows.js';
 import { anchorForLines, type ReviewNoteAnchor } from '../review-notes/notes-logic.js';
+import { isWhitespaceOnlyHunk } from './whitespace.js';
 
 /** How a block's code is drawn. `diff` is the unified two-sided reading;
  * `split` lays the before and after side by side; `final` is the code as it
@@ -121,7 +122,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode: requestedMode = 'diff', modeTitle, searchHit = null, onSelect, onOpenDetail, onOpenLinesDetail, onAddNote, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode: requestedMode = 'diff', modeTitle, searchHit = null, onSelect, onOpenDetail, onOpenLinesDetail, onAddNote, onToggleReadingMode, wrapLongLines = false, ignoreWhitespace = false, onToggleWrapLongLines, onToggleIgnoreWhitespace }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -164,6 +165,8 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
    * of its block, so a search result is the line itself and not just the
    * change around it. */
   searchHit?: string | null;
+  wrapLongLines?: boolean;
+  ignoreWhitespace?: boolean;
   onSelect: (decisionId: string) => void;
   onOpenDetail?: (decisionId: string, anchor: HTMLElement) => void;
   /** Fired when the reviewer highlights code in this pane and presses the
@@ -178,6 +181,8 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   /** Supplying this is what puts the reading-mode switch in the header: a
    * surface that cannot change the mode should not advertise a control. */
   onToggleReadingMode?: () => void;
+  onToggleWrapLongLines?: () => void;
+  onToggleIgnoreWhitespace?: () => void;
 }) {
   // A phone has no room for two code columns, so split reads as the unified
   // diff there. The stored mode is untouched: widening the window restores it.
@@ -216,6 +221,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   const linkIndex = useMemo<Map<string, ChangeLinkSummary>>(() => changeMap ? buildChangeLinkIndex(changeMap) : new Map(), [changeMap]);
   const activeSummary = linkIndex.get(activeDecisionId) ?? null;
   const activeOrdinal = changeMap?.nodes.find((node) => node.id === activeDecisionId)?.ordinal ?? null;
+  const hiddenWhitespaceHunks = ignoreWhitespace ? hunks.filter(isWhitespaceOnlyHunk).length : 0;
   // Markers keep the selected change's relationships visible while scrolling,
   // so a linked block is recognisable without opening anything.
   const markers = useMemo(() => new Map((activeSummary
@@ -486,10 +492,13 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         title={modeTitle ?? 'Toggle between the final code and the unified diff (d)'}
         onClick={onToggleReadingMode}
       >{READING_MODE_LABELS[requestedMode]}</button>}
+      {onToggleWrapLongLines && <button type="button" className="diff-review-display-toggle" aria-pressed={wrapLongLines} onClick={onToggleWrapLongLines}>Wrap lines</button>}
+      {onToggleIgnoreWhitespace && <button type="button" className="diff-review-display-toggle" aria-pressed={ignoreWhitespace} onClick={onToggleIgnoreWhitespace}>Ignore whitespace</button>}
       {editorUrl && <a href={editorUrl} aria-label={`Open ${filePath} in editor`} title="Open in editor"><ExternalLink size={13} aria-hidden="true" /></a>}
     </header>
     {splitUnavailable && <p className="diff-review-split-note muted" role="note">Side-by-side needs a wider screen — showing the unified diff.</p>}
-    <div className={`diff-review-file-diff-body${spotlight ? ' spotlight' : ''}`} ref={diffBody}>
+    {hiddenWhitespaceHunks > 0 && <p className="diff-review-whitespace-note" role="status">{hiddenWhitespaceHunks} whitespace-only {hiddenWhitespaceHunks === 1 ? 'block' : 'blocks'} hidden</p>}
+    <div className={`diff-review-file-diff-body${spotlight ? ' spotlight' : ''}${wrapLongLines ? ' wrap-lines' : ''}`} ref={diffBody}>
       {hunks.map((hunk) => {
         const decision = decisionByHunkId.get(hunk.decisionId);
         const decisionId = decision?.id ?? hunk.decisionId;
@@ -501,6 +510,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         const showDetail = Boolean(renderDetail) && openDetailFor === decisionId && !detailShown.has(decisionId);
         if (showDetail) detailShown.add(decisionId);
         const handled = handledBlocks?.get(decisionId) ?? null;
+        const whitespaceOnly = ignoreWhitespace && isWhitespaceOnlyHunk(hunk);
         // The selected change is never collapsed. The queue can land on a
         // handled block — the last one settled, or a delegated block reached
         // with the keyboard — and hiding the code under the reviewer's own
@@ -599,6 +609,8 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
                 <span>{handled} · {hunk.lines.length} {hunk.lines.length === 1 ? 'line' : 'lines'} hidden</span>
                 <span>Show diff</span>
               </button>
+            : whitespaceOnly
+            ? <p className="diff-review-whitespace-hidden" role="note">Whitespace-only change hidden</p>
             : hunk.lines.length === 0
             ? <p className="muted">No text patch is available for this file.</p>
             : readingMode === 'split'

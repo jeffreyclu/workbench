@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { readConversationReadingPosition, readInsightsTab, readReviewStackReadingMode, writeConversationReadingPosition, writeInsightsTab, writeReviewStackReadingMode } from './preferences.js';
+import { readConversationReadingPosition, readInsightsTab, readReviewStackDiffPreferences, readReviewStackReadingMode, writeConversationReadingPosition, writeInsightsTab, writeReviewStackDiffPreferences, writeReviewStackReadingMode } from './preferences.js';
 
 describe('review stack reading mode preference', () => {
   beforeEach(() => window.localStorage.clear());
@@ -25,8 +25,16 @@ describe('review stack reading mode preference', () => {
 
   it('is stored globally rather than under a conversation scope', () => {
     writeReviewStackReadingMode('diff');
-    expect(window.localStorage.getItem('workbench:review-stack-reading-mode')).toBe('diff');
+    expect(readReviewStackDiffPreferences()).toEqual({ readingMode: 'diff', wrapLongLines: false, ignoreWhitespace: false });
     expect(window.localStorage.getItem('workbench:review-stack-selections')).toBeNull();
+  });
+
+  it('keeps display toggles with the reading mode and reads legacy mode-only values', () => {
+    window.localStorage.setItem('workbench:review-stack-reading-mode', 'split');
+    expect(readReviewStackDiffPreferences()).toEqual({ readingMode: 'split', wrapLongLines: false, ignoreWhitespace: false });
+
+    writeReviewStackDiffPreferences({ readingMode: 'final', wrapLongLines: true, ignoreWhitespace: true });
+    expect(readReviewStackDiffPreferences()).toEqual({ readingMode: 'final', wrapLongLines: true, ignoreWhitespace: true });
   });
 });
 
