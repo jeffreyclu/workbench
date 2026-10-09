@@ -13,4 +13,4 @@ Read these rows first, then open only matching files. Entry counts are generated
 | `workbench-operating-practices.md` | 79 | workbench | core | task queue stack; artifact publishing | `verification-and-debugging-method.md` |
 | `workbench-product-decisions.md` | 89 | workbench | core | ProjectColorDot; /api/realtime | `workbench-frontend-lessons.md` |
 | `working-with-jeffrey.md` | 41 | portable | core | Jeffrey voice; ownership confirmation | `engineering-standards.md` |
-| `writer-context.md` | 35 | writer | context | Writer connectors; PLUTO exclusion | — |
+| `writer-context.md` | 36 | writer | context | Writer connectors; PLUTO exclusion | — |
