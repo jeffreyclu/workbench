@@ -47,6 +47,17 @@ describe('CreateTask draft recovery', () => {
     expect(restored.result.current.draft).toEqual(completedDraft);
   });
 
+  it('keeps drafts separate between Attention and Workbench task contexts', () => {
+    const attention = renderHook(() => useNewTaskDraft('attention', '', null));
+    const workbench = renderHook(() => useNewTaskDraft('workbench', 'Workbench', null));
+
+    act(() => attention.result.current.updateDraft({ title: 'Attention task', description: 'Attention notes' }));
+    act(() => workbench.result.current.updateDraft({ title: 'Workbench task', description: 'Workbench notes' }));
+
+    expect(readNewTaskDraft('attention')).toMatchObject({ title: 'Attention task', description: 'Attention notes' });
+    expect(readNewTaskDraft('workbench')).toMatchObject({ title: 'Workbench task', description: 'Workbench notes', projectName: 'Workbench' });
+  });
+
   it('restores the saved form after an accidental close', async () => {
     const saved: NewTaskDraft = {
       mode: 'ai',
