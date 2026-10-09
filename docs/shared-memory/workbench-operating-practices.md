@@ -813,3 +813,15 @@ Reviewed 2026-10-08 (commit cbdd159). Agent session hosts are detached and survi
 ## <a id="66"></a>66. Production code must run on the live runtime's Node (22.19), not the newer Node a run happens to use
 
 Observed 2026-10-08: run a9b1a134 wrote migration 098 using `DatabaseSync.enableDefensive`, which exists in the Node under `~/.hermes/node` that Workbench runs spawn with but not in Node 22.19, which the live gateway and releases run on. Its tests passed in the run and failed in the verify worktree; unguarded, the next promotion's preflight would have crashed on migration. Rule: before landing, run `npm run typecheck` and the touched tests with the live runtime's Node (`/Users/jeffrey.lu/.nvm/versions/node/v22.19.0/bin/node`, what `ps` shows for the :5180 gateway), and apply any new migration to a `.backup` copy of `data/workbench.db` on that Node. Guard optional sqlite APIs with `typeof x === "function"`. Related: [workbench-operating-practices.md#36] on migrations.
+
+### <a id="67"></a>67. Session-host turns survive a promotion; adopt them, never resend
+
+Session hosts are detached and outlive a runtime promotion, so a resumed run must adopt the host's live turn for its message/run id (turn ids are `<messageId|runId>#N`; match by the prefix via sessionTurnMessageId) rather than send a new turn. A resend is answered "busy", and the old fallback (endSharedSession plus per-run restart) killed the live turn. Also skip the `fresh` session reset when a live turn exists. Chat-linked runs are not picked up by dueWork (it only selects message_id IS NULL), so on promotion leave the message running with owner NULL and re-queue the run; recoverSharedSessionTurns claims both. Recovery's saved last_event_offset can already be past the turn's turn_started (the old runtime read part of it), so locate the start by scanning from 0 (findTurnStart). Known gap: a turn that finishes during the 15s resume delay is not recovered from the log and re-runs.
+
+*Provenance: 3b3fb87f-e84b-4775-9e97-bb22d53e6c53*
+
+### <a id="68"></a>68. Integrate commits can silently drop changed files; compare the list before reviewing
+
+Observed 2026-10-08: integrate commit 1f7afb0 (run 25921002) was titled "1 conflicting file(s) left in the run worktree". The review dispatch listed src/server/shared-room.test.ts as changed, but the commit did not contain it, so the ticket's required chat-linked promotion test never landed on main. Rule: when reviewing an integrated run, compare the dispatch's changed-files list with `git show --stat <commit>`. Report any file that was left behind as a delivery gap, not as reviewed code.
+
+*Provenance: 3b3fb87f-e84b-4775-9e97-bb22d53e6c53*

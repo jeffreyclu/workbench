@@ -973,3 +973,9 @@ Jeffrey asked to build" is.
 frames through `options.onProgress`; fetch mocks alone leave the mutation pending
 and falsely make rendered answers and errors disappear. Keep the normal fetch
 mock for cache lookups and other non-stream application requests.
+
+### <a id="43"></a>43. Keep agent-session Unix sockets on the OS temporary path
+
+Agent-session E2E databases and event logs can live inside the task worktree, but do not override `TMPDIR` to a long worktree path. `agent-session.ts` deliberately places `wb-session-*.sock` under `os.tmpdir()` because Unix socket paths are length-limited; forcing the socket into a nested Workbench worktree produced `listen EINVAL` before the host could write events. Keep the database snapshot and `WORKBENCH_AGENT_SESSIONS_DIR` in the worktree while leaving the socket on the normal short OS temporary path.
+
+*Provenance: a5071a94-6704-49d5-af37-419007a98029*
