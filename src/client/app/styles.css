@@ -2568,4 +2568,24 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-notes-composer > div { display: flex; gap: 6px; }
 @media (max-width: 719px) {
   .review-notes-drawer { position: static; width: auto; max-height: none; border: 1px solid #33322c; border-radius: 7px; box-shadow: none; }
+
+/* Command palette (⌘K) and quick switcher (⌘P) */
+.command-palette-backdrop { align-items: start; padding-top: min(12vh, 110px); }
+.command-palette { display: flex; flex-direction: column; width: min(640px, 100%); max-height: min(70dvh, 600px); padding: 10px; overflow: hidden; }
+.command-palette-search { display: flex; align-items: center; gap: 9px; padding: 0 8px; margin-bottom: 8px; color: var(--muted); border-bottom: 1px solid #30302c; }
+.command-palette-search input { flex: 1; min-width: 0; height: 44px; padding: 0; color: inherit; font-size: 14px; background: transparent; border: 0; outline: 0; }
+.command-palette-results { display: flex; flex-direction: column; gap: 2px; min-height: 0; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.command-palette-option { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 10px; cursor: pointer; border-radius: 7px; }
+.command-palette-option.is-active { background: #24241f; }
+.command-palette-group { flex: none; width: 92px; color: var(--muted); font: 9px 'DM Mono'; text-transform: uppercase; letter-spacing: .04em; }
+.command-palette-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.command-palette-text strong, .command-palette-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-palette-text strong { font-size: 12px; font-weight: 600; }
+.command-palette-text small { color: var(--muted); font-size: 10px; }
+.command-palette-status { padding: 8px 10px 2px; color: var(--muted); font-size: 11px; }
+.command-palette-status:empty { display: none; }
+@media (max-width: 640px) {
+  .command-palette-backdrop { padding: 8px; }
+  .command-palette { width: 100%; max-height: calc(100dvh - 16px); }
+  .command-palette-group { display: none; }
 }
