@@ -2490,3 +2490,30 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .run-handoff-facts { color: #85877b; font: 10px 'DM Mono'; }
 .run-handoff-card summary { cursor: pointer; color: #a7ba6d; font-size: 11px; }
 .run-handoff-card ul { margin: 4px 0 0; padding-left: 18px; color: #c8c9be; font-size: 11px; }
+
+.diff-review-search-toggle { display: inline-flex; align-items: center; gap: 5px; justify-self: start; min-height: 30px; padding: 0 9px; color: #aaa9a2; border: 1px solid #353530; border-radius: 6px; background: #10110f; font: 700 10px 'DM Mono'; cursor: pointer; }
+.diff-review-search-toggle:hover { color: var(--acid); border-color: #596234; }
+.diff-review-search { display: grid; gap: 6px; padding: 8px; background: #1f1f1c; border: 1px solid #33322c; border-radius: 7px; }
+.diff-review-search-bar { display: flex; align-items: center; gap: 6px; color: #8f8e86; }
+.diff-review-search-bar input { flex: 1; min-width: 0; min-height: 30px; padding: 0 8px; color: #d8d7cf; background: #10110f; border: 1px solid #353530; border-radius: 6px; font: 500 12px 'DM Mono'; }
+.diff-review-search-bar button { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; min-height: 30px; color: #aaa9a2; background: transparent; border: 1px solid #353530; border-radius: 6px; cursor: pointer; }
+.diff-review-search-bar button:hover:not(:disabled) { color: var(--acid); border-color: #596234; }
+.diff-review-search-bar button:disabled { opacity: .4; cursor: default; }
+.diff-review-search-count { min-width: 64px; font: 500 11px 'DM Mono'; text-align: right; white-space: nowrap; }
+.diff-review-search-results { display: grid; max-height: 220px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.diff-review-search-result { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr); gap: 10px; width: 100%; padding: 4px 8px; color: #c9c8c1; text-align: left; background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
+.diff-review-search-result:hover, .diff-review-search-result[aria-current='true'] { background: #2a2a26; }
+.diff-review-search-result-file { overflow: hidden; color: #8f8e86; font: 500 11px 'DM Mono'; text-overflow: ellipsis; white-space: nowrap; }
+.diff-review-search-result code { overflow: hidden; font: 12px var(--code-font); text-overflow: ellipsis; white-space: nowrap; }
+.diff-review-search-result.kind-addition code { color: #8fb59c; }
+.diff-review-search-result.kind-deletion code { color: #c9a3a7; }
+.diff-review-search-result mark { color: #10110f; background: var(--acid); border-radius: 2px; }
+.diff-line.search-hit { outline: 1px solid var(--acid); outline-offset: -1px; box-shadow: inset 3px 0 0 var(--acid); }
+@media (max-width: 720px) {
+  .diff-review-search-toggle { min-height: 44px; padding: 0 14px; }
+  .diff-review-search-bar { flex-wrap: wrap; }
+  .diff-review-search-bar input { flex-basis: 100%; min-height: 44px; font-size: 16px; }
+  .diff-review-search-bar button { min-width: 44px; min-height: 44px; }
+  .diff-review-search-count { flex: 1; text-align: left; }
+  .diff-review-search-result { grid-template-columns: 1fr; gap: 2px; min-height: 44px; padding: 8px; }
+}

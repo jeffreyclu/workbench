@@ -99,7 +99,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode = 'diff', modeTitle, onSelect, onOpenDetail, onOpenLinesDetail, onToggleReadingMode }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode = 'diff', modeTitle, searchHit = null, onSelect, onOpenDetail, onOpenLinesDetail, onToggleReadingMode }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -137,6 +137,11 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   /** Overrides the mode button's tooltip for a surface that cycles more modes
    * than this pane draws. Omitted, the button reads exactly as it always has. */
   modeTitle?: string;
+  /** The `data-line-key` of the line a find-in-diff result named. It is drawn
+   * highlighted, and the selection scroll lands on it rather than on the top
+   * of its block, so a search result is the line itself and not just the
+   * change around it. */
+  searchHit?: string | null;
   onSelect: (decisionId: string) => void;
   onOpenDetail?: (decisionId: string, anchor: HTMLElement) => void;
   /** Fired when the reviewer highlights code in this pane and presses the
@@ -152,6 +157,10 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
 }) {
   const activeBlock = useRef<HTMLElement | null>(null);
   const lastSelection = useRef<string | null>(null);
+  // Read inside the selection scroll rather than listed as its dependency: a
+  // search jump always bumps `selectionTick`, which is what re-runs that scroll.
+  const searchHitRef = useRef(searchHit);
+  searchHitRef.current = searchHit;
   const diffBody = useRef<HTMLDivElement | null>(null);
   const [peekDecisionId, setPeekDecisionId] = useState<string | null>(null);
   // Which collapsed deletion runs are open. A marker that only counts lines
@@ -338,7 +347,9 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         block.classList.add('handle-pulse');
       }
       if (block) {
-        const target = landing(block);
+        const hitKey = searchHitRef.current;
+        const hitRow = hitKey ? Array.from(body.querySelectorAll<HTMLElement>('[data-line-key]')).find((row) => row.dataset.lineKey === hitKey) : undefined;
+        const target = landing(hitRow ?? block);
         if (issued === null || Math.abs(target - issued) > 1) {
           // A correction mid-flight snaps rather than animating again: it is a
           // small distance, and a second animation would fight the first.
@@ -586,11 +597,11 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
                     <span><SyntaxHighlight code={removed.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
                   </div>)}
                 </div>
-                : <div key={row.line.key} className={`diff-line final ${row.line.kind}`} data-line-key={row.line.key} data-decision-id={decisionId}>
+                : <div key={row.line.key} className={`diff-line final ${row.line.kind}${row.line.key === searchHit ? ' search-hit' : ''}`} data-line-key={row.line.key} data-decision-id={decisionId}>
                   <span>{row.line.newLine ?? ''}</span>
                   <span><SyntaxHighlight code={row.line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
                 </div>)
-              : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}`} data-line-key={line.key} data-decision-id={decisionId}>
+              : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}${line.key === searchHit ? ' search-hit' : ''}`} data-line-key={line.key} data-decision-id={decisionId}>
                 <span>{line.oldLine ?? ''}</span>
                 <span>{line.newLine ?? ''}</span>
                 <span><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
