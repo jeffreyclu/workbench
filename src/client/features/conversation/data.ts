@@ -5,6 +5,8 @@ export const conversationQueryKeys = {
   search: (query: string) => ['shared-conversation-search', query] as const,
   messages: (conversationId: string | null) => ['shared-messages', conversationId] as const,
   agentEvents: (conversationId: string | null) => ['shared-agent-events', conversationId] as const,
+  // Under 'shared-agent-events' so the realtime message events that refresh stream events refresh this too.
+  terminalMirror: (conversationId: string | null, agent: 'claude' | 'codex') => ['shared-agent-events', conversationId, 'terminal-mirror', agent] as const,
   rail: (view: 'active' | 'archive') => ['shared-conversations', view] as const,
 };
 

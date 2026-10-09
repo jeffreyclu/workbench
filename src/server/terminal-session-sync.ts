@@ -8,7 +8,7 @@ import type { WorkbenchDatabase } from './database.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent } from './realtime.js';
 import { projectKey } from '../shared/project-name.js';
 import { isManagedRunWorktree } from './run-worktree.js';
-import type { AgentStreamEvent } from '../shared/contracts.js';
+import type { AgentStreamEvent, TerminalLine } from '../shared/contracts.js';
 
 /**
  * Mirrors Claude Code and Codex sessions that Jeffrey starts in a terminal
@@ -813,4 +813,52 @@ export function applyTerminalHookEvent(database: WorkbenchDatabase, payload: Ter
     database.exec('ROLLBACK;');
     throw error;
   }
+}
+
+export type TerminalMirror = { provider: TerminalProvider; sessionId: string };
+
+/** The terminal session a conversation mirrors, from the hook bridge or a transcript import; null when Workbench's own sessions are the only source. */
+export function readTerminalMirror(database: WorkbenchDatabase, conversationId: string, provider: TerminalProvider): TerminalMirror | null {
+  const hooked = database.prepare("SELECT session_id FROM terminal_hook_sessions WHERE conversation_id = ? AND provider = ? AND status = 'terminal' ORDER BY created_at DESC LIMIT 1")
+    .get(conversationId, provider) as { session_id: string } | undefined;
+  if (hooked) return { provider, sessionId: hooked.session_id };
+  // A hook-bridged import is marked skipped, but its conversation is still the mirror.
+  const imported = database.prepare("SELECT session_id FROM terminal_session_imports WHERE conversation_id = ? AND provider = ? AND (status = 'terminal' OR skip_reason = 'hook bridge') ORDER BY created_at DESC LIMIT 1")
+    .get(conversationId, provider) as { session_id: string } | undefined;
+  return imported ? { provider, sessionId: imported.session_id } : null;
+}
+
+const MAX_MIRRORED_LINES = 500;
+
+/**
+ * A mirrored conversation as terminal lines, in order: each prompt, the tool
+ * lines streamed onto its reply, then the completed reply. Offsets are line
+ * positions; a reply that finishes late shifts later positions, so callers
+ * replace their lines with this list instead of appending.
+ */
+export function readMirroredTerminalLines(database: WorkbenchDatabase, conversationId: string, provider: TerminalProvider): TerminalLine[] {
+  const messages = database.prepare(`SELECT id, author, body, status, created_at, completed_at FROM shared_messages
+    WHERE conversation_id = ? AND author IN ('jeffrey', ?) ORDER BY created_at, rowid`).all(conversationId, provider) as
+    Array<{ id: string; author: string; body: string; status: string; created_at: string; completed_at: string | null }>;
+  const events = database.prepare(`SELECT events.message_id, events.kind, events.detail, events.created_at FROM agent_stream_events events
+    JOIN shared_messages messages ON messages.id = events.message_id
+    WHERE messages.conversation_id = ? ORDER BY events.created_at, events.rowid`).all(conversationId) as
+    Array<{ message_id: string; kind: AgentStreamEvent['kind']; detail: string; created_at: string }>;
+  const eventsByMessage = new Map<string, typeof events>();
+  for (const event of events) eventsByMessage.set(event.message_id, [...(eventsByMessage.get(event.message_id) ?? []), event]);
+
+  const lines: Omit<TerminalLine, 'offset'>[] = [];
+  for (const message of messages) {
+    if (message.author === 'jeffrey') {
+      lines.push({ at: message.created_at, kind: 'host', text: `> ${message.body}` });
+      continue;
+    }
+    for (const event of eventsByMessage.get(message.id) ?? []) {
+      lines.push({ at: event.created_at, kind: event.kind === 'decision' ? 'text' : 'tool', text: event.kind === 'decision' ? event.detail : `● ${event.detail}` });
+    }
+    // A still-running reply carries a "working…" placeholder, not a reply.
+    if (message.status === 'completed' && !message.body.startsWith('working…')) lines.push({ at: message.completed_at ?? message.created_at, kind: 'text', text: message.body });
+  }
+  const start = Math.max(0, lines.length - MAX_MIRRORED_LINES);
+  return lines.slice(start).map((line, index) => ({ ...line, offset: start + index }));
 }

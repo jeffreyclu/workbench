@@ -13,9 +13,9 @@ const line = (offset: number, kind: TerminalLine['kind'], text: string): Termina
 const renderPanel = (props: Partial<Parameters<typeof TerminalPanel>[0]> = {}) => render(<TerminalPanel conversationId="c1" agent="claude" lines={[]} session={null} error={null} {...props} />);
 
 describe('TerminalPanel', () => {
-  it('shows an empty state with the attach command before any session exists', () => {
+  it('says plainly that no live session exists yet', () => {
     renderPanel({ session: session({ state: 'none', pid: null, model: null, providerSessionId: null }) });
-    expect(screen.getByText('No session output yet. Send a message to start one.')).toBeInTheDocument();
+    expect(screen.getByText('No live session for this conversation yet. The next Claude or Codex reply starts one.')).toBeInTheDocument();
     expect(screen.getByDisplayValue('npm run session:attach -- c1 claude')).toBeInTheDocument();
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
@@ -32,6 +32,18 @@ describe('TerminalPanel', () => {
     renderPanel({ session: session({ state: 'stopped', pid: null, stopReason: 'idle' }), lines: [line(0, 'host', '· stopped')] });
     expect(screen.getByRole('note')).toHaveTextContent('Session stopped: idle');
     expect(screen.queryByText(/Do not run/)).not.toBeInTheDocument();
+  });
+
+  it('renders mirrored terminal activity under a header that says Workbench does not control the process', () => {
+    renderPanel({
+      mirror: { provider: 'claude', sessionId: 'sess-9' },
+      session: session({ state: 'none', pid: null, model: null, providerSessionId: 'sess-9' }),
+      lines: [line(0, 'host', '> fix it'), line(1, 'tool', '● Read: a.ts'), line(2, 'text', 'Fixed.')],
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Mirrored from your terminal (session sess-9) · Workbench does not control this process');
+    expect(screen.getByLabelText('claude session output').textContent).toBe('> fix it\n● Read: a.ts\nFixed.\n');
+    expect(screen.queryByDisplayValue(/session:attach/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
 
   it('surfaces a read failure', () => {

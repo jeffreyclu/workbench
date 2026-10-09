@@ -13,7 +13,7 @@ export function SessionTerminal({ conversationId }: { conversationId: string }) 
       <div className="conversation-surface-tabs" role="group" aria-label="Terminal agent">
         {AGENTS.map((name) => <button key={name} type="button" aria-pressed={agent === name} onClick={() => setAgent(name)}>{name === 'claude' ? 'Claude' : 'Codex'}</button>)}
       </div>
-      <TerminalPanel conversationId={conversationId} agent={agent} lines={terminal.lines} session={terminal.session} error={terminal.error} />
+      <TerminalPanel conversationId={conversationId} agent={agent} lines={terminal.lines} session={terminal.session} error={terminal.error} mirror={terminal.mirror} />
     </div>
   );
 }

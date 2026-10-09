@@ -1360,6 +1360,12 @@ export interface TerminalSnapshot {
   session: TerminalSessionInfo;
   lines: TerminalLine[];
   nextOffset: number;
+  /**
+   * Set when the conversation mirrors a terminal session Jeffrey started himself, so Workbench
+   * owns no process. `lines` is then the whole mirrored activity (offset is ignored) and
+   * `nextOffset` is its line count.
+   */
+  mirror?: { provider: 'claude' | 'codex'; sessionId: string } | null;
 }
 
 /** The exact memory query and matches behind a reply's retrievedMemoryCount, fetched on demand when the memory badge is clicked. */

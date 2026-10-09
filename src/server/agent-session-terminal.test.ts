@@ -8,6 +8,7 @@ import { createApp } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { closeTestServer } from './test-http-harness.js';
 import { e2eRuntimeCapabilities } from './runtime-capabilities.js';
+import { applyTerminalHookEvent } from './terminal-session-sync.js';
 import { MAX_TERMINAL_LINE_CHARS, type TerminalSnapshot } from './agent-session-terminal.js';
 
 describe('session terminal tail route', () => {
@@ -88,6 +89,39 @@ describe('session terminal tail route', () => {
     const snapshot = await tail(1_000_000);
     expect(snapshot.lines).toEqual([]);
     expect(snapshot.nextOffset).toBeLessThan(1_000_000);
+  });
+
+  it('mirrors a hook-bridged terminal conversation as ordered prompt, tool and reply lines', async () => {
+    const hook = (name: 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'Stop', extra: Record<string, unknown>) =>
+      applyTerminalHookEvent(database, { provider: 'claude', hook_event_name: name, session_id: 'sess-mirror', cwd: '/tmp/x', ...extra } as never);
+    const first = hook('UserPromptSubmit', { prompt_id: 'p1', prompt: 'Inspect a.ts' });
+    if (first.status !== 'applied') throw new Error('hook skipped');
+    hook('PreToolUse', { tool_use_id: 't1', tool_name: 'Read', tool_input: { file_path: 'a.ts' } });
+    const running = await (await fetch(`${baseUrl}/api/shared/conversations/${first.conversationId}/agent-sessions/claude/terminal`)).json() as TerminalSnapshot;
+    expect(running.mirror).toEqual({ provider: 'claude', sessionId: 'sess-mirror' });
+    expect(running.lines.map((line) => [line.kind, line.text])).toEqual([['host', '> Inspect a.ts'], ['tool', '● Read: {"file_path":"a.ts"}']]);
+
+    hook('Stop', { prompt_id: 'p1', last_assistant_message: 'It is fine.' });
+    hook('UserPromptSubmit', { prompt_id: 'p2', prompt: 'Thanks' });
+    const done = await (await fetch(`${baseUrl}/api/shared/conversations/${first.conversationId}/agent-sessions/claude/terminal`)).json() as TerminalSnapshot;
+    expect(done.lines.map((line) => line.text)).toEqual(['> Inspect a.ts', '● Read: {"file_path":"a.ts"}', 'It is fine.', '> Thanks']);
+    expect(done.lines.map((line) => line.offset)).toEqual([0, 1, 2, 3]);
+    expect(done.nextOffset).toBe(4);
+    expect(done.session).toMatchObject({ state: 'none', pid: null, providerSessionId: 'sess-mirror' });
+
+    const codex = await (await fetch(`${baseUrl}/api/shared/conversations/${first.conversationId}/agent-sessions/codex/terminal`)).json() as TerminalSnapshot;
+    expect(codex.lines).toEqual([]);
+    expect(codex.mirror).toBeUndefined();
+  });
+
+  it('mirrors a transcript-imported conversation and prefers a hosted log when one exists', async () => {
+    database.prepare(`INSERT INTO terminal_session_imports (transcript_path, provider, session_id, status, conversation_id, import_since, created_at, updated_at)
+      VALUES ('/tmp/rollout.jsonl', 'claude', 'sess-import', 'terminal', ?, 'then', 'then', 'then')`).run(conversationId);
+    expect((await tail()).mirror).toEqual({ provider: 'claude', sessionId: 'sess-import' });
+    writeFileSync(eventsPath, record({ source: 'host', type: 'turn_started', turnId: 't1', prompt: 'hosted' }));
+    const hosted = await tail(0);
+    expect(hosted.mirror).toBeUndefined();
+    expect(hosted.lines.map((line) => line.text)).toEqual(['> hosted']);
   });
 
   it('rejects a bad offset, unknown agent, and unknown conversation', async () => {

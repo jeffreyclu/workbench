@@ -1,6 +1,7 @@
 import type { TerminalLine, TerminalSessionInfo, TerminalSnapshot } from '../shared/contracts.js';
 import type { WorkbenchDatabase } from './database.js';
 import { readableAgentEvent } from './agent-runner.js';
+import { readMirroredTerminalLines, readTerminalMirror } from './terminal-session-sync.js';
 import { readAgentSessionStatus, readSessionEventsFromFile, type AgentSessionEvent, type AgentSessionKey, type AgentSessionState } from './agent-session.js';
 
 export type { TerminalLine, TerminalSessionInfo, TerminalSnapshot };
@@ -50,6 +51,14 @@ export function readTerminalSnapshot(database: WorkbenchDatabase, key: AgentSess
   const status = readAgentSessionStatus(key);
   const row = database.prepare('SELECT model, state, provider_session_id FROM agent_sessions WHERE conversation_id = ? AND agent = ?').get(key.conversationId, key.agent) as
     { model: string | null; state: AgentSessionState; provider_session_id: string | null } | undefined;
+  if (!status && !row && nextOffset === 0) {
+    // No agent_sessions row means Workbench does not own a process here; a mirrored terminal session still has activity to show.
+    const mirror = readTerminalMirror(database, key.conversationId, key.agent);
+    if (mirror) {
+      const lines = readMirroredTerminalLines(database, key.conversationId, key.agent);
+      return { session: { state: 'none', pid: null, model: null, providerSessionId: mirror.sessionId, stopReason: null }, lines, nextOffset: lines.length, mirror };
+    }
+  }
   return {
     session: {
       state: status?.state ?? row?.state ?? 'none',
