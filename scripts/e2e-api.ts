@@ -5,6 +5,10 @@ import { WorkItemRepository } from '../src/server/repository.js';
 import { classificationForKind } from '../src/server/agent-runner.js';
 import { e2eRuntimeCapabilities } from '../src/server/runtime-capabilities.js';
 import { createServer } from 'node:http';
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { applyTerminalHookEvent } from '../src/server/terminal-session-sync.js';
 import {
   attachRealtimeServer,
   publishRealtimeMessagesEvent,
@@ -13,6 +17,9 @@ import {
 import { createApplicationSocketHandler } from '../src/server/socket-application.js';
 
 const port = Number(process.env.PORT ?? 45176);
+// Session logs would otherwise resolve next to ./data/workbench.db, the live runtime's directory.
+const sessionsDirectory = process.env.WORKBENCH_AGENT_SESSIONS_DIR?.trim() || mkdtempSync(join(tmpdir(), 'workbench-e2e-sessions-'));
+process.env.WORKBENCH_AGENT_SESSIONS_DIR = sessionsDirectory;
 // Always an in-memory, freshly migrated database: Playwright runs must never
 // touch data/workbench.db or leave state behind between runs.
 const database = openDatabase(':memory:');
@@ -73,6 +80,22 @@ harness.get('/api/github/pull-request-diff', (request, response) => {
 harness.post('/api/e2e/commit-and-push', parseHarnessJson, (request, response) => {
   if (request.body?.fail) return response.status(502).json({ error: 'Commit created, but push failed. remote: permission denied' });
   response.json({ result: { committed: true, pushed: true, commit: 'e2e1234' } });
+});
+// Terminal drawer fixtures: a hosted session is an events.jsonl (+ status.json) on disk,
+// a mirrored one is hook events recorded in the database.
+harness.post('/api/e2e/session-events', parseHarnessJson, (request, response) => {
+  const { conversationId, agent, records = [], status } = request.body ?? {};
+  if (!/^[A-Za-z0-9_-]+$/.test(String(conversationId)) || !['claude', 'codex'].includes(agent)) return response.status(400).json({ error: 'Invalid session key.' });
+  const directory = join(sessionsDirectory, conversationId, agent);
+  mkdirSync(directory, { recursive: true });
+  if (status) writeFileSync(join(directory, 'status.json'), JSON.stringify({ conversationId, agent, ...status }));
+  appendFileSync(join(directory, 'events.jsonl'), records.map((record: unknown) => `${JSON.stringify(record)}\n`).join(''));
+  response.status(201).json({ directory });
+});
+harness.post('/api/e2e/terminal-hook-events', parseHarnessJson, (request, response) => {
+  const results = (request.body?.events ?? []).map((event: Parameters<typeof applyTerminalHookEvent>[1]) => applyTerminalHookEvent(database, event));
+  for (const result of results) if (result.status === 'applied' && result.changed) publishRealtimeMessagesEvent(result.conversationId);
+  response.status(201).json({ results });
 });
 harness.use(app);
 
