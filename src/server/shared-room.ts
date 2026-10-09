@@ -1375,6 +1375,12 @@ export function latestHumanMessageForSharedReply(thread: SharedMessage[]): strin
 export function dispatchingMessageForSharedReply(thread: SharedMessage[], dispatchGroupId?: string | null): SharedMessage | null {
   const dispatched = dispatchGroupId ? thread.find((message) => message.id === dispatchGroupId) : undefined;
   if (dispatched && (dispatched.author === 'jeffrey' || assistantDispatcher(dispatched))) return dispatched;
+  // A reply bound to a dispatching message never falls back to Jeffrey's
+  // latest message: on a retry after many newer turns, that message could be
+  // an unrelated instruction such as "push it", and answering it would also
+  // hand its permission to a turn an assistant started. Callers load the
+  // bound message by id instead; a missing one fails closed.
+  if (dispatchGroupId) return null;
   return thread.filter((message) => message.author === 'jeffrey').at(-1) ?? null;
 }
 
@@ -2206,7 +2212,12 @@ export async function replyInSharedRoom(
     // The dispatching message is this turn's request. Jeffrey's earlier
     // messages stay in `thread` as context, but only a message he wrote
     // himself can carry an external-action capability.
-    const dispatchingMessage = dispatchingMessageForSharedReply(thread, target.dispatchGroupId);
+    // The thread holds only the newest 100 messages; the bound message is
+    // loaded by id so a retry after a long conversation still answers it.
+    const boundMessage = target.dispatchGroupId ? repository.getSharedMessageById(target.dispatchGroupId) : null;
+    const dispatchingMessage = boundMessage && (boundMessage.author === 'jeffrey' || assistantDispatcher(boundMessage))
+      ? boundMessage
+      : dispatchingMessageForSharedReply(thread, target.dispatchGroupId);
     const currentRequest = dispatchingMessage?.body ?? '';
     const dispatchedBy = assistantDispatcher(dispatchingMessage);
     const precedingUserMessage = precedingHumanMessageForSharedReply(thread);

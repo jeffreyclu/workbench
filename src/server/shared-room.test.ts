@@ -15,7 +15,7 @@ import { ensureSession, readAgentSessionStatus, sessionExternalActionGuard, subm
 import { fakeAgentDirectory } from './test-fake-agent.js';
 import { HEARTBEAT_MS, LEASE_MS, OWNER_ID } from './scheduler.js';
 import { captureGateState, CAPTURE_GATE_PROMPT } from './capture-gate.js';
-import { observedEventsFromSessionLog, accountProfileForSharedReply, isFanOutReply, persistentSessionsEnabled, usesPersistentSession, usesTaskRunSession, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, SESSION_TURN_WAITING_REASON, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { dispatchingMessageForSharedReply, observedEventsFromSessionLog, accountProfileForSharedReply, isFanOutReply, persistentSessionsEnabled, usesPersistentSession, usesTaskRunSession, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, recoverSharedSessionTurns, SESSION_TURN_WAITING_REASON, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -1943,4 +1943,23 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       else process.env.WORKBENCH_PERSISTENT_SESSIONS = saved;
     }
   }, 30_000);
+});
+
+describe('dispatchingMessageForSharedReply', () => {
+  const message = (id: string, author: 'jeffrey' | 'claude' | 'codex', body: string) => ({ id, author, body } as unknown as Parameters<typeof dispatchingMessageForSharedReply>[0][number]);
+
+  it('returns the bound message when it is in the thread', () => {
+    const thread = [message('m1', 'jeffrey', 'push it'), message('m2', 'claude', 'review X')];
+    expect(dispatchingMessageForSharedReply(thread, 'm2')?.body).toBe('review X');
+  });
+
+  it('fails closed instead of falling back to Jeffrey when the bound message is outside the thread', () => {
+    const thread = [message('m1', 'jeffrey', 'push it')];
+    expect(dispatchingMessageForSharedReply(thread, 'missing')).toBeNull();
+  });
+
+  it('still uses Jeffrey\'s latest message when the reply has no dispatching message', () => {
+    const thread = [message('m1', 'jeffrey', 'first'), message('m2', 'jeffrey', 'second')];
+    expect(dispatchingMessageForSharedReply(thread, null)?.body).toBe('second');
+  });
 });
