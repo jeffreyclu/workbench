@@ -865,6 +865,7 @@ describe('WorkspaceDiffView pull-request source', () => {
 
     await findSelectedDecision('Changes behavior in src/page-1.ts.');
     fireEvent.click(screen.getByRole('button', { name: 'Diff' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Split' }));
     fireEvent.click(screen.getByRole('button', { name: 'Final code' }));
 
     expect(await screen.findByText('after')).toBeInTheDocument();
@@ -973,6 +974,9 @@ describe('WorkspaceDiffView readings and settled changes', () => {
 
     // Changes keeps the unified diff as its default reading.
     expect(await screen.findByRole('button', { name: 'Diff' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'd' });
+    expect(await screen.findByRole('button', { name: 'Split' })).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'd' });
     expect(await screen.findByRole('button', { name: 'Final code' })).toBeInTheDocument();

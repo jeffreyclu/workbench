@@ -5,7 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildFileDiffHunks, type ReviewDecision } from './logic.js';
 import { DiffReviewFileDiffPane } from './file-diff-pane.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+function stubPhoneWidth(phone: boolean) {
+  vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: phone && query === '(max-width: 719px)', media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+}
 
 const patch = [
   '@@ -1,4 +1,4 @@ function example()',
@@ -467,5 +474,78 @@ describe('final-state reading mode', () => {
   it('never anchors in the unified diff, so Changes is unaffected', () => {
     const { container } = renderPane(hunks[0].decisionId);
     expect(container.querySelector('.anchor')).toBeNull();
+  });
+
+  describe('side-by-side reading', () => {
+    // Two hunks, the first a rewrite with a surplus addition, the second a pure
+    // deletion, so the layout is checked across more than one block.
+    const multiPatch = [
+      '@@ -1,3 +1,4 @@ function first()',
+      ' keep();',
+      '-old();',
+      '+new();',
+      '+extra();',
+      '@@ -20,3 +21,2 @@ function second()',
+      ' tail();',
+      '-gone();',
+    ].join('\n');
+    const multiHunks = buildFileDiffHunks({ path: 'src/example.ts', patch: multiPatch, isBinary: false });
+    const multiDecisions = multiHunks.map((hunk, index) => ({ ...decision(null), id: hunk.decisionId, ordinal: index + 1 }));
+
+    const renderSplit = (searchHit: string | null = null) => render(<DiffReviewFileDiffPane
+      filePath="src/example.ts"
+      editorUrl={null}
+      hunks={multiHunks}
+      decisions={multiDecisions}
+      activeDecisionId={multiHunks[0].decisionId}
+      readingMode="split"
+      searchHit={searchHit}
+      onSelect={() => {}}
+      onToggleReadingMode={() => {}}
+    />);
+
+    const cellText = (cell: Element | null) => cell?.querySelector('.diff-line-code')?.textContent ?? null;
+
+    it('pairs before and after per row across every hunk, leaving blanks opposite a surplus', () => {
+      const { container } = renderSplit();
+      const rows = [...container.querySelectorAll('.diff-split-row')].map((row) => [cellText(row.querySelector('.left')), cellText(row.querySelector('.right'))]);
+      expect(rows).toEqual([
+        ['keep();', 'keep();'],
+        ['old();', 'new();'],
+        [null, 'extra();'],
+        ['tail();', 'tail();'],
+        ['gone();', null],
+      ]);
+      expect(container.querySelectorAll('.diff-split-cell.empty')).toHaveLength(2);
+      expect(screen.getByRole('button', { name: 'Split' })).toHaveClass('mode-split');
+    });
+
+    it('keeps find-in-diff targets reachable on the side they belong to', () => {
+      const deletionKey = multiHunks[0].lines.find((line) => line.kind === 'deletion')!.key;
+      const { container } = renderSplit(deletionKey);
+      const hit = container.querySelector('[data-line-key].search-hit');
+      expect(hit).toHaveClass('left', 'deletion');
+      const rowsFor = (key: string) => [...container.querySelectorAll<HTMLElement>('[data-line-key]')].filter((row) => row.dataset.lineKey === key);
+      expect(rowsFor(deletionKey)).toHaveLength(1);
+      // Context is drawn on both sides but is addressable once.
+      const contextKey = multiHunks[0].lines.find((line) => line.kind === 'context')!.key;
+      expect(rowsFor(contextKey)).toHaveLength(1);
+    });
+
+    it('falls back to the unified diff with a note on phone widths', () => {
+      stubPhoneWidth(true);
+      const { container } = renderSplit();
+      expect(container.querySelector('.diff-split-row')).toBeNull();
+      expect(container.querySelectorAll('.diff-line.deletion')).toHaveLength(2);
+      expect(screen.getByRole('note')).toHaveTextContent(/wider screen/i);
+      // The chosen mode is still Split, so the cycle does not skip it.
+      expect(screen.getByRole('button', { name: 'Split' })).toBeInTheDocument();
+    });
+
+    it('shows no note on wide screens', () => {
+      stubPhoneWidth(false);
+      renderSplit();
+      expect(screen.queryByRole('note')).toBeNull();
+    });
   });
 });

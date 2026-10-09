@@ -12,6 +12,8 @@ describe('review stack reading mode preference', () => {
   it('round-trips the chosen mode', () => {
     writeReviewStackReadingMode('diff');
     expect(readReviewStackReadingMode()).toBe('diff');
+    writeReviewStackReadingMode('split');
+    expect(readReviewStackReadingMode()).toBe('split');
     writeReviewStackReadingMode('final');
     expect(readReviewStackReadingMode()).toBe('final');
   });

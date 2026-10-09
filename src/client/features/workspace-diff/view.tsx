@@ -57,7 +57,7 @@ type ReviewSourceKind = 'workspace' | 'history' | 'pull-request' | 'repository' 
 
 /** One tooltip for the one key that cycles all three readings, so the button
  * never claims a two-way toggle. */
-const READING_MODE_TITLE = 'Cycle the reading: unified diff, final code, whole file (d)';
+const READING_MODE_TITLE = 'Cycle the reading: unified diff, side-by-side diff, final code, whole file (d)';
 
 function DiffSkeleton() {
   return <section className="workspace-diff" aria-label="Workspace changes loading" aria-busy="true">
@@ -439,7 +439,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // choice outranks it and survives remounting and reloading.
   const [readingMode, setReadingMode] = useState<ReviewStackReadingMode>(() => readReviewStackReadingMode() ?? 'diff');
   const toggleReadingMode = useCallback(() => {
-    const order: ReviewStackReadingMode[] = ['diff', 'final', 'file'];
+    const order: ReviewStackReadingMode[] = ['diff', 'split', 'final', 'file'];
     const next = order[(order.indexOf(readingMode) + 1) % order.length]!;
     setReadingMode(next);
     writeReviewStackReadingMode(next);
