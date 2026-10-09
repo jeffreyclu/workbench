@@ -2096,6 +2096,9 @@ describe('shared room', () => {
     fireEvent.submit(composer.closest('form')!);
 
     const retry = await screen.findByRole('button', { name: 'Retry' });
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toHaveTextContent('Could not send: Network unavailable');
     expect(composer).toHaveTextContent(draft);
     expect(document.activeElement).toBe(composer);
     fireEvent.mouseDown(retry);

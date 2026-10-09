@@ -861,9 +861,8 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
         linkedWorkItemId ? queryClient.invalidateQueries({ queryKey: ['work-item', linkedWorkItemId] }) : Promise.resolve(),
       ]);
     },
-    onError: (error, _variables, context) => {
+    onError: (_error, _variables, context) => {
       if (linkedWorkItemId && context?.previous) queryClient.setQueryData(['work-item', linkedWorkItemId], context.previous);
-      toastError('Could not send that message.', error);
     },
   });
   const approvePreview = useMutation({
@@ -1623,7 +1622,7 @@ export function SharedWorkspace({ initialConversationId, initialStackOnly = fals
             <ComposerProviderSelect value={composerSelection.dispatchTarget} accountProfile={composerSelection.accountProfile} onChange={(target) => { updateComposerPreferences({ dispatchTarget: target, aiProvider: target === 'palmyra' ? 'palmyra' : target === 'claude' ? 'claude' : 'auto', ...(target === 'palmyra' ? { executionProfile: null } : {}) }); if (linkedWorkItemId && !linkedTaskIsSelfAssigned) updateConversationOwner.mutate(target); }} disabled={selectionHydratedFor !== conversationId} />
             <button className="icon-button primary composer-send" aria-label="Send message" title="Send message" disabled={(!body.trim() && files.length === 0) || !conversationId || send.isPending || !conversationReadyToSend}>{send.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
           </div>
-          {send.error && <div className="composer-send-error" role="alert"><span>Could not send: {send.error.message}</span><button type="button" className="button secondary compact" onMouseDown={(event) => event.preventDefault()} onClick={retrySend} disabled={send.isPending}>Retry</button></div>}
+          {send.error && <div className="composer-send-error" role="status" aria-live="polite" aria-atomic="true"><span>Could not send: {send.error.message}</span><button type="button" className="button secondary compact" onMouseDown={(event) => event.preventDefault()} onClick={retrySend} disabled={send.isPending}>Retry</button></div>}
         </form></>}
         </div>
         {activePane === 'changes' && workspaceDiffScope && <div className="conversation-changes" aria-label="Conversation changes"><WorkspaceDiffView scope={workspaceDiffScope} activeWorkspacePaths={linkedWorkItem.data?.runs.filter((run) => run.status === 'queued' || run.status === 'running').flatMap((run) => run.resolvedWorkspace ? [run.resolvedWorkspace] : []) ?? []} reviewHandoff={linkedWorkItem.data?.runs.find((run) => run.reviewHandoff)?.reviewHandoff ?? null} taskIntent={linkedWorkItem.data?.item ? { title: linkedWorkItem.data.item.title, description: linkedWorkItem.data.item.description } : null} pullRequestUrlCandidates={githubCandidateUrls} onFixRequest={(prompt) => {
