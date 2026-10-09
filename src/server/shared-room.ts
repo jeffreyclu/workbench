@@ -1957,7 +1957,7 @@ function awaitPreviousSessionTurn(previous: Promise<void>, signal: AbortSignal):
   });
 }
 
-/** A session turn failure after the provider streamed its first event: the turn may already have acted. */
+/** A session turn failure after the turn appeared in the host's log: it may already have acted. */
 export class SessionTurnStartedError extends Error {
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
@@ -1965,7 +1965,7 @@ export class SessionTurnStartedError extends Error {
   }
 }
 
-/** Whether a failed session turn may be re-run on a per-run process: only if it never streamed an event. */
+/** Whether a failed session turn may be re-run on a per-run process: only if it never appeared in the log. */
 export function canFallBackToPerRun(error: unknown): boolean {
   return !(error instanceof SessionTurnStartedError);
 }
@@ -2004,7 +2004,20 @@ async function runSessionTurnAttempt(input: SharedSessionTurnInput, onStarted: (
     model: input.model,
     systemPrompt: sessionSystemPrompt(agent),
   });
-  const reattachTurnId = finishedTurn?.turnId ?? (session.reused ? liveTurnId : null);
+  // Only a turn the log has never seen may be sent. A logged turn counts as started, even with no provider event.
+  if (logged && logged.kind !== 'unsent') onStarted();
+  if (logged?.kind === 'active' && !session.reused) {
+    // The host that ran this turn is gone: replay what it logged, never re-execute.
+    const replay = createSessionTurnReader(agent, input.sink);
+    for (let offset = logged.startOffset; ;) {
+      const batch = readSessionEventsFromFile(key, offset);
+      for (const event of batch.events) if (event.turnId === logged.turnId) replay.read(event);
+      if (batch.nextOffset <= offset) break;
+      offset = batch.nextOffset;
+    }
+    throw new Error('Agent session turn failed: session host replaced mid-turn; the turn was not re-run.');
+  }
+  const reattachTurnId = finishedTurn?.turnId ?? liveTurnId;
   const guard = sessionExternalActionGuard(key);
   const stopObserving = observeExternalActionRefusals(guard, input.onRefusal, { persistent: true });
   const attempt = reattachTurnId ? Number(reattachTurnId.split('#')[1]) || 1 : (sessionTurnAttempts.get(input.messageId) ?? 0) + 1;
@@ -2022,6 +2035,10 @@ async function runSessionTurnAttempt(input: SharedSessionTurnInput, onStarted: (
         turnId,
         model: input.model,
         cwd: input.cwd,
+      }).then((sent) => { onStarted(); return sent; }, (error) => {
+        // A send that errored after the host logged the turn has still started it.
+        if (resolveSessionTurnFromLog(key, (id) => id === turnId, savedEventOffset(repository.database, key)).kind !== 'unsent') onStarted();
+        throw error;
       });
     input.signal.addEventListener('abort', cancel, { once: true });
     const steer: ActiveReplySteering = async (body) => {

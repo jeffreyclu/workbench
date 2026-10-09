@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GitHubPullRequestDiff, SharedMessage } from '../shared/contracts.js';
@@ -15,7 +15,7 @@ import { ensureSession, readAgentSessionStatus, sessionExternalActionGuard, subm
 import { fakeAgentDirectory } from './test-fake-agent.js';
 import { HEARTBEAT_MS, LEASE_MS, OWNER_ID } from './scheduler.js';
 import { captureGateState, CAPTURE_GATE_PROMPT } from './capture-gate.js';
-import { dispatchingMessageForSharedReply, observedEventsFromSessionLog, accountProfileForSharedReply, isFanOutReply, persistentSessionsEnabled, usesPersistentSession, usesTaskRunSession, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, hasLiveSessionTurn, recoverSharedSessionTurns, SESSION_TURN_WAITING_REASON, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
+import { dispatchingMessageForSharedReply, observedEventsFromSessionLog, accountProfileForSharedReply, isFanOutReply, persistentSessionsEnabled, usesPersistentSession, usesTaskRunSession, replyInSharedRoom, agentStreamEventForCodexAppServerItem, buildResumedSharedReplyPrompt, brokerPullRequestDiffEvidence, cascadeBreakerForPrompt, recoveryPromptForThread, hasLiveSessionTurn, canFallBackToPerRun, recoverSharedSessionTurns, SESSION_TURN_WAITING_REASON, repeatedUserDirectives, runSharedSessionTurn, sessionPermissionLine, sessionTurnMessage, sharedSessionHasContext, buildSharedReplyPrompt, classificationForLinkedItem, CODEX_APP_SERVER_ARGS, codexActiveContextTokensFromAppServerEvent, codexAppServerInitialRequest, codexFinalReply, codexThreadBootstrapRequest, codexTurnStartParams, codexUsageFromAppServerEvent, compactConversationHistory, compactKeyPoints, compactSharedBrief, conversationConstraintEvidence, fallbackTurnGrounding, hasRejectedWorkbenchPromptEnvelope, hasUntrackedContinuationClaim, isCodexDecisionPreamble, isMissingClaudeSessionError, isTransientSqliteContention, latestHumanMessageForSharedReply, measureSharedReplyPromptSize, precedingHumanMessageForSharedReply, prepareSharedExternalEvidence, providerSessionForAuthorization, resolveSharedReplyWorkingDirectory, resolveTurnGrounding, runSteerableCodex, sharedTurnKindForMessage, threadForSharedReply, warmSharedRoomCodex } from './shared-room.js';
 
 const originalPath = process.env.PATH;
 const originalProviderFirstActivityTimeout = process.env.WORKBENCH_PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS;
@@ -1507,6 +1507,43 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       .map((event) => `${event.type}:${event.turnId}`);
   };
 
+  it('fails an active logged turn whose host was replaced, without resending it', async () => {
+    const conversation = repository.createConversation('Room');
+    const key = { conversationId: conversation.id, agent: 'claude' as const };
+    const session = await ensureSession(database, { ...key, cwd: root });
+    await submitTurn(database, session, { prompt: 'slow replaced', turnId: 'replaced-message#1' });
+    const old = readAgentSessionStatus(key)!;
+    process.kill(old.hostPid, 'SIGKILL');
+    await waitFor(() => { try { process.kill(old.hostPid, 0); return false; } catch { return true; } });
+    const failure = await turn(conversation.id, 'replaced-message', 'slow replaced', { resume: true }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/session host replaced mid-turn/);
+    expect(canFallBackToPerRun(failure)).toBe(false);
+    expect(hostLifecycle(conversation.id)).toEqual(['turn_started:replaced-message#1']);
+  }, 30_000);
+
+  it('never falls back to a per-run process for a logged turn with no provider event', async () => {
+    const conversation = repository.createConversation('Room');
+    const key = { conversationId: conversation.id, agent: 'claude' as const };
+    const session = await ensureSession(database, { ...key, cwd: root });
+    process.kill(readAgentSessionStatus(key)!.hostPid, 'SIGKILL');
+    await waitFor(() => { try { process.kill(session.hostPid, 0); return false; } catch { return true; } });
+    const eventsFile = join(root, 'agent-sessions', conversation.id, 'claude', 'events.jsonl');
+    appendFileSync(eventsFile, `${JSON.stringify({ source: 'host', type: 'turn_started', turnId: 'quiet-message#1', prompt: 'x' })}\n${JSON.stringify({ source: 'host', type: 'turn_terminal', turnId: 'quiet-message#1', status: 'interrupted', reason: 'host stopped' })}\n`);
+    const failure = await turn(conversation.id, 'quiet-message', 'x', { resume: true }).catch((error: unknown) => error);
+    expect((failure as Error).message).toMatch(/interrupted/);
+    expect(canFallBackToPerRun(failure)).toBe(false);
+    expect(spawns().length).toBeLessThanOrEqual(2);
+  }, 30_000);
+
+  it('sends an unsent turn exactly once on resume', async () => {
+    const conversation = repository.createConversation('Room');
+    const result = await turn(conversation.id, 'fresh-message', 'plain', { resume: true });
+    expect(result.reattached).toBe(false);
+    expect(hostLifecycle(conversation.id)).toEqual(['turn_started:fresh-message#1', 'turn_terminal:fresh-message#1']);
+  }, 30_000);
+
+
   it('holds a task run behind a recovered reply on the same conversation after a restart', async () => {
     const conversation = repository.createConversation('Room');
     const message = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
@@ -1698,13 +1735,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       return { conversation, reply };
     };
 
-    it('resends the turn exactly once when the session expires before any event', async () => {
+    it('does not resend a logged turn that expired before any provider event', async () => {
       const { reply } = await expiredReply('expire-early please look');
       const finished = repository.getSharedMessageById(reply.id)!;
-      expect(finished.status).toBe('completed');
-      expect(finished.body).toContain('recovered reply');
-      // Two submissions expired before any event; the turn was resent once after the expired-session retry.
-      expect(turnLog()).toHaveLength(3);
+      expect(finished.status).toBe('failed');
+      expect(finished.body).not.toContain('recovered reply');
+      expect(turnLog()).toHaveLength(1);
     }, 60_000);
 
     it('does not resend a turn that streamed events, fails it with the provider error, and resumes on the next turn', async () => {
@@ -1889,7 +1925,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     }
   });
 
-  it('falls back to a per-run process when the session turn cannot run', async () => {
+  it('fails instead of falling back to a per-run process once the turn is in the session log', async () => {
     const saved = process.env.WORKBENCH_PERSISTENT_SESSIONS;
     delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
     // The session host and its one restart die at once; the third spawn is the per-run process and answers.
@@ -1920,10 +1956,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       const reply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
       await replyInSharedRoom(repository, 'claude', reply.id);
       const finished = repository.getSharedMessageById(reply.id)!;
-      expect(finished.error + finished.body).toContain('per-run reply');
-      expect(finished.status).toBe('completed');
-      expect(Number(readFileSync(countFile, 'utf8'))).toBe(3);
-      expect(repository.listAgentStreamEvents(conversation.id).some((event) => event.detail.includes('continuing this turn on a per-run claude process'))).toBe(true);
+      // The turn reached the session log before the provider exited, so it is failed, never re-run per-run.
+      expect(finished.status).toBe('failed');
+      expect(finished.error + finished.body).not.toContain('per-run reply');
+      expect(repository.listAgentStreamEvents(conversation.id).some((event) => event.detail.includes('continuing this turn on a per-run claude process'))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       if (saved === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;

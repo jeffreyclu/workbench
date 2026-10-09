@@ -428,15 +428,17 @@ export async function ensureSession(database: WorkbenchDatabase, input: EnsureAg
 /** Hands a turn to the host without waiting for it. Pair with awaitTurn. */
 export async function submitTurn(database: WorkbenchDatabase, session: AgentSessionKey & { socketPath: string }, input: AgentTurnInput): Promise<{ turnId: string; startOffset: number }> {
   const accepted = await hostRequest<{ turnId: string; startOffset: number }>(session.socketPath, { type: 'send-turn', ...input });
-  database.prepare("UPDATE agent_sessions SET state = 'turn', last_active_at = ? WHERE conversation_id = ? AND agent = ?")
-    .run(new Date().toISOString(), session.conversationId, session.agent);
+  // The turn's start is the latest boundary: boot recovery scans the log from here, not from the top.
+  database.prepare("UPDATE agent_sessions SET state = 'turn', last_active_at = ?, last_event_offset = ? WHERE conversation_id = ? AND agent = ?")
+    .run(new Date().toISOString(), accepted.startOffset, session.conversationId, session.agent);
   return accepted;
 }
 
 /**
  * Reads events from `fromOffset` until `turnId` (or, without one, the next
- * turn) reaches its terminal record. Progress is saved as last_event_offset
- * after every batch, so a client that restarts resumes exactly where it stopped.
+ * turn) reaches its terminal record. Only turn boundaries are saved as
+ * last_event_offset (submitTurn saves the start, the terminal record the end),
+ * so a client that restarts rescans from the latest turn, not the whole log.
  */
 export async function awaitTurn(
   database: WorkbenchDatabase,
@@ -460,8 +462,10 @@ export async function awaitTurn(
       }
     }
     offset = terminal ? terminal.endOffset : batch.nextOffset;
-    database.prepare('UPDATE agent_sessions SET last_event_offset = ? WHERE conversation_id = ? AND agent = ?')
-      .run(offset, session.conversationId, session.agent);
+    if (terminal) {
+      database.prepare('UPDATE agent_sessions SET last_event_offset = ? WHERE conversation_id = ? AND agent = ?')
+        .run(offset, session.conversationId, session.agent);
+    }
     if (terminal && turnId) {
       const status = readAgentSessionStatus(session);
       if (status) syncRow(database, session, status, { touch: true });

@@ -2042,7 +2042,7 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     expect(existsSync(join(root, 'agent-sessions', conversation.id))).toBe(false);
   }, 30_000);
 
-  it('falls back to a per-run process when the session cannot start', async () => {
+  it('fails instead of falling back to a per-run process once the turn is in the session log', async () => {
     const countFile = join(root, 'spawn-count');
     const failFirst = join(root, 'fail-first-claude.mjs');
     writeFileSync(failFirst, `
@@ -2065,9 +2065,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     process.env.CLAUDE_BIN = join(fakeDirectory, 'claude');
     const conversation = repository.createConversation('Task');
     const finished = await runIn(conversation.id, workspace('tree-fallback'), 'Implement it.');
-    expect(finished.output).toContain('per-run reply');
-    expect(finished.status).toBe('completed');
-    expect(Number(readFileSync(countFile, 'utf8'))).toBe(2);
+    // The host logged the turn before the provider exited, so it counts as started and is never re-run per-run.
+    expect(finished.output ?? '').not.toContain('per-run reply');
+    expect(finished.status).toBe('failed');
   }, 30_000);
 
   it('does not repeat a run whose session turn already streamed events before failing', async () => {
