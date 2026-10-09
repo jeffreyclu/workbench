@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, ChevronsDown, NotebookPen, Trash2, X } from 'lucide-react';
 import type { ReviewNoteAnchor, ReviewNoteFileGroup, ReviewNoteSummary, ResolvedReviewNote } from './notes-logic.js';
 
@@ -11,7 +11,9 @@ export interface PendingNote {
 /** Local review notes: a composer for the line range just chosen in the diff,
  * and every draft listed by file and line with a jump back to the code. These
  * are Workbench drafts — nothing here is sent to GitHub or any other service. */
-export const ReviewNotesDrawer = memo(function ReviewNotesDrawer({ groups, summary, pending, saveFailed, onSave, onCancelPending, onJump, onNextUnresolved, onToggleResolved, onRemove, onClose }: {
+export const ReviewNotesDrawer = memo(function ReviewNotesDrawer({ outcome, groups, summary, pending, saveFailed, onSave, onCancelPending, onJump, onNextUnresolved, onToggleResolved, onRemove, onClose }: {
+  /** The review outcome panel, shown above the notes. */
+  outcome?: ReactNode;
   groups: ReviewNoteFileGroup[];
   summary: ReviewNoteSummary;
   pending: PendingNote | null;
@@ -46,6 +48,7 @@ export const ReviewNotesDrawer = memo(function ReviewNotesDrawer({ groups, summa
       <h3><NotebookPen size={14} aria-hidden="true" /> Review notes</h3>
       <button type="button" className="review-notes-close" aria-label="Close review notes" onClick={onClose}><X size={14} aria-hidden="true" /></button>
     </header>
+    {outcome}
     <p className="review-notes-draft-label">Drafts saved in this browser. Not published to GitHub.</p>
     {saveFailed && <p className="review-notes-warning" role="alert">This browser would not store your notes; they will be lost on reload.</p>}
     <p className="review-notes-summary" role="status">

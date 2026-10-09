@@ -2574,6 +2574,26 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .review-notes-composer label { display: grid; gap: 4px; }
 .review-notes-composer textarea { width: 100%; resize: vertical; color: inherit; background: #10100f; border: 1px solid #33322c; border-radius: 6px; padding: 6px; font: inherit; }
 .review-notes-composer > div { display: flex; gap: 6px; }
+.review-outcome { display: grid; gap: 8px; padding: 10px; background: #1f1f1c; border: 1px solid #33322c; border-radius: 6px; }
+.review-outcome-status { font-size: 13px; }
+.review-outcome-status.is-approved strong { color: var(--acid); }
+.review-outcome-status.is-needs_changes strong { color: #e0a458; }
+.review-outcome-counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0; }
+.review-outcome-counts div { display: grid; gap: 2px; }
+.review-outcome-counts dt { color: #8f8e86; font-size: 10px; }
+.review-outcome-counts dd { margin: 0; font: 500 14px 'DM Mono'; }
+.review-outcome-line { color: #a9a89f; }
+.review-outcome-block h4 { margin: 4px 0; }
+.review-outcome-block ul, .review-outcome-block ol { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.review-outcome-block li { display: grid; gap: 2px; padding: 6px; border: 1px solid #33322c; border-radius: 6px; }
+.review-outcome-block li.is-active { border-color: var(--acid); }
+.review-outcome-block li button { justify-self: start; color: var(--acid); background: none; border: 0; padding: 0; cursor: pointer; font: 500 11px 'DM Mono'; overflow-wrap: anywhere; text-align: left; }
+.review-outcome-step { display: flex; gap: 6px; margin-bottom: 6px; }
+@media (max-width: 719px) {
+  .review-outcome-counts { grid-template-columns: 1fr; }
+  .review-outcome-step { flex-direction: column; }
+  .review-outcome-step .button, .review-outcome-block li button { min-height: 44px; width: 100%; }
+}
 @media (max-width: 719px) {
   .review-notes-drawer { position: static; width: auto; max-height: none; border: 1px solid #33322c; border-radius: 7px; box-shadow: none; }
 

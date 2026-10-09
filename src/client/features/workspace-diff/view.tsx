@@ -24,6 +24,8 @@ import type { DiffSearchMatch } from '../diff-review/diff-search.js';
 import { DiffReviewChangeMap } from '../diff-review/change-map.js';
 import { ReviewNotesDrawer, type PendingNote } from '../review-notes/notes-drawer.js';
 import { nextUnresolvedNote, type ResolvedReviewNote } from '../review-notes/notes-logic.js';
+import { buildReviewOutcome, stepOutcomeQueue, type LedgerVerdict, type OutcomeQueueItem } from '../review-notes/outcome-logic.js';
+import { ReviewOutcomePanel } from '../review-notes/outcome-panel.js';
 import { useReviewNotes } from '../review-notes/use-review-notes.js';
 import { AgentRunReviewHandoffCard } from '../diff-review/review-handoff-card.js';
 import { useGitHubPullRequestDiff, useGitHubPullRequestFile } from '../github-diff/hooks.js';
@@ -628,6 +630,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   // reviewer reads it in the conversation before deciding.
   const requestFix = useCallback((decision: ReviewDecision) => {
     onFixRequest?.(fixRequestPrompt(decision));
+    setFixRequestedIds((current) => new Set(current).add(decision.id));
     setDetailAnchor(null);
   }, [onFixRequest]);
 
@@ -681,6 +684,27 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     setLastJumpedNoteId(entry.note.id);
     selectDecision(decisionId);
   }, [decisions, readingMode, selectDecision, updateDiffPreferences]);
+  // Outcome panel: the session's fix requests (the handoff records no verdict,
+  // so this is the only trace of them), and the queue cursor.
+  const [fixRequestedIds, setFixRequestedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [outcomeKey, setOutcomeKey] = useState<string | null>(null);
+  const reviewOutcome = useMemo(() => buildReviewOutcome({
+    decisions, noteGroups: reviewNotes.groups, noteSummary: reviewNotes.summary, hunksByFile: noteHunksByFile, fixRequests: fixRequestedIds.size,
+  }), [decisions, fixRequestedIds, noteHunksByFile, reviewNotes.groups, reviewNotes.summary]);
+  const jumpToOutcomeItem = useCallback((item: OutcomeQueueItem) => {
+    setOutcomeKey(item.key);
+    if (item.note) jumpToNote(item.note);
+    else if (item.decisionId) selectDecision(item.decisionId);
+  }, [jumpToNote, selectDecision]);
+  const stepOutcome = useCallback((direction: 1 | -1) => {
+    const next = stepOutcomeQueue(reviewOutcome.queue, outcomeKey, direction);
+    if (next) jumpToOutcomeItem(next);
+  }, [jumpToOutcomeItem, outcomeKey, reviewOutcome.queue]);
+  const jumpToLedgerVerdict = useCallback((verdict: LedgerVerdict) => selectDecision(verdict.decisionId), [selectDecision]);
+  const jumpToFile = useCallback((filePath: string) => {
+    const decisionId = decisions.find((decision) => decision.filePaths.includes(filePath))?.id;
+    if (decisionId) selectDecision(decisionId);
+  }, [decisions, selectDecision]);
   const startNote = useCallback((target: PendingNote) => { setPendingNote(target); setNotesOpen(true); }, []);
 
   const markSelectedReviewed = useCallback(() => {
@@ -955,6 +979,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 <DiffReviewSearch files={displayedDiff.files} decisions={decisions} onJump={jumpToSearchMatch} onClose={clearSearchHit} />
                 <button type="button" className="button secondary compact review-notes-toggle" aria-expanded={notesOpen} onClick={() => setNotesOpen((open) => !open)}><NotebookPen size={13} aria-hidden="true" /> Notes{reviewNotes.summary.unresolved > 0 ? ` (${reviewNotes.summary.unresolved})` : ''}</button>
                 {notesOpen && <ReviewNotesDrawer
+                  outcome={<ReviewOutcomePanel outcome={reviewOutcome} activeKey={outcomeKey} onJumpItem={jumpToOutcomeItem} onStep={stepOutcome} onJumpDecision={jumpToLedgerVerdict} onJumpFile={jumpToFile} />}
                   groups={reviewNotes.groups}
                   summary={reviewNotes.summary}
                   pending={pendingNote}
