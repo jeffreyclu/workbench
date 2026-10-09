@@ -202,7 +202,7 @@ export function App() {
     };
     toast[notification.tone](notification.message, options);
   }, [route, agentConversationId]);
-  const { state: realtimeConnectionState, browserOffline: realtimeBrowserOffline, retryNow: retryRealtimeConnection } = useRealtimeNotifications(handleRealtimeNotification);
+  const { state: realtimeConnectionState, browserOffline: realtimeBrowserOffline, retryNow: retryRealtimeConnection, statusStripVisible: realtimeStripVisible, dismissStatusStrip: dismissRealtimeStrip } = useRealtimeNotifications(handleRealtimeNotification);
   const view = route.name === 'stack' ? route.stack : route.name === 'task' ? taskStack : route.name === 'conversations' ? 'context' : route.name;
   const { mobileNavOpen, setMobileNavOpen, isCompactNav } = useNavigation();
   const tabCounts = useTabCounts();
@@ -569,13 +569,14 @@ export function App() {
   return (
     <div className="app-shell">
       <Toaster />
-      {(realtimeBrowserOffline || realtimeConnectionState === 'reconnecting') && (
+      {realtimeStripVisible && (
         <div className="realtime-status-banner" role="status">
           <LoaderCircle className="spin" size={13} />
           {realtimeBrowserOffline
             ? 'Offline — showing cached data'
             : 'Reconnecting… showing cached data'}
           <button type="button" className="realtime-status-retry" onClick={() => retryRealtimeConnection()}>Retry now</button>
+          <button type="button" className="realtime-status-retry" aria-label="Dismiss connection status" onClick={dismissRealtimeStrip}>Dismiss</button>
         </div>
       )}
       <NavigationView

@@ -141,4 +141,21 @@ describe('realtime application hook', () => {
     expect(snapshots.at(-1)?.state).toBe('reconnecting');
     rendered.unmount();
   });
+
+  it('lets a completed handshake clear the offline hint and lets the strip be dismissed until the next outage', () => {
+    installSocket();
+    const client = new QueryClient();
+    let latest!: ReturnType<typeof useRealtimeNotifications>;
+    function RealtimeClient() { latest = useRealtimeNotifications(() => undefined); return null; }
+    const rendered = render(<QueryClientProvider client={client}><RealtimeClient /></QueryClientProvider>);
+    act(() => window.dispatchEvent(new Event('offline')));
+    expect(latest.statusStripVisible).toBe(true);
+    act(() => latest.dismissStatusStrip());
+    expect(latest.statusStripVisible).toBe(false);
+    act(() => ready(MockWebSocket.instances[0]));
+    expect(latest.browserOffline).toBe(false);
+    act(() => MockWebSocket.instances[0].close());
+    expect(latest.statusStripVisible).toBe(true);
+    rendered.unmount();
+  });
 });

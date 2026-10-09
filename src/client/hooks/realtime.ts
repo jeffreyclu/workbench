@@ -135,6 +135,10 @@ export type RealtimeConnection = {
   browserOffline: boolean;
   /** Cancels pending reconnect backoff and makes an immediate connection attempt. */
   retryNow: () => void;
+  /** True while the status strip should render: socket reconnecting or browser hint offline, unless dismissed since the last good connection. */
+  statusStripVisible: boolean;
+  /** Hides the strip until the socket next connects, so a later outage shows it again. */
+  dismissStatusStrip: () => void;
 };
 
 /**
@@ -146,6 +150,15 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
   const queryClient = useQueryClient();
   const [connectionState, setConnectionState] = useState<RealtimeConnectionState>(socketTransport.connectionState);
   const [browserOffline, setBrowserOffline] = useState(() => typeof navigator !== 'undefined' && 'onLine' in navigator ? !navigator.onLine : false);
+
+  const [stripDismissed, setStripDismissed] = useState(false);
+
+  // A completed handshake is the authority: it clears a stale browser-offline hint and re-arms the strip.
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+    setBrowserOffline(false);
+    setStripDismissed(false);
+  }, [connectionState]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -234,5 +247,8 @@ export function useRealtimeNotifications(onNotification: (notification: Realtime
 
   const retryNow = useCallback(() => socketTransport.retryNow(), []);
 
-  return { state: connectionState, browserOffline, retryNow };
+  const dismissStatusStrip = useCallback(() => setStripDismissed(true), []);
+  const statusStripVisible = !stripDismissed && (browserOffline || connectionState === 'reconnecting');
+
+  return { state: connectionState, browserOffline, retryNow, statusStripVisible, dismissStatusStrip };
 }
