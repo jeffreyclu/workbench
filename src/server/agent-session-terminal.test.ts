@@ -67,6 +67,25 @@ describe('session terminal tail route', () => {
     expect((await tail(second.nextOffset)).lines).toEqual([]);
   });
 
+  it('renders Codex app-server events: message deltas, commands with results, and a thinking marker', async () => {
+    const codexDirectory = join(root, conversationId, 'codex');
+    mkdirSync(codexDirectory, { recursive: true });
+    writeFileSync(join(codexDirectory, 'events.jsonl'), record({ source: 'host', type: 'turn_started', turnId: 't1', prompt: 'say hi' })
+      + record({ source: 'provider', turnId: 't1', event: { method: 'item/started', params: { item: { type: 'reasoning', id: 'r1' } } } })
+      + record({ source: 'provider', turnId: 't1', event: { method: 'item/completed', params: { item: { type: 'reasoning', id: 'r1' } } } })
+      + record({ source: 'provider', turnId: 't1', event: { method: 'item/started', params: { item: { type: 'commandExecution', id: 'c1', command: 'ls docs', status: 'inProgress' } } } })
+      + record({ source: 'provider', turnId: 't1', event: { method: 'item/completed', params: { item: { type: 'commandExecution', id: 'c1', command: 'ls docs', status: 'completed', aggregatedOutput: 'a.md\nb.md' } } } })
+      + record({ source: 'provider', turnId: 't1', event: { method: 'item/agentMessage/delta', params: { itemId: 'm1', delta: 'Hel' } } })
+      + record({ source: 'provider', turnId: 't1', event: { method: 'item/agentMessage/delta', params: { itemId: 'm1', delta: 'lo' } } })
+      + record({ source: 'provider', turnId: 't1', event: { method: 'item/completed', params: { item: { type: 'agentMessage', id: 'm1', text: 'Hello' } } } })
+      + record({ source: 'host', type: 'turn_terminal', turnId: 't1', status: 'completed' }));
+    const response = await fetch(`${baseUrl}/api/shared/conversations/${conversationId}/agent-sessions/codex/terminal?offset=0`);
+    expect(response.status).toBe(200);
+    const snapshot = (await response.json()) as TerminalSnapshot;
+    const texts = snapshot.lines.map((line) => `${line.kind}:${line.text}`);
+    expect(texts).toEqual(['host:> say hi', 'text:· thinking', 'tool:● command: ls docs', 'result:↳ a.md b.md', 'delta:Hel', 'delta:lo', 'text:', 'host:■ turn completed']);
+  });
+
   it('holds back a torn trailing line until it is complete', async () => {
     const whole = record({ source: 'host', type: 'turn_started', turnId: 't1', prompt: 'a' });
     writeFileSync(eventsPath, whole + '{"source":"host","ty');
