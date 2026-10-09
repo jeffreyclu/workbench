@@ -2627,6 +2627,11 @@ export class WorkItemRepository {
     return this.execution.interruptOwnedWork(ownerId, reason, options);
   }
 
+  /** Fail promoted chat replies that session recovery could not adopt (their host is gone). */
+  failUnrecoveredPromotedReplies(reason: string): ReturnType<ExecutionService['failUnrecoveredPromotedReplies']> {
+    return this.execution.failUnrecoveredPromotedReplies(reason);
+  }
+
   /** Schedule a bounded retry for a run that failed transiently. Returns false when attempts are exhausted. */
   scheduleRunRetry(id: string, ownerId: string, delayMs: number): boolean {
     return this.runs.scheduleRetry(id, ownerId, delayMs);

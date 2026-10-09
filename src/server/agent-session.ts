@@ -531,6 +531,32 @@ export async function tail(session: AgentSessionKey & { socketPath: string }, of
   }
 }
 
+/** The turn a live host is running right now, or null when it is idle, stopped, or its process is gone. */
+export function activeSessionTurnId(key: AgentSessionKey): string | null {
+  const status = readAgentSessionStatus(key);
+  return status && status.state === 'turn' && status.currentTurnId && processAlive(status.hostPid) ? status.currentTurnId : null;
+}
+
+/**
+ * The turn_started record of the session's latest turn (with this id, when given). Looks from
+ * `fromOffset` first (the common case) and falls back to the whole log, because a
+ * client that stopped mid-turn saved an offset already past the turn's start.
+ */
+export function findTurnStart(key: AgentSessionKey, turnId: string | null, fromOffset: number): AgentSessionEvent | null {
+  for (const origin of fromOffset > 0 ? [fromOffset, 0] : [0]) {
+    let found: AgentSessionEvent | null = null;
+    let offset = origin;
+    for (;;) {
+      const batch = readSessionEventsFromFile(key, offset);
+      for (const event of batch.events) if (event.source === 'host' && event.type === 'turn_started' && event.turnId && (!turnId || event.turnId === turnId)) found = event;
+      if (batch.nextOffset <= offset) break;
+      offset = batch.nextOffset;
+    }
+    if (found) return found;
+  }
+  return null;
+}
+
 /** Read-only view of the session log for the terminal panel and attach script: never touches the host. */
 export function readSessionEventsFromFile(key: AgentSessionKey, offset: number): { events: AgentSessionEvent[]; nextOffset: number } {
   return readEventsFromFile(pathsFor(key).eventsPath, offset);

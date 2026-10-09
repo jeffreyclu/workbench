@@ -2176,7 +2176,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'agent_runner' });
   repository.moveForAttention(item.id, 'bottom', `${run.agent} started ${run.kind}.`);
   repository.addActivity(item.id, run.agent, 'progress', run.waitingReason === RUNTIME_PROMOTED_WAITING_REASON
-    ? `Resumed ${run.kind} after the runtime promotion (fresh attempt in the same worktree).`
+    ? `Resumed ${run.kind} after the runtime promotion in the same worktree.`
     : `Started ${run.kind}.`);
   // The request that kicked off this run already returned (executeAgentRun
   // runs fire-and-forget), and the audit middleware's realtime event fired
@@ -2426,7 +2426,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       });
       observedRunEvents.push(...room.observedEventsFromSessionLog({ conversationId: run.conversationId, agent: sessionAgent }, sessionAgent, turn.startOffset, turn.endOffset));
       // The provider session and PID repeating across runs is the observable proof that no process was spawned.
-      repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, sessionAgent, 'usage', { providerSessionId: turn.sessionId, providerPid: turn.pid, sessionHostPid: turn.hostPid, sessionReused: turn.reused, sessionTurnId: turn.turnId });
+      repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, sessionAgent, 'usage', { providerSessionId: turn.sessionId, providerPid: turn.pid, sessionHostPid: turn.hostPid, sessionReused: turn.reused, sessionTurnId: turn.turnId, sessionReattached: turn.reattached });
+      if (turn.reattached) repository.addActivity(item.id, run.agent, 'progress', `Reattached to the ${run.kind} turn still running on its session after the runtime promotion; no new turn was sent.`);
       if (!options.followUp) {
         const sessionStartup = !turn.reused;
         if (promptSize.sessionStartup !== sessionStartup || promptSize.sessionMode !== 'persistent') {

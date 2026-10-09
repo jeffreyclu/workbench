@@ -13,7 +13,7 @@ import { attachRealtimeServer, retireRealtimeClients } from './realtime.js';
 import { createApplicationSocketHandler } from './socket-application.js';
 import { shutdownActiveAgentProcesses } from './agent-runner.js';
 import { reattachAll as reattachAgentSessions } from './agent-session.js';
-import { persistentSessionsEnabled, recoverSharedSessionTurns } from './shared-room.js';
+import { hasLiveSessionTurn, persistentSessionsEnabled, recoverSharedSessionTurns } from './shared-room.js';
 import { shutdownTurnGroundingClassifier, warmTurnGroundingClassifier } from './turn-grounding-ai.js';
 import { configureRuntimeRetirement } from './runtime-retirement.js';
 import { shutdownMemorySemanticWorker } from './memory-semantic-worker.js';
@@ -90,7 +90,9 @@ const shutdown = () => {
   // terminal state before killing child process groups so the next runtime
   // never displays ghost work for the lease-recovery grace period.
   scheduler?.stop();
-  const interrupted = repository.interruptOwnedWork(OWNER_ID, 'Workbench runtime promoted while this agent was running. Retry or continue the conversation.');
+  const interrupted = repository.interruptOwnedWork(OWNER_ID, 'Workbench runtime promoted while this agent was running. Retry or continue the conversation.', {
+    hasLiveSessionTurn: (messageId) => hasLiveSessionTurn(repository, messageId),
+  });
   for (const runId of interrupted.requeuedRunIds) {
     try {
       const run = repository.getRun(runId);

@@ -10,7 +10,7 @@ import { HEARTBEAT_MS, OWNER_ID, LEASE_MS } from './scheduler.js';
 import { publishRealtimeEvent, publishRealtimeMessagesEvent, publishRealtimeNotification } from './realtime.js';
 import { humanizeRunOutputBlocks } from '../shared/run-output.js';
 import { clearTurnCapability, createExternalActionProcessGuard, observeExternalActionRefusals, recordExternalActionRefusal, turnCapabilityFor, writeTurnCapability, type ExternalActionProcessGuard, type ExternalActionRefusal } from './external-action-command-guard.js';
-import { awaitTurn, ensureSession, interrupt, readAgentSessionStatus, readSessionEventsFromFile, resetSession, sessionExternalActionGuard, steerTurn, submitTurn, tail, type AgentSessionEvent, type AgentSessionKey, type AgentTurnResult } from './agent-session.js';
+import { activeSessionTurnId, awaitTurn, ensureSession, findTurnStart, interrupt, readAgentSessionStatus, readSessionEventsFromFile, resetSession, sessionExternalActionGuard, steerTurn, submitTurn, type AgentSessionEvent, type AgentSessionKey, type AgentTurnResult } from './agent-session.js';
 import { claimWarmProcess, hasPooledProcess, startPoolSweep, warmProcess } from './agent-pool.js';
 import { authoritativeTaskWorkspace, integrateWorkbenchRunWorktree, isolatedRunWorkspaces, type RunWorkspaceBinding } from './run-worktree.js';
 import { groundTurn } from './turn-grounding-ai.js';
@@ -1841,6 +1841,8 @@ export interface SharedSessionTurnResult extends SessionTurnSnapshot {
   pid: number | null;
   hostPid: number;
   reused: boolean;
+  /** True when this call adopted a turn already running on the host (a runtime promotion) instead of sending one. */
+  reattached: boolean;
   /** Session log byte range of this turn: where it was accepted and just past its terminal record. */
   startOffset: number;
   endOffset: number;
@@ -1976,7 +1978,12 @@ async function runSessionTurnExclusive(input: SharedSessionTurnInput): Promise<S
 async function runSessionTurnAttempt(input: SharedSessionTurnInput, onStarted: () => void): Promise<SharedSessionTurnResult> {
   const { repository, agent, conversationId } = input;
   const key = { conversationId, agent };
-  if (input.fresh) {
+  // After a runtime promotion the host is still running this message's turn:
+  // adopt it. Sending again would be refused as busy, and resetting the
+  // session to recover from that would kill the live turn.
+  const running = activeSessionTurnId(key);
+  const liveTurnId = running && sessionTurnMessageId(running) === input.messageId ? running : null;
+  if (input.fresh && !liveTurnId) {
     const existing = readAgentSessionStatus(key);
     if (existing && existing.state !== 'stopped') await resetSession(repository.database, { ...key, socketPath: existing.socketPath });
   }
@@ -1988,22 +1995,25 @@ async function runSessionTurnAttempt(input: SharedSessionTurnInput, onStarted: (
     model: input.model,
     systemPrompt: sessionSystemPrompt(agent),
   });
+  const reattachTurnId = session.reused ? liveTurnId : null;
   const guard = sessionExternalActionGuard(key);
   const stopObserving = observeExternalActionRefusals(guard, input.onRefusal, { persistent: true });
-  const attempt = (sessionTurnAttempts.get(input.messageId) ?? 0) + 1;
+  const attempt = reattachTurnId ? Number(reattachTurnId.split('#')[1]) || 1 : (sessionTurnAttempts.get(input.messageId) ?? 0) + 1;
   sessionTurnAttempts.set(input.messageId, attempt);
-  const turnId = `${input.messageId}#${attempt}`;
+  const turnId = reattachTurnId ?? `${input.messageId}#${attempt}`;
   writeTurnCapability(guard, turnCapabilityFor(input.authorization), turnId);
   const reader = createSessionTurnReader(agent, { ...input.sink, onFirstEvent: () => { onStarted(); input.sink.onFirstEvent?.(); } });
   const cancel = () => { void interrupt(session).catch(() => { /* the host may already be gone */ }); };
   try {
     if (input.signal.aborted) throw new Error('Agent run canceled.');
-    const accepted = await submitTurn(repository.database, session, {
-      prompt: input.message,
-      turnId,
-      model: input.model,
-      cwd: input.cwd,
-    });
+    const accepted = reattachTurnId
+      ? { turnId: reattachTurnId, startOffset: findTurnStart(key, reattachTurnId, savedEventOffset(repository.database, key))?.offset ?? 0 }
+      : await submitTurn(repository.database, session, {
+        prompt: input.message,
+        turnId,
+        model: input.model,
+        cwd: input.cwd,
+      });
     input.signal.addEventListener('abort', cancel, { once: true });
     const steer: ActiveReplySteering = async (body) => {
       const sent = await steerTurn(session, agent === 'codex' ? interjectionSteeringPrompt(body) : body).catch(() => ({ accepted: false }));
@@ -2024,6 +2034,7 @@ async function runSessionTurnAttempt(input: SharedSessionTurnInput, onStarted: (
       pid: status?.pid ?? session.pid,
       hostPid: session.hostPid,
       reused: session.reused,
+      reattached: Boolean(reattachTurnId),
       startOffset: accepted.startOffset,
       endOffset: turn.nextOffset,
     };
@@ -2032,6 +2043,24 @@ async function runSessionTurnAttempt(input: SharedSessionTurnInput, onStarted: (
     stopObserving();
     try { clearTurnCapability(guard, turnId); } catch { /* the session directory is gone */ }
   }
+}
+
+function savedEventOffset(database: WorkItemRepository['database'], key: AgentSessionKey): number {
+  const row = database.prepare('SELECT last_event_offset FROM agent_sessions WHERE conversation_id = ? AND agent = ?').get(key.conversationId, key.agent) as { last_event_offset: number } | undefined;
+  return row?.last_event_offset ?? 0;
+}
+
+/**
+ * Whether a live session host is running this message's turn. A runtime that is
+ * about to stop uses it to leave such work running for the next runtime to
+ * adopt, rather than failing a turn that is still in progress.
+ */
+export function hasLiveSessionTurn(repository: WorkItemRepository, messageId: string): boolean {
+  const rows = repository.database.prepare("SELECT conversation_id, agent FROM agent_sessions WHERE state != 'stopped'").all() as Array<{ conversation_id: string; agent: SessionAgent }>;
+  return rows.some((row) => {
+    const turnId = activeSessionTurnId({ conversationId: row.conversation_id, agent: row.agent });
+    return Boolean(turnId) && sessionTurnMessageId(turnId!) === messageId;
+  });
 }
 
 function sessionTerminalMessage(snapshot: SessionTurnSnapshot, turn: AgentTurnResult) {
@@ -2065,6 +2094,7 @@ export async function recoverSharedSessionTurns(repository: WorkItemRepository, 
       release();
     }
   }));
+  repository.failUnrecoveredPromotedReplies('Workbench runtime promoted and this reply\'s session turn could not be resumed. Retry or continue the conversation.');
   return recovered;
 
   async function recoverSessionRow(row: { conversation_id: string; agent: SessionAgent; last_event_offset: number }, previous: Promise<void> | undefined): Promise<void> {
@@ -2072,9 +2102,8 @@ export async function recoverSharedSessionTurns(repository: WorkItemRepository, 
     const status = readAgentSessionStatus(key);
     if (!status) return;
     const session = { ...key, socketPath: status.socketPath };
-    const { events } = await tail(session, row.last_event_offset, 0);
-    const starts = events.filter((event) => event.source === 'host' && event.type === 'turn_started' && event.turnId);
-    const last = starts.at(-1);
+    // The saved offset may already be past the turn's start (the previous runtime read part of it).
+    const last = findTurnStart(key, null, row.last_event_offset);
     if (!last?.turnId) return;
     const messageId = sessionTurnMessageId(last.turnId);
     const message = repository.getSharedMessageById(messageId);

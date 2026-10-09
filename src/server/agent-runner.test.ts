@@ -9,7 +9,7 @@ import { CACHE_READ_SOFT_LIMIT_TOKENS, type AgentRun, type WorkItem } from '../s
 import { agentSubprocessEnv } from './agent-security.js';
 import { AGENT_DEBUGGER_CONTRACT, AGENT_EXECUTION_CONTRACT, CACHE_HANDOFF_INSTRUCTION, CACHE_HANDOFF_MARKER, CLAUDE_EXECUTION_CONTRACT, EXECUTION_FIDELITY_CONTRACT, addUsage, agentEnvironmentForWorkspace, autocompactCeilingTokens, blockedPersistentForegroundCommand, cacheContinuationPrompt, checkpointActivityDetail, shouldCheckpointSession, EXTERNAL_ACTION_CONTRACT, RUNNER_SYSTEM_CONTRACT, TOOL_OUTPUT_CONTRACT, backoffDelayMs, buildPrompt, buildResumedPrompt, cancelAgentRun, claudeScopeRecoveryPrompt, classificationForKind, classifyExecution, classifyExecutionRobust, classifyExternalActionAuthorization, classifyMessageIntent, commandFor, compactPromptSection, executeAgentRun, externalActionContractForAuthorization, hasCacheHandoff, hasDeferredExecutionResponse, hasPrematureEvidenceRequest, hasProviderLifecycleActivity, hasUnverifiedCompletionClaim, hasUnsupportedClaudeScopeClaim, isAgentCapacityError, isAgentRunActive, isTransientAgentError, measurePromptSize, missingReviewPasses, providerSessionForTaskTurn, readableAgentEvent, resolveAgents, resolveExecutionProfileDecision, resolveWorkingDirectory, reviewFallbackReason, reviewPassCompletionPrompt, runAgentCommandWithFallback, selectAutoExecutionProfile, selectExecutionProfile, selectPromptExecutionProfile, selectReviewAgent, shouldContinueCacheHandoff, taskPromptContentSize, terminalExitCheckpoint, terminalExitFailure, AgentTerminalWarningError, ProviderRefusalError } from './agent-runner.js';
 import { openDatabase } from './database.js';
-import { readAgentSessionStatus } from './agent-session.js';
+import { ensureSession, readAgentSessionStatus, submitTurn } from './agent-session.js';
 import { usesPersistentSession, usesTaskRunSession } from './shared-room.js';
 import { loadPersonaFiles, parsePersona, personaBody, personaPrompt, renderClaudeAgent } from './personas.js';
 import { WorkItemRepository } from './repository.js';
@@ -1815,8 +1815,13 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return;
   }
   const text = 'Finished in ' + process.pid;
-  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
-  emit({ type: 'result', subtype: 'success', is_error: false, result: text });
+  const finish = () => {
+    emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+    emit({ type: 'result', subtype: 'success', is_error: false, result: text });
+  };
+  // A turn that outlives the runtime that submitted it.
+  if (String(message.message.content).includes('PROMOTION-SLOW-MARKER')) setTimeout(finish, 3000);
+  else finish();
 });
 `);
     const fakeDirectory = sharedFakeAgentDirectory('exit 1', `exec "${process.execPath}" "${fakeClaude}" "$@"`).directory;
@@ -1881,6 +1886,32 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(first.args).not.toContain('--resume');
     const sessionId = first.args[first.args.indexOf('--session-id') + 1];
     expect(second.args[second.args.indexOf('--resume') + 1]).toBe(sessionId);
+  }, 30_000);
+
+  it('reattaches a run resumed after a runtime promotion to the turn still running on its session', async () => {
+    const conversation = repository.createConversation('Task');
+    const directory = workspace('tree-a');
+    const task = repository.create({ title: 'Survive promotion', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Implement the change.', conversation.id);
+    // The previous runtime started the turn on the session host, then was promoted away.
+    repository.claimRun(run.id, 'previous-runtime', 60_000);
+    const session = await ensureSession(database, { conversationId: conversation.id, agent: 'claude', cwd: directory });
+    await submitTurn(database, session, { prompt: 'PROMOTION-SLOW-MARKER started by the previous runtime', turnId: `${run.id}#1` });
+    repository.interruptOwnedWork('previous-runtime', 'Runtime promoted.', { workspaceMissing: () => false, resumeDelayMs: 0 });
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'queued', waitingReason: 'runtime promoted; resuming' });
+
+    await executeAgentRun(repository, repository.getRun(run.id)!, 'next-runtime', 60_000);
+
+    const finished = repository.getRun(run.id)!;
+    expect(finished).toMatchObject({ status: 'completed' });
+    expect(spawns()).toHaveLength(1);
+    expect(finished.output).toContain(`Finished in ${spawns()[0].pid}`);
+    const lifecycle = readFileSync(join(root, 'agent-sessions', conversation.id, 'claude', 'events.jsonl'), 'utf8').split('\n').filter(Boolean)
+      .map((line) => JSON.parse(line) as { source?: string; type?: string; turnId?: string })
+      .filter((event) => event.source === 'host' && (event.type === 'turn_started' || event.type === 'turn_terminal' || event.type === 'turn_rejected'))
+      .map((event) => `${event.type}:${event.turnId}`);
+    expect(lifecycle).toEqual([`turn_started:${run.id}#1`, `turn_terminal:${run.id}#1`]);
+    expect(readAgentSessionStatus({ conversationId: conversation.id, agent: 'claude' })?.state).not.toBe('stopped');
   }, 30_000);
 
   it('keeps review runs, runs without a conversation, and other kinds off the shared session', () => {

@@ -196,26 +196,33 @@ export class ExecutionService {
    * starts a fresh attempt in the same run worktree. The restart is delayed
    * past this process's exit so the retiring scheduler cannot re-claim it.
    * Only a run whose isolated worktree is gone fails, with an explicit kind.
-   * Runs linked to a chat message and the messages themselves keep failing
-   * here; their recovery belongs to the session-turn path.
+   *
+   * A reply whose session turn is still running on its detached host
+   * (`hasLiveSessionTurn`) is not failed either: its message stays running with
+   * no owner and its run is re-queued, so the next runtime's session recovery
+   * claims both and finishes them from the host's events. Every other chat
+   * reply and linked run fails here.
    */
   interruptOwnedWork(
     ownerId: string,
     reason: string,
-    options: { workspaceMissing?: (path: string) => boolean; resumeDelayMs?: number } = {},
+    options: { workspaceMissing?: (path: string) => boolean; resumeDelayMs?: number; hasLiveSessionTurn?: (messageId: string) => boolean } = {},
   ): { runIds: string[]; messageIds: string[]; requeuedRunIds: string[]; failedRunIds: string[] } {
     const workspaceMissing = options.workspaceMissing ?? ((path: string) => isManagedRunWorktree(path) && !existsSync(path));
+    const hasLiveSessionTurn = options.hasLiveSessionTurn ?? (() => false);
     return this.unitOfWork.transaction(() => {
       const now = new Date().toISOString();
       const resumeAt = new Date(Date.now() + (options.resumeDelayMs ?? 15_000)).toISOString();
       const runs = this.database.prepare(`SELECT id, message_id, resolved_workspace FROM agent_runs WHERE status = 'running' AND owner_id = ?`)
         .all(ownerId) as Array<{ id: string; message_id: string | null; resolved_workspace: string | null }>;
-      const messageIds = (this.database.prepare(`SELECT id FROM shared_messages
+      const runningMessageIds = (this.database.prepare(`SELECT id FROM shared_messages
         WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude', 'palmyra')`).all(ownerId) as Array<{ id: string }>).map(({ id }) => id);
+      const resumableMessageIds = new Set(runningMessageIds.filter((id) => hasLiveSessionTurn(id)));
+      const messageIds = runningMessageIds.filter((id) => !resumableMessageIds.has(id));
       const requeuedRunIds: string[] = [];
       const failedRunIds: string[] = [];
       for (const run of runs) {
-        if (run.message_id) {
+        if (run.message_id && !resumableMessageIds.has(run.message_id)) {
           failedRunIds.push(run.id);
           this.database.prepare(`UPDATE agent_runs SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL WHERE id = ? AND status = 'running' AND owner_id = ?`).run(reason, now, run.id, ownerId);
         } else if (run.resolved_workspace && workspaceMissing(run.resolved_workspace)) {
@@ -229,9 +236,32 @@ export class ExecutionService {
             .run(resumeAt, RUNTIME_PROMOTED_WAITING_REASON, run.id, ownerId);
         }
       }
-      if (messageIds.length) this.database.prepare(`UPDATE shared_messages SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL
-        WHERE status = 'running' AND owner_id = ? AND author IN ('codex', 'claude', 'palmyra')`).run(reason, now, ownerId);
+      for (const id of messageIds) this.database.prepare(`UPDATE shared_messages SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+        WHERE id = ? AND status = 'running' AND owner_id = ?`).run(reason, now, id, ownerId);
+      for (const id of resumableMessageIds) this.database.prepare(`UPDATE shared_messages SET owner_id = NULL, lease_expires_at = NULL WHERE id = ? AND status = 'running' AND owner_id = ?`).run(id, ownerId);
       return { runIds: runs.map(({ id }) => id), messageIds, requeuedRunIds, failedRunIds };
+    });
+  }
+
+  /**
+   * Backstop for replies handed to session recovery by a runtime promotion
+   * (`interruptOwnedWork`): once recovery has visited every live session, a
+   * reply still waiting means its host is gone, so it fails instead of
+   * waiting forever on an owner-less running message.
+   */
+  failUnrecoveredPromotedReplies(reason: string): { runIds: string[]; messageIds: string[] } {
+    return this.unitOfWork.transaction(() => {
+      const now = new Date().toISOString();
+      const rows = this.database.prepare(`SELECT id, message_id FROM agent_runs
+        WHERE status = 'queued' AND message_id IS NOT NULL AND waiting_reason = ?`).all(RUNTIME_PROMOTED_WAITING_REASON) as Array<{ id: string; message_id: string }>;
+      const messageIds: string[] = [];
+      for (const row of rows) {
+        this.database.prepare(`UPDATE agent_runs SET status = 'failed', error = ?, completed_at = ?, waiting_reason = NULL WHERE id = ? AND status = 'queued'`).run(reason, now, row.id);
+        const changed = this.database.prepare(`UPDATE shared_messages SET status = 'failed', error = ?, completed_at = ?, owner_id = NULL, lease_expires_at = NULL
+          WHERE id = ? AND status = 'running' AND owner_id IS NULL`).run(reason, now, row.message_id).changes;
+        if (Number(changed) > 0) messageIds.push(row.message_id);
+      }
+      return { runIds: rows.map(({ id }) => id), messageIds };
     });
   }
 
