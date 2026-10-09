@@ -885,3 +885,9 @@ The session host writes turn_started on submit, before any provider event. So "l
 Node's child_process raises ENOENT with the message "spawn <cmd> ENOENT" when the `cwd` directory does not exist, as well as when the executable is not on PATH. In run 06455dde, integration reported "spawn git ENOENT" because the run worktree had been deleted. Commit 75fcb95 resolves git via the server PATH but does not check that the worktree exists, so a missing worktree would still report "spawn /usr/bin/git ENOENT". Before blaming PATH, check existsSync(cwd). Integration should return a plain "run worktree missing" outcome before it spawns git.
 
 *Provenance: 86203257-6bd9-4078-9d52-20a1b3e7874b*
+
+### <a id="79"></a>79. Terminal launcher scripts must run from the checkout and carry the user's cwd separately
+
+Scripts that import src/server modules (agent-session.ts pulls in shared-room.ts, which loads personas) resolve docs/personas and ./data from process.cwd() at import time. Run from any other directory, they crash with ENOENT on docs/personas. The `workbench` shim therefore cds into the checkout and passes the user's directory as WORKBENCH_LAUNCH_CWD; `npm run` also starts in the package root, so INIT_CWD is the fallback. Also: the server's workspace picker only accepts sibling repos of the server checkout, so a terminal launcher pins an arbitrary cwd by writing shared_conversation_workspace_selection directly. Opening that conversation's Repo Explorer resets a non-sibling path (known risk). The renderer prints finished assistant text after the streamed deltas, so the launcher drops the repeat. Verified end to end 2026-10-09 against a local server on :45191 with real claude; the Codex path was not run.
+
+*Provenance: 1128361b-ff24-4b61-bc12-0d01fcd13046*

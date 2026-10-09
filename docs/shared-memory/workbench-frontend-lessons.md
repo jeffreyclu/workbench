@@ -905,3 +905,9 @@ pill or ellipsis: on a phone it is indistinguishable from a broken confidence
 bubble. Use a readable, visibly distinct `AI scoring` pending pill, then
 replace it with the returned `n/100` score. Do not manufacture a provisional
 number just to avoid the loading state.
+
+### <a id="63"></a>63. Live data that lives in the DB rides realtime via the ['shared-agent-events', conversationId] query-key prefix
+
+The Terminal drawer polls the session tail route at 1s, which only suits file-backed hosted sessions. A mirrored terminal conversation (terminal_hook_sessions or terminal_session_imports row, no agent_sessions row) has its activity in shared_messages and agent_stream_events. Hook-bridge and transcript sync already call publishRealtimeMessagesEvent(conversationId), and realtime.ts invalidates ['shared-agent-events', conversationId] by prefix. So a useQuery keyed ['shared-agent-events', id, 'terminal-mirror', agent] updates live with no new channel. The tail route returns snapshot.mirror when there is no session row, no status file and nextOffset is 0; the hook stops polling then and the query takes over. Mirrored snapshots return the whole line list (offset = line count) and the client replaces its lines, because a reply completing after the next prompt shifts later positions. Conversations built from the hook bridge also store harness text (<task-notification> prompts) as jeffrey messages, so mirrored lines include it unless filtered.
+
+*Provenance: b2b64117-1b88-4f9f-9006-fafcf18d981d*
