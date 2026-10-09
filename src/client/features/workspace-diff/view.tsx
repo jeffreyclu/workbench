@@ -42,6 +42,8 @@ import { fileSourceRevision } from '../review-stack/review-full-file.js';
 import { ReviewFullFilePane } from '../review-stack/review-full-file-pane.js';
 import { readReviewStackReadingMode, readWorkspaceDiffSelection, writeReviewStackReadingMode, writeWorkspaceDiffDecision, writeWorkspaceDiffSource, type ReviewStackReadingMode } from '../../lib/preferences.js';
 import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
+import { reviewPaletteCommands } from './palette-commands.js';
+import { usePaletteCommands } from '../command-palette';
 import { WorkspaceContextSwitcher } from './context-switcher.js';
 import { AiProviderSelect } from '../../components/ai-provider-select.js';
 import { useAiProvider } from '../../hooks/ai-provider.js';
@@ -689,6 +691,17 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     onMarkReviewed: markSelectedReviewed,
     onToggleReadingMode: toggleReadingMode,
   });
+  const paletteCommands = useMemo(() => reviewPaletteCommands({
+    files: displayedDiff?.files ?? [],
+    decisions: queueDecisions,
+    activeId: selectedDecision?.id ?? null,
+    activeFilePath: selectedFile?.path ?? null,
+    canMarkReviewed: Boolean(selectedDecision && reviewRevision),
+    onSelect: selectDecision,
+    onMarkReviewed: markSelectedReviewed,
+    onToggleReadingMode: toggleReadingMode,
+  }), [displayedDiff?.files, markSelectedReviewed, queueDecisions, reviewRevision, selectDecision, selectedDecision, selectedFile?.path, toggleReadingMode]);
+  usePaletteCommands('changes-review', paletteCommands);
 
   // Switching source resets the queue: decision ids belong to one diff.
   const selectSource = (value: string) => {

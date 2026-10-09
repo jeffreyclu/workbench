@@ -205,7 +205,7 @@ describe('NavigationView', () => {
 
     expect(screen.getAllByRole('button', { name: 'Search everything' })).toHaveLength(2);
 
-    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search everything' })[0]);
 
     expect(screen.getAllByRole('dialog', { name: 'Search everything' })).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: 'Close search' })).toHaveLength(1);

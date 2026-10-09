@@ -18,9 +18,15 @@ const GLOBAL_SEARCH_RESULT_LIMIT = 20;
 const GLOBAL_SEARCH_MAX_RESULTS = 100;
 const PROMOTION_STATUS_ID = 'promotion-status';
 
-function useGlobalSearch(onSelectResult: (result: MemorySearchResult) => void) {
+type GlobalSearchControl = { open: boolean; onOpenChange: (open: boolean) => void };
+
+function useGlobalSearch(onSelectResult: (result: MemorySearchResult) => void, control?: GlobalSearchControl) {
   const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  // The command palette owns ⌘K and reaches this search through its own action,
+  // so the app may hold the open state instead of the hook.
+  const open = control?.open ?? localOpen;
+  const setOpen = control?.onOpenChange ?? setLocalOpen;
   const [resultLimit, setResultLimit] = useState(GLOBAL_SEARCH_RESULT_LIMIT);
   const [activeResultIndex, setActiveResultIndex] = useState(-1);
   const debouncedQuery = useDebouncedValue(query.trim(), 300);
@@ -46,15 +52,6 @@ function useGlobalSearch(onSelectResult: (result: MemorySearchResult) => void) {
       previousFocusRef.current = null;
     };
   }, [open]);
-  useEffect(() => {
-    function handleGlobalKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return;
-      event.preventDefault();
-      setOpen(true);
-    }
-    window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, []);
   function closeOverlay() {
     setQuery('');
     setOpen(false);
@@ -89,7 +86,7 @@ function useGlobalSearch(onSelectResult: (result: MemorySearchResult) => void) {
 type GlobalSearchState = ReturnType<typeof useGlobalSearch>;
 
 function GlobalSearchTrigger({ search }: { search: GlobalSearchState }) {
-  return <button type="button" className="icon-button global-search-trigger" aria-label="Search everything" title="Search everything (⌘K)" aria-haspopup="dialog" aria-expanded={search.open} onClick={() => search.setOpen(true)}>
+  return <button type="button" className="icon-button global-search-trigger" aria-label="Search everything" title="Search everything" aria-haspopup="dialog" aria-expanded={search.open} onClick={() => search.setOpen(true)}>
     <Search size={15} />
   </button>;
 }
@@ -268,7 +265,7 @@ function GlobalSearchResultSkeleton() {
 }
 
 
-export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, onOpenActive, onOpenWorkbench, onOpenDiscovery, onOpenConversations, onOpenArtifacts, onOpenInsights, onOpenSources, onOpenSettings, onToggleMore, onSelectGlobalSearchResult }: {
+export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, onOpenActive, onOpenWorkbench, onOpenDiscovery, onOpenConversations, onOpenArtifacts, onOpenInsights, onOpenSources, onOpenSettings, onToggleMore, onSelectGlobalSearchResult, globalSearchOpen, onGlobalSearchOpenChange }: {
   view: NavigationViewName;
   mobileNavOpen: boolean;
   isCompactNav: boolean;
@@ -283,12 +280,14 @@ export function NavigationView({ view, mobileNavOpen, isCompactNav, counts, onOp
   onOpenSettings: () => void;
   onToggleMore: () => void;
   onSelectGlobalSearchResult: (result: MemorySearchResult) => void;
+  globalSearchOpen?: boolean;
+  onGlobalSearchOpenChange?: (open: boolean) => void;
 }) {
   const releasePointerFocus = (event: MouseEvent<HTMLElement>) => {
     // Pointer navigation should not leave the rail expanded; keyboard focus must.
     if (event.detail > 0) (event.target as HTMLElement).closest<HTMLButtonElement>('button')?.blur();
   };
-  const globalSearch = useGlobalSearch(onSelectGlobalSearchResult);
+  const globalSearch = useGlobalSearch(onSelectGlobalSearchResult, globalSearchOpen !== undefined && onGlobalSearchOpenChange ? { open: globalSearchOpen, onOpenChange: onGlobalSearchOpenChange } : undefined);
   return <aside id="primary-nav" className="sidebar">
     <div className="brand"><PromotionQueueStatus /><span>Workbench</span></div>
     <nav onClick={releasePointerFocus}>

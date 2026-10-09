@@ -49,7 +49,8 @@ describe('KeyboardHelpDialog', () => {
     const close = screen.getByRole('button', { name: 'Close keyboard shortcuts' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(dialog).toHaveAttribute('aria-describedby', 'keyboard-help-description');
-    expect(screen.getByText('Search everything')).toBeInTheDocument();
+    expect(screen.getByText('Open the command palette')).toBeInTheDocument();
+    expect(screen.getByText('Quick switcher: files, tasks, conversations and pages')).toBeInTheDocument();
     expect(screen.getByText('Move between queue items')).toBeInTheDocument();
     expect(screen.getByText('Next or previous pending decision')).toBeInTheDocument();
     expect(screen.getByText('Move between tabs and open that pane')).toBeInTheDocument();

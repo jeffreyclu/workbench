@@ -68,6 +68,7 @@ import { Tabs } from '../../components/tabs/tabs';
 import { isWorkbenchProject, WORKBENCH_PROJECT_NAME } from '../../../shared/project-name';
 import { SourcesDialog } from '../source';
 import { KeyboardHelpDialog, SettingsDialog } from '../settings';
+import { CommandPalette, CommandPaletteProvider, usePaletteCommands, type PaletteCommand } from '../command-palette';
 import { createTaskStackViewModel } from '../../lib/stack-view-model';
 import { useRealtimeNotifications, type RealtimeNotification } from '../../hooks/realtime';
 import { useAttentionIndicator } from '../../hooks/attention-indicator';
@@ -90,7 +91,7 @@ function isEditableTarget(target: EventTarget | null) {
   return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName));
 }
 
-export function App() {
+function AppShell() {
   const queryClient = useQueryClient();
   const health = useQuery({ queryKey: ['health'], queryFn: api.getHealth });
   const attentionCount = useQuery({
@@ -121,6 +122,7 @@ export function App() {
   const [showSources, setShowSources] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [showProposalDetail, setShowProposalDetail] = useState(false);
   const [taskSearch, setTaskSearch] = useState('');
   // A task URL names the task, never a stack, so a link keeps working after the
@@ -480,6 +482,24 @@ export function App() {
     navigate({ name: 'task', taskId });
   }
 
+  // Every screen-independent place and action the palette offers. The handlers
+  // only call state setters and `navigate`, so the list is built once.
+  const paletteCommands = useMemo<PaletteCommand[]>(() => [
+    { id: 'go:attention', group: 'Go to', label: 'Attention stack', keywords: 'queue tasks', run: () => openPrimaryStack('active') },
+    { id: 'go:workbench', group: 'Go to', label: 'Workbench', keywords: 'queue tasks', run: () => openPrimaryStack('workbench') },
+    { id: 'go:archive', group: 'Go to', label: 'Archive', run: () => navigate({ name: 'stack', stack: 'archive' }) },
+    { id: 'go:conversations', group: 'Go to', label: 'Conversations', keywords: 'context agents chat', run: openConversations },
+    { id: 'go:artifacts', group: 'Go to', label: 'Artifact library', keywords: 'artifacts', run: () => navigate({ name: 'artifacts' }) },
+    { id: 'go:discovery', group: 'Go to', label: 'Discovery', keywords: 'inbox', run: () => navigate({ name: 'discovery' }) },
+    { id: 'go:insights', group: 'Go to', label: 'Insights', run: () => navigate({ name: 'insights' }) },
+    { id: 'go:settings', group: 'Go to', label: 'Settings', keywords: 'preferences', run: () => setShowSettings(true) },
+    { id: 'go:sources', group: 'Go to', label: 'Sources', keywords: 'connections', run: () => setShowSources(true) },
+    { id: 'action:new-task', group: 'Actions', label: 'New task', keywords: 'create add', run: () => setShowCreate(true) },
+    { id: 'action:search', group: 'Actions', label: 'Search everything', detail: 'Search memory, tasks and conversations', run: () => setShowGlobalSearch(true) },
+    { id: 'action:shortcuts', group: 'Actions', label: 'Keyboard shortcuts', keywords: 'help', shortcut: '?', run: () => { setShowSettings(false); setShowKeyboardHelp(true); } },
+  ], []);
+  usePaletteCommands('app', paletteCommands);
+
   function selectTaskInStack(taskId: string) {
     // The stack on screen already contains this task, so the URL can change
     // without waiting to be told which stack the task belongs to.
@@ -593,6 +613,8 @@ export function App() {
         onOpenSources={() => { setShowSources(true); setMobileNavOpen(false); }}
         onOpenSettings={() => { setShowSettings(true); setMobileNavOpen(false); }}
         onToggleMore={() => setMobileNavOpen((open) => !open)}
+        globalSearchOpen={showGlobalSearch}
+        onGlobalSearchOpenChange={setShowGlobalSearch}
         onSelectGlobalSearchResult={(result) => {
           if (result.conversationId) openConversation(result.conversationId);
           else if (result.workItemId) openTaskFromConversation(result.workItemId);
@@ -670,6 +692,11 @@ export function App() {
       {showSources && <SourcesDialog onClose={() => setShowSources(false)} />}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} onOpenKeyboardShortcuts={() => { setShowSettings(false); setShowKeyboardHelp(true); }} />}
       {showKeyboardHelp && <KeyboardHelpDialog onClose={() => setShowKeyboardHelp(false)} />}
+      <CommandPalette onOpenTask={openTaskFromConversation} onOpenConversation={openConversation} />
     </div>
   );
+}
+
+export function App() {
+  return <CommandPaletteProvider><AppShell /></CommandPaletteProvider>;
 }
