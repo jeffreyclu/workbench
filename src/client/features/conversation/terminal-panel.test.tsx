@@ -16,7 +16,7 @@ describe('TerminalPanel', () => {
   it('shows an empty state with the attach command before any session exists', () => {
     renderPanel({ session: session({ state: 'none', pid: null, model: null, providerSessionId: null }) });
     expect(screen.getByText('No session output yet. Send a message to start one.')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('npx tsx scripts/attach-session.ts c1 claude')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('npm run session:attach -- c1 claude')).toBeInTheDocument();
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
 

@@ -18,9 +18,9 @@ export function appendTerminalLines(current: TerminalLine[], incoming: TerminalL
 /** `claude --resume` against a live session id forks it and corrupts the record, so the panel warns instead. */
 export function resumeWarning(agent: 'claude' | 'codex', providerSessionId: string | null, state: string): string | null {
   if (state === 'stopped' || state === 'none') return null;
-  return `This ${agent} session is live${providerSessionId ? ` (${providerSessionId})` : ''}. Do not run \`${agent} resume\`/\`--resume\` on it; type through \`npx tsx scripts/attach-session.ts\` or the conversation instead.`;
+  return `This ${agent} session is live${providerSessionId ? ` (${providerSessionId})` : ''}. Do not run \`${agent} resume\`/\`--resume\` on it; type through \`npm run session:attach\` or the conversation instead.`;
 }
 
 export function attachCommand(conversationId: string, agent: 'claude' | 'codex'): string {
-  return `npx tsx scripts/attach-session.ts ${conversationId} ${agent}`;
+  return `npm run session:attach -- ${conversationId} ${agent}`;
 }

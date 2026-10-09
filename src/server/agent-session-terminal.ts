@@ -6,6 +6,14 @@ import { readAgentSessionStatus, readSessionEventsFromFile, type AgentSessionEve
 export type { TerminalLine, TerminalSessionInfo, TerminalSnapshot };
 
 const RESULT_PREVIEW_CHARS = 240;
+export const MAX_TERMINAL_LINE_CHARS = 16_000;
+
+function terminalText(text: string): string {
+  const suffix = '\u2026 [truncated]';
+  return text.length > MAX_TERMINAL_LINE_CHARS
+    ? `${text.slice(0, MAX_TERMINAL_LINE_CHARS - suffix.length)}${suffix}`
+    : text;
+}
 
 function resultLines(event: unknown): string[] {
   const content = (event as { message?: { content?: unknown } } | null)?.message?.content;
@@ -23,18 +31,18 @@ function resultLines(event: unknown): string[] {
 export function terminalLinesFor(agent: AgentSessionKey['agent'], record: AgentSessionEvent): TerminalLine[] {
   const base = { offset: record.offset, at: record.at };
   if (record.source === 'host') {
-    if (record.type === 'turn_started') return [{ ...base, kind: 'host', text: `> ${String(record.prompt ?? '').slice(0, 2_000)}` }];
-    if (record.type === 'turn_terminal') return [{ ...base, kind: 'host', text: `■ turn ${record.status ?? 'ended'}${record.reason ? `: ${record.reason}` : ''}` }];
-    return [{ ...base, kind: 'host', text: `· ${record.type ?? 'host event'}${record.reason ? `: ${String(record.reason)}` : ''}` }];
+    if (record.type === 'turn_started') return [{ ...base, kind: 'host', text: terminalText(`> ${String(record.prompt ?? '')}`) }];
+    if (record.type === 'turn_terminal') return [{ ...base, kind: 'host', text: terminalText(`■ turn ${record.status ?? 'ended'}${record.reason ? `: ${record.reason}` : ''}`) }];
+    return [{ ...base, kind: 'host', text: terminalText(`· ${record.type ?? 'host event'}${record.reason ? `: ${String(record.reason)}` : ''}`) }];
   }
-  if (record.raw !== undefined) return [{ ...base, kind: 'text', text: record.raw }];
+  if (record.raw !== undefined) return [{ ...base, kind: 'text', text: terminalText(record.raw) }];
   const line = JSON.stringify(record.event);
   const results = resultLines(record.event).map((text) => ({ ...base, kind: 'result' as const, text }));
   const readable = readableAgentEvent(agent, line);
   const rendered: TerminalLine[] = [];
   if (readable.delta) rendered.push({ ...base, kind: 'delta', text: readable.delta });
   else if (readable.progress) rendered.push({ ...base, kind: readable.progress.startsWith('●') ? 'tool' : 'text', text: readable.progress });
-  return [...rendered, ...results];
+  return [...rendered, ...results].map((item) => ({ ...item, text: terminalText(item.text) }));
 }
 
 export function readTerminalSnapshot(database: WorkbenchDatabase, key: AgentSessionKey, offset: number): TerminalSnapshot {

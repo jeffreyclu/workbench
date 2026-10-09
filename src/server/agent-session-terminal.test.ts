@@ -8,7 +8,7 @@ import { createApp } from './app.js';
 import { openDatabase, type WorkbenchDatabase } from './database.js';
 import { closeTestServer } from './test-http-harness.js';
 import { e2eRuntimeCapabilities } from './runtime-capabilities.js';
-import type { TerminalSnapshot } from './agent-session-terminal.js';
+import { MAX_TERMINAL_LINE_CHARS, type TerminalSnapshot } from './agent-session-terminal.js';
 
 describe('session terminal tail route', () => {
   let database: WorkbenchDatabase;
@@ -72,6 +72,15 @@ describe('session terminal tail route', () => {
     const partial = await tail(0);
     expect(partial.lines).toHaveLength(1);
     expect(partial.nextOffset).toBe(Buffer.byteLength(whole));
+  });
+
+  it('tails a 600 KB record while bounding the displayed line', async () => {
+    writeFileSync(eventsPath, record({ source: 'provider', turnId: 't1', raw: 'x'.repeat(600 * 1024) }));
+    const snapshot = await tail(0);
+    expect(snapshot.lines).toHaveLength(1);
+    expect(snapshot.lines[0].text.startsWith('x'.repeat(100))).toBe(true);
+    expect(snapshot.lines[0].text).toHaveLength(MAX_TERMINAL_LINE_CHARS);
+    expect(snapshot.nextOffset).toBeGreaterThan(600 * 1024);
   });
 
   it('clamps an offset past the end of the log', async () => {

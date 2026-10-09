@@ -36,7 +36,7 @@ export const TerminalPanel = memo(function TerminalPanel({ conversationId, agent
           : lines.map((line, index) => <span key={`${line.offset}-${index}`} className={`terminal-line terminal-line-${line.kind}`}>{line.text}{line.kind === 'delta' ? '' : '\n'}</span>)}
       </pre>
       <footer className="terminal-panel-footer">
-        <label>Attach in tmux <input readOnly value={attachCommand(conversationId, agent)} onFocus={(event) => event.currentTarget.select()} /></label>
+        <label>Open in terminal <input readOnly value={attachCommand(conversationId, agent)} onFocus={(event) => event.currentTarget.select()} /></label>
       </footer>
     </section>
   );
