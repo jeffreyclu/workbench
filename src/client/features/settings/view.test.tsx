@@ -53,6 +53,8 @@ describe('KeyboardHelpDialog', () => {
     expect(screen.getByText('Quick switcher: files, tasks, conversations and pages')).toBeInTheDocument();
     expect(screen.getByText('Move between queue items')).toBeInTheDocument();
     expect(screen.getByText('Next or previous pending decision')).toBeInTheDocument();
+    expect(screen.getByText('Find text across the diff')).toBeInTheDocument();
+    expect(screen.getByText('Move between files in the Files list')).toBeInTheDocument();
     expect(screen.getByText('Move between tabs and open that pane')).toBeInTheDocument();
     expect(close).toHaveFocus();
 

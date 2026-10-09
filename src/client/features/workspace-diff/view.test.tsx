@@ -1112,7 +1112,7 @@ describe('WorkspaceDiffView repository browser', () => {
     // Opens on the newest commit, read against the one before it.
     const commitPicker = await screen.findByRole('combobox', { name: 'Commit' });
     await waitFor(() => expect(commitPicker).toHaveValue(newest));
-    expect(await screen.findByText('src/in-newest.ts')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Full diff for src/in-newest.ts')).toBeInTheDocument();
 
     // The repo browser still has exactly one control. Branch review is its own
     // source now, so it must not reappear as a second dropdown or a synthetic
@@ -1123,7 +1123,7 @@ describe('WorkspaceDiffView repository browser', () => {
 
     fireEvent.change(commitPicker, { target: { value: older } });
 
-    expect(await screen.findByText('src/in-older.ts')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Full diff for src/in-older.ts')).toBeInTheDocument();
     expect(screen.queryByText('src/in-newest.ts')).not.toBeInTheDocument();
   });
 
@@ -1148,7 +1148,7 @@ describe('WorkspaceDiffView repository browser', () => {
     });
     renderView(fetchMock);
 
-    expect(await screen.findByText('src/gateway/search.ts')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Full diff for src/gateway/search.ts')).toBeInTheDocument();
     expect(screen.queryByText('No uncommitted changes to review.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'jeffrey/connector-name-search · 3 commits' })).toHaveAttribute('aria-current', 'true');
     expect(fetchMock.mock.calls.some(([request]) => String(request).includes(`ref=${encodeURIComponent('branch:jeffrey/connector-name-search')}`))).toBe(true);

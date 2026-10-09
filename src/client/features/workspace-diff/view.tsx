@@ -45,6 +45,8 @@ import { ReviewFullFilePane } from '../review-stack/review-full-file-pane.js';
 import { readReviewStackDiffPreferences, readWorkspaceDiffSelection, writeReviewStackDiffPreferences, writeWorkspaceDiffDecision, writeWorkspaceDiffSource, type ReviewStackReadingMode } from '../../lib/preferences.js';
 import { useWorkspaceDiffKeyboardNavigation } from './use-keyboard-navigation.js';
 import { reviewPaletteCommands } from './palette-commands.js';
+import { buildFileNavigatorRows, openNoteCounts } from './file-navigator-logic.js';
+import { DiffFileNavigator } from './file-navigator.js';
 import { usePaletteCommands } from '../command-palette';
 import { WorkspaceContextSwitcher } from './context-switcher.js';
 import { AiProviderSelect } from '../../components/ai-provider-select.js';
@@ -715,6 +717,15 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     const decisionId = decisions.find((decision) => decision.filePaths.includes(filePath))?.id;
     if (decisionId) selectDecision(decisionId);
   }, [decisions, selectDecision]);
+  const fileNavigatorRows = useMemo(() => buildFileNavigatorRows({
+    files: displayedDiff?.files ?? [],
+    decisions,
+    automatic: automaticDecisionIds,
+    openNotesByFile: openNoteCounts(reviewNotes.groups),
+    whitespaceOnly: new Set(reviewOutcome.whitespaceOnlyFiles),
+    riskBands,
+  }), [automaticDecisionIds, decisions, displayedDiff?.files, reviewNotes.groups, reviewOutcome.whitespaceOnlyFiles, riskBands]);
+  const openNavigatorFile = useCallback((row: { decisionId: string | null }) => { if (row.decisionId) selectDecision(row.decisionId); }, [selectDecision]);
   const startNote = useCallback((target: PendingNote) => { setPendingNote(target); setNotesOpen(true); }, []);
 
   // Permalinks. The link is the page's own URL plus a fragment naming the file,
@@ -1068,6 +1079,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                 </p>}
                 {activeEscalations.size > 0 && <p className="review-director-escalation-status" role="alert">{activeEscalations.size} delegated {activeEscalations.size === 1 ? 'decision needs' : 'decisions need'} your review.</p>}
                 {selectedDecision && <>
+                  <DiffFileNavigator rows={fileNavigatorRows} selectedPath={selectedFile?.path ?? null} onSelect={openNavigatorFile} />
                   <DiffReviewDecisionQueue decisions={queueDecisions} selectedId={selectedDecision.id} onSelect={selectDecision} commentCounts={isPullRequestSource ? commentCounts : undefined} delegating={delegation.pending} escalations={activeEscalations} automatic={automaticDecisionIds} />
                   {isPullRequestSource && pullRequestQuery.hasNextPage && <button type="button" className="github-diff-load-more" onClick={() => void pullRequestQuery.fetchNextPage()} disabled={pullRequestQuery.isFetchingNextPage} aria-busy={pullRequestQuery.isFetchingNextPage}>{pullRequestQuery.isFetchingNextPage ? 'Loading more files…' : 'Load 100 more files'}</button>}
                   <div className="diff-review-workbench">

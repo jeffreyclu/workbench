@@ -2632,3 +2632,40 @@ button.review-full-file-number.diff-line-permalink { width: auto; }
   .command-palette { width: 100%; max-height: calc(100dvh - 16px); }
   .command-palette-group { display: none; }
 }
+
+/* Changed-file navigator: a collapsible list on wide screens, a bottom sheet on
+   phones. Rows never wrap, so a long path scrolls the list sideways instead of
+   growing it, like the decision queue ribbon above it. */
+.file-navigator { display: grid; background: #11110f; border: 1px solid #252522; border-radius: 6px; }
+.file-navigator-toggle { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 10px; color: #d5d4cd; background: none; border: 0; cursor: pointer; font: 700 11px 'DM Mono'; text-align: left; }
+.file-navigator-toggle small { margin-left: auto; color: #6f6e68; font: 700 9px 'DM Mono'; letter-spacing: .06em; }
+.file-navigator-toggle:focus-visible, .file-navigator-row:focus-visible { outline: 2px solid var(--acid); outline-offset: -2px; }
+.file-navigator-sheet-header { display: none; }
+.file-navigator-body ul { display: grid; margin: 0; padding: 0; max-height: 220px; overflow: auto; overscroll-behavior: contain; list-style: none; border-top: 1px solid #252522; }
+.file-navigator-row { --state-tone: #6f6e68; display: flex; align-items: center; gap: 10px; width: 100%; min-width: max-content; min-height: 30px; padding: 0 10px; color: #c7c7be; background: none; border: 0; border-bottom: 1px solid #1c1c19; box-shadow: inset 3px 0 0 var(--state-tone); cursor: pointer; font: 11px 'DM Mono'; text-align: left; white-space: nowrap; }
+.file-navigator-row:hover { background: #1a1a16; }
+.file-navigator-row.selected { background: #16170e; outline: 1px solid var(--acid); outline-offset: -1px; }
+.file-navigator-row[aria-disabled='true'] { cursor: default; opacity: .6; }
+.file-navigator-row.state-reviewed { --state-tone: #8bbd75; }
+.file-navigator-row.state-needs_changes { --state-tone: #e1a68f; }
+.file-navigator-row.state-commented { --state-tone: #9ab6d8; }
+.file-navigator-status { display: inline-grid; width: 16px; height: 16px; place-items: center; color: #a9a89f; border: 1px solid #3b3b34; border-radius: 3px; font-size: 9px; }
+.file-navigator-status.status-added { color: #8bbd75; }
+.file-navigator-status.status-removed { color: #e1a68f; }
+.file-navigator-path { flex: 1 0 auto; }
+.file-navigator-counts b { font-weight: 500; }
+.file-navigator-counts .added { color: #8bbd75; }
+.file-navigator-counts .removed { color: #e1a68f; }
+.file-navigator-state { color: var(--state-tone); }
+.file-navigator-risk, .file-navigator-whitespace { padding: 0 5px; color: #a9a89f; border: 1px solid #3b3b34; border-radius: 3px; font-size: 9px; text-transform: uppercase; }
+.file-navigator-risk.risk-high { color: #e1a68f; border-color: #6a4a3d; }
+.file-navigator-risk.risk-elevated { color: #e6c75f; border-color: #6a5a2d; }
+.file-navigator-notes { display: inline-flex; align-items: center; gap: 3px; color: #9ab6d8; }
+@media (max-width: 720px) {
+  .file-navigator-toggle { min-height: 44px; }
+  .file-navigator.is-open .file-navigator-body { position: fixed; right: 0; bottom: 0; left: 0; z-index: 30; display: flex; flex-direction: column; max-height: 70dvh; background: #191916; border-top: 1px solid #33322c; border-radius: 12px 12px 0 0; box-shadow: 0 -8px 24px rgba(0, 0, 0, .5); }
+  .file-navigator-sheet-header { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 0 14px; font-size: 12px; }
+  .file-navigator-sheet-header button { display: grid; width: 44px; height: 44px; place-items: center; color: #a9a89f; background: none; border: 0; cursor: pointer; }
+  .file-navigator-body ul { max-height: none; overflow: auto; padding-bottom: env(safe-area-inset-bottom); }
+  .file-navigator-row { min-height: 44px; }
+}
