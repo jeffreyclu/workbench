@@ -49,7 +49,9 @@ import { usePaletteCommands } from '../command-palette';
 import { WorkspaceContextSwitcher } from './context-switcher.js';
 import { AiProviderSelect } from '../../components/ai-provider-select.js';
 import { useAiProvider } from '../../hooks/ai-provider.js';
-import { toastError } from '../../state/toast-store';
+import { toast, toastError } from '../../state/toast-store';
+import { copyText } from '../../lib/clipboard';
+import { parsePermalinkHash, permalinkUrl, resolvePermalink, type DiffPermalink } from '../diff-review/permalink.js';
 
 /** The parts of a diff this review surface reads, whichever source produced
  * it. A local workspace diff satisfies it directly; a pull request is adapted
@@ -517,6 +519,14 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     const next = order[(order.indexOf(readingMode) + 1) % order.length]!;
     updateDiffPreferences({ readingMode: next });
   }, [readingMode, updateDiffPreferences]);
+  // Folding is a reading habit like wrap and whitespace, so it lives in the same
+  // diff preference store: a file folded here is still folded after a reload.
+  const collapsedFiles = useMemo(() => new Set(diffPreferences.collapsedFiles), [diffPreferences.collapsedFiles]);
+  const toggleFileCollapsed = useCallback((path: string) => {
+    updateDiffPreferences({ collapsedFiles: collapsedFiles.has(path) ? diffPreferences.collapsedFiles.filter((entry) => entry !== path) : [...diffPreferences.collapsedFiles, path] });
+  }, [collapsedFiles, diffPreferences.collapsedFiles, updateDiffPreferences]);
+  const collapseAllFiles = useCallback(() => updateDiffPreferences({ collapsedFiles: changedFilePaths }), [changedFilePaths, updateDiffPreferences]);
+  const expandAllFiles = useCallback(() => updateDiffPreferences({ collapsedFiles: [] }), [updateDiffPreferences]);
   // PR after-state is fetched from GitHub at its resolved head SHA. This must
   // not fall back to the local checkout: it may hold unrelated text at the
   // same path. Binary files stay in the diff-only reader.
@@ -707,6 +717,45 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
   }, [decisions, selectDecision]);
   const startNote = useCallback((target: PendingNote) => { setPendingNote(target); setNotesOpen(true); }, []);
 
+  // Permalinks. The link is the page's own URL plus a fragment naming the file,
+  // hunk and line, so it reaches the same task wherever it is pasted.
+  const copyPermalink = useCallback((target: DiffPermalink) => {
+    const url = permalinkUrl(window.location, target);
+    copyText(url).then(
+      () => { toast.success('Link copied', { description: url }); },
+      (error: unknown) => { toastError('Could not copy the link.', error); },
+    );
+  }, []);
+  // A link opened on load, or pasted into an open tab, waits here until the diff
+  // it names has been read. It is consumed once; the fragment stays in the
+  // address bar so a reload lands in the same place.
+  const [pendingPermalink, setPendingPermalink] = useState<DiffPermalink | null>(() => parsePermalinkHash(window.location.hash));
+  // Whole-file reading draws no diff rows to highlight, so the line a link named
+  // is kept here for it, and only while the link's own change is the selected one.
+  const [linkFocus, setLinkFocus] = useState<{ decisionId: string; filePath: string; line: number | null } | null>(null);
+  useEffect(() => {
+    const onHashChange = () => {
+      const target = parsePermalinkHash(window.location.hash);
+      if (target) setPendingPermalink(target);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+  useEffect(() => {
+    if (!pendingPermalink || decisions.length === 0) return;
+    setPendingPermalink(null);
+    const resolved = resolvePermalink(pendingPermalink, noteHunksByFile, decisions);
+    if (!resolved) {
+      toast.info('That link points at a file that is not in this diff.', { description: pendingPermalink.filePath });
+      return;
+    }
+    // A deleted line exists only in the diff readings that draw the old side.
+    if ((readingMode === 'file' || readingMode === 'final') && resolved.kind === 'deletion') updateDiffPreferences({ readingMode: 'diff' });
+    setSearchHit(resolved.lineKey ? { filePath: resolved.filePath, lineKey: resolved.lineKey } : null);
+    setLinkFocus({ decisionId: resolved.decisionId, filePath: resolved.filePath, line: resolved.newLine });
+    selectDecision(resolved.decisionId);
+  }, [decisions, noteHunksByFile, pendingPermalink, readingMode, selectDecision, updateDiffPreferences]);
+
   const markSelectedReviewed = useCallback(() => {
     if (selectedDecision) void saveDecision(selectedDecision, 'reviewed');
   }, [saveDecision, selectedDecision]);
@@ -731,7 +780,10 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
     onSelect: selectDecision,
     onMarkReviewed: markSelectedReviewed,
     onToggleReadingMode: toggleReadingMode,
-  }), [displayedDiff?.files, markSelectedReviewed, queueDecisions, reviewRevision, selectDecision, selectedDecision, selectedFile?.path, toggleReadingMode]);
+    onCollapseAll: collapseAllFiles,
+    onExpandAll: expandAllFiles,
+    onCopyLink: selectedFile ? () => copyPermalink({ filePath: selectedFile.path, hunk: null, line: null }) : undefined,
+  }), [collapseAllFiles, copyPermalink, displayedDiff?.files, expandAllFiles, markSelectedReviewed, queueDecisions, reviewRevision, selectDecision, selectedDecision, selectedFile, toggleReadingMode]);
   usePaletteCommands('changes-review', paletteCommands);
 
   // Switching source resets the queue: decision ids belong to one diff.
@@ -1023,7 +1075,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                       ? <div className="review-full-file-shell">
                           <button type="button" className="diff-review-reading-mode mode-file" title={READING_MODE_TITLE} onClick={toggleReadingMode}>Whole file</button>
                           {wholeFileReadable
-                            ? <ReviewFullFilePane filePath={selectedFile.path} file={fileSourceQuery.data?.file ?? null} isLoading={fileSourceQuery.isLoading} error={fileSourceQuery.error ? 'This file could not be read.' : null} hunks={fileHunks} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} onSelect={selectDecision} />
+                            ? <ReviewFullFilePane filePath={selectedFile.path} file={fileSourceQuery.data?.file ?? null} isLoading={fileSourceQuery.isLoading} error={fileSourceQuery.error ? 'This file could not be read.' : null} hunks={fileHunks} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} focusLine={linkFocus?.decisionId === selectedDecision.id && linkFocus.filePath === selectedFile.path ? linkFocus.line : null} onSelect={selectDecision} onCopyLink={(line) => copyPermalink({ filePath: selectedFile.path, hunk: null, line: { side: 'new', number: line } })} />
                             : <p className="review-full-file-note">This binary file cannot be read whole.</p>}
                         </div>
                       : null}
@@ -1031,7 +1083,7 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
                         remaining files stay readable as diffs underneath it
                         rather than disappearing with the mode switch. */}
                     {(readingMode === 'file' ? fileHunkGroups.slice(1) : fileHunkGroups).map(({ file, hunks }) =>
-                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} searchHit={searchHit?.filePath === file.path ? searchHit.lineKey : null} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onOpenLinesDetail={openLinesDecisionDetail} onAddNote={startNote} onToggleReadingMode={toggleReadingMode} wrapLongLines={diffPreferences.wrapLongLines} ignoreWhitespace={diffPreferences.ignoreWhitespace} onToggleWrapLongLines={() => updateDiffPreferences({ wrapLongLines: !diffPreferences.wrapLongLines })} onToggleIgnoreWhitespace={() => updateDiffPreferences({ ignoreWhitespace: !diffPreferences.ignoreWhitespace })} />)}
+                      <DiffReviewFileDiffPane key={file.path} filePath={file.path} editorUrl={file.editorUrl ?? null} hunks={hunks} decisions={decisions} activeDecisionId={selectedDecision.id} selectionTick={selectionTick} changeMap={changeMap} riskBands={riskBands} delegating={delegation.pending} handledBlocks={handledDecisions} readingMode={readingMode === 'file' ? 'diff' : readingMode} modeTitle={READING_MODE_TITLE} searchHit={searchHit?.filePath === file.path ? searchHit.lineKey : null} openDetailFor={detailAnchor?.decisionId ?? null} onSelect={selectDecision} onOpenDetail={openDecisionDetail} onOpenLinesDetail={openLinesDecisionDetail} onAddNote={startNote} onToggleReadingMode={toggleReadingMode} wrapLongLines={diffPreferences.wrapLongLines} ignoreWhitespace={diffPreferences.ignoreWhitespace} onToggleWrapLongLines={() => updateDiffPreferences({ wrapLongLines: !diffPreferences.wrapLongLines })} onToggleIgnoreWhitespace={() => updateDiffPreferences({ ignoreWhitespace: !diffPreferences.ignoreWhitespace })} collapsed={collapsedFiles.has(file.path)} onToggleCollapsed={() => toggleFileCollapsed(file.path)} onCollapseAll={collapseAllFiles} onExpandAll={expandAllFiles} onCopyLink={copyPermalink} />)}
                     {detailAnchor && popoverDecision && <DecisionPopover anchor={detailAnchor.anchor} anchorId={detailAnchor.decisionId} anchorAttribute={detailAnchor.anchorAttribute} labelledBy="diff-review-decision-title" aside={detailAnchor.simple ? undefined : <>
                       <DecisionRelationshipDiagram map={changeMap} decisionId={popoverDecision.id} cameFromId={cameFromDecisionId} riskBands={riskBands} onSelect={selectDecision} />
                     </>} onClose={() => setDetailAnchor(null)}>

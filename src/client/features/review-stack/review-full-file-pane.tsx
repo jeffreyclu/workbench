@@ -14,7 +14,7 @@ import { toFullFileReading } from './review-full-file.js';
  * lands. That is the reading for a refactor whose meaning lives in the code
  * around it — the one case where the block boundary lies, because the evidence
  * that the change is wrong is outside the three lines git gave you. */
-export const ReviewFullFilePane = memo(function ReviewFullFilePane({ filePath, file, isLoading, error, hunks, activeDecisionId, selectionTick, onSelect }: {
+export const ReviewFullFilePane = memo(function ReviewFullFilePane({ filePath, file, isLoading, error, hunks, activeDecisionId, selectionTick, focusLine = null, onSelect, onCopyLink }: {
   filePath: string;
   file: WorkspaceFileSource | null;
   isLoading: boolean;
@@ -24,7 +24,13 @@ export const ReviewFullFilePane = memo(function ReviewFullFilePane({ filePath, f
   /** Bumped on every selection, including re-picking the change already
    * active, so a handle press always brings that change back into view. */
   selectionTick: number;
+  /** A line a shared link named. The file opens at it, and it is marked,
+   * instead of opening at the start of the active change. */
+  focusLine?: number | null;
   onSelect: (decisionId: string) => void;
+  /** Supplying this makes each line number the control that copies a link to
+   * that line. */
+  onCopyLink?: (line: number) => void;
 }) {
   const reading = useMemo(() => (file?.content ? toFullFileReading(file.content, hunks) : null), [file?.content, hunks]);
   const changes = reading?.changes ?? [];
@@ -42,7 +48,7 @@ export const ReviewFullFilePane = memo(function ReviewFullFilePane({ filePath, f
   // The active block is what the reviewer asked to read, so the file opens at
   // it rather than at line 1 — a whole file that opens at its top would make
   // the reader hunt for the change they just selected.
-  const landing = pending ?? changes[activeIndex]?.firstLine ?? null;
+  const landing = pending ?? focusLine ?? changes[activeIndex]?.firstLine ?? null;
   useEffect(() => {
     if (landing === null) return;
     const container = scroller.current;
@@ -88,10 +94,18 @@ export const ReviewFullFilePane = memo(function ReviewFullFilePane({ filePath, f
         : <div
             key={row.key}
             data-line={row.lineNumber}
-            className={`review-full-file-row${row.changed ? ' changed' : ''}${row.decisionId && row.decisionId === activeDecisionId ? ' active' : ''}`}
+            className={`review-full-file-row${row.changed ? ' changed' : ''}${focusLine !== null && row.lineNumber === focusLine ? ' linked' : ''}${row.decisionId && row.decisionId === activeDecisionId ? ' active' : ''}`}
             onClick={row.decisionId ? () => onSelect(row.decisionId!) : undefined}
           >
-            <span className="review-full-file-number" aria-hidden="true">{row.lineNumber}</span>
+            {onCopyLink
+              ? <button
+                  type="button"
+                  className="review-full-file-number diff-line-permalink"
+                  aria-label={`Copy link to line ${row.lineNumber}`}
+                  title="Copy link to this line"
+                  onClick={(event) => { event.stopPropagation(); onCopyLink(row.lineNumber); }}
+                >{row.lineNumber}</button>
+              : <span className="review-full-file-number" aria-hidden="true">{row.lineNumber}</span>}
             <span className="review-full-file-text">{row.text || ' '}</span>
           </div>))}
     </div>

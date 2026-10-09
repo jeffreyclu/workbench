@@ -41,6 +41,18 @@ describe('reviewPaletteCommands', () => {
     expect(handlers.onToggleReadingMode).toHaveBeenCalledOnce();
   });
 
+  it('offers fold and link commands only when they are wired', () => {
+    expect(build().byId('review:collapse-all')).toBeUndefined();
+    const onCollapseAll = vi.fn();
+    const onExpandAll = vi.fn();
+    const onCopyLink = vi.fn();
+    const { byId } = build({ onCollapseAll, onExpandAll, onCopyLink });
+    byId('review:collapse-all')!.run();
+    byId('review:expand-all')!.run();
+    byId('review:copy-link')!.run();
+    expect([onCollapseAll, onExpandAll, onCopyLink].map((fn) => fn.mock.calls.length)).toEqual([1, 1, 1]);
+  });
+
   it('omits marking reviewed when nothing can be marked', () => {
     expect(build({ canMarkReviewed: false }).byId('review:mark-reviewed')).toBeUndefined();
   });

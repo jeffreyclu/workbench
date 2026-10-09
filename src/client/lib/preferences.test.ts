@@ -25,16 +25,24 @@ describe('review stack reading mode preference', () => {
 
   it('is stored globally rather than under a conversation scope', () => {
     writeReviewStackReadingMode('diff');
-    expect(readReviewStackDiffPreferences()).toEqual({ readingMode: 'diff', wrapLongLines: false, ignoreWhitespace: false });
+    expect(readReviewStackDiffPreferences()).toEqual({ readingMode: 'diff', wrapLongLines: false, ignoreWhitespace: false, collapsedFiles: [] });
     expect(window.localStorage.getItem('workbench:review-stack-selections')).toBeNull();
   });
 
   it('keeps display toggles with the reading mode and reads legacy mode-only values', () => {
     window.localStorage.setItem('workbench:review-stack-reading-mode', 'split');
-    expect(readReviewStackDiffPreferences()).toEqual({ readingMode: 'split', wrapLongLines: false, ignoreWhitespace: false });
+    expect(readReviewStackDiffPreferences()).toEqual({ readingMode: 'split', wrapLongLines: false, ignoreWhitespace: false, collapsedFiles: [] });
 
-    writeReviewStackDiffPreferences({ readingMode: 'final', wrapLongLines: true, ignoreWhitespace: true });
-    expect(readReviewStackDiffPreferences()).toEqual({ readingMode: 'final', wrapLongLines: true, ignoreWhitespace: true });
+    writeReviewStackDiffPreferences({ readingMode: 'final', wrapLongLines: true, ignoreWhitespace: true, collapsedFiles: ['src/a.ts'] });
+    expect(readReviewStackDiffPreferences()).toEqual({ readingMode: 'final', wrapLongLines: true, ignoreWhitespace: true, collapsedFiles: ['src/a.ts'] });
+  });
+
+  it('remembers collapsed files and drops stored entries that are not paths', () => {
+    window.localStorage.setItem('workbench:review-stack-reading-mode', JSON.stringify({ readingMode: 'diff', collapsedFiles: ['src/a.ts', 4, '', null, 'src/b.ts'] }));
+    expect(readReviewStackDiffPreferences().collapsedFiles).toEqual(['src/a.ts', 'src/b.ts']);
+
+    window.localStorage.setItem('workbench:review-stack-reading-mode', JSON.stringify({ readingMode: 'diff', collapsedFiles: 'src/a.ts' }));
+    expect(readReviewStackDiffPreferences().collapsedFiles).toEqual([]);
   });
 });
 

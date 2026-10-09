@@ -1,15 +1,16 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDownRight, ArrowUpRight, Check, ExternalLink, FileDiff, LoaderCircle, MessageSquare, MessageSquareText, NotebookPen, TriangleAlert } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, Check, ChevronsDownUp, ChevronsUpDown, ExternalLink, FileDiff, LoaderCircle, Link2, MessageSquare, MessageSquareText, NotebookPen, TriangleAlert } from 'lucide-react';
 import { languageFromPath, SyntaxHighlight } from '../../components/markdown/syntax-highlight.js';
 import { CHANGE_RELATION_LABELS, type ChangeMap } from '../../../shared/change-map.js';
 import { buildChangeLinkIndex, plainRelationText, type ChangeLink, type ChangeLinkSummary } from './change-map-logic.js';
-import type { ReviewDecision, ReviewDiffHunk } from './logic.js';
+import type { ReviewDecision, ReviewDiffHunk, ReviewDiffLine } from './logic.js';
 import { reviewStateLabel } from './logic.js';
 import { toFinalStateRows } from './final-state-lines.js';
 import { toSplitRows } from './split-rows.js';
 import { anchorForLines, type ReviewNoteAnchor } from '../review-notes/notes-logic.js';
 import { isWhitespaceOnlyHunk } from './whitespace.js';
+import { hunkAnchor, lineAddress, type DiffPermalink } from './permalink.js';
 
 /** How a block's code is drawn. `diff` is the unified two-sided reading;
  * `split` lays the before and after side by side; `final` is the code as it
@@ -88,6 +89,30 @@ function closestLineRow(node: Node | null): HTMLElement | null {
   return element?.closest<HTMLElement>('[data-line-key]') ?? null;
 }
 
+/** A line number that, where a link can be copied, is the control that copies
+ * it. Only the column that carries the line's address is a control — a deleted
+ * line is addressed by its old number, every other line by its new one — so the
+ * number a reviewer clicks is the number the link names. */
+function LineNumber({ line, column, filePath, hunk, onCopyLink }: {
+  line: ReviewDiffLine | null;
+  column: 'old' | 'new';
+  filePath: string;
+  hunk: string | null;
+  onCopyLink?: (target: DiffPermalink) => void;
+}) {
+  const shown = (column === 'old' ? line?.oldLine : line?.newLine) ?? null;
+  if (shown === null) return <>{''}</>;
+  const address = line ? lineAddress(line) : null;
+  if (!onCopyLink || !address || address.side !== column) return <>{shown}</>;
+  return <button
+    type="button"
+    className="diff-line-permalink"
+    aria-label={`Copy link to line ${shown}${column === 'old' ? ' before the change' : ''}`}
+    title="Copy link to this line"
+    onClick={() => onCopyLink({ filePath, hunk, line: address })}
+  >{shown}</button>;
+}
+
 function fileTail(filePath: string): string {
   const parts = filePath.split('/');
   return parts.length <= 2 ? filePath : `…/${parts.slice(-2).join('/')}`;
@@ -122,7 +147,7 @@ function ChangeLinkItem({ link, onSelect }: { link: ChangeLink; onSelect: (decis
  * than floating, because this body is a scroll container and anything drawn
  * inside it would be clipped at the pane edge. The decision popover the gutter
  * marker opens escapes that by portalling out of this subtree entirely. */
-export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode: requestedMode = 'diff', modeTitle, searchHit = null, onSelect, onOpenDetail, onOpenLinesDetail, onAddNote, onToggleReadingMode, wrapLongLines = false, ignoreWhitespace = false, onToggleWrapLongLines, onToggleIgnoreWhitespace }: {
+export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ filePath, editorUrl, hunks, decisions, activeDecisionId, selectionTick, changeMap, riskBands, openDetailFor, renderDetail, handledBlocks, delegating, readingMode: requestedMode = 'diff', modeTitle, searchHit = null, onSelect, onOpenDetail, onOpenLinesDetail, onAddNote, onToggleReadingMode, wrapLongLines = false, ignoreWhitespace = false, collapsed: fileCollapsed = false, onToggleWrapLongLines, onToggleIgnoreWhitespace, onToggleCollapsed, onCollapseAll, onExpandAll, onCopyLink }: {
   filePath: string;
   editorUrl: string | null;
   hunks: ReviewDiffHunk[];
@@ -181,8 +206,19 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   /** Supplying this is what puts the reading-mode switch in the header: a
    * surface that cannot change the mode should not advertise a control. */
   onToggleReadingMode?: () => void;
+  /** Every block of this file is folded to its header, except the selected
+   * change and any block the reviewer has opened by hand. */
+  collapsed?: boolean;
   onToggleWrapLongLines?: () => void;
   onToggleIgnoreWhitespace?: () => void;
+  /** Supplying these is what puts the fold controls in the header: this file's
+   * own toggle, and collapse/expand across every changed file. */
+  onToggleCollapsed?: () => void;
+  onCollapseAll?: () => void;
+  onExpandAll?: () => void;
+  /** Copies a link to the place named. Supplying it makes each hunk header and
+   * line number a link control. */
+  onCopyLink?: (target: DiffPermalink) => void;
 }) {
   // A phone has no room for two code columns, so split reads as the unified
   // diff there. The stored mode is untouched: widening the window restores it.
@@ -462,7 +498,9 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
   useEffect(() => setPeekDecisionId(null), [filePath]);
   // Block keys are ranges, which repeat across files: carrying them over would
   // unfold an unrelated block in the next file.
-  useEffect(() => setUnfolded(new Set()), [filePath]);
+  // Folding or unfolding the file starts over: a block opened by hand under the
+  // old state would otherwise outlive the choice that just replaced it.
+  useEffect(() => setUnfolded(new Set()), [filePath, fileCollapsed]);
   useEffect(() => setLineSelection(null), [filePath]);
 
   const selectRelated = (decisionId: string) => {
@@ -494,6 +532,13 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
       >{READING_MODE_LABELS[requestedMode]}</button>}
       {onToggleWrapLongLines && <button type="button" className="diff-review-display-toggle" aria-pressed={wrapLongLines} onClick={onToggleWrapLongLines}>Wrap lines</button>}
       {onToggleIgnoreWhitespace && <button type="button" className="diff-review-display-toggle" aria-pressed={ignoreWhitespace} onClick={onToggleIgnoreWhitespace}>Ignore whitespace</button>}
+      {onToggleCollapsed && <button type="button" className="diff-review-display-toggle diff-review-fold-toggle" onClick={onToggleCollapsed} title={fileCollapsed ? 'Show every hunk in this file' : 'Fold every hunk in this file to its header'}>
+        {fileCollapsed ? <ChevronsUpDown size={12} aria-hidden="true" /> : <ChevronsDownUp size={12} aria-hidden="true" />}
+        {fileCollapsed ? 'Expand hunks' : 'Collapse hunks'}
+      </button>}
+      {onCollapseAll && <button type="button" className="diff-review-display-toggle diff-review-fold-toggle" onClick={onCollapseAll} title="Fold every hunk in every changed file">Collapse all</button>}
+      {onExpandAll && <button type="button" className="diff-review-display-toggle diff-review-fold-toggle" onClick={onExpandAll} title="Show every hunk in every changed file">Expand all</button>}
+      {onCopyLink && <button type="button" className="diff-review-display-toggle diff-review-link-button" aria-label={`Copy link to ${filePath}`} title="Copy link to this file" onClick={() => onCopyLink({ filePath, hunk: null, line: null })}><Link2 size={12} aria-hidden="true" /></button>}
       {editorUrl && <a href={editorUrl} aria-label={`Open ${filePath} in editor`} title="Open in editor"><ExternalLink size={13} aria-hidden="true" /></a>}
     </header>
     {splitUnavailable && <p className="diff-review-split-note muted" role="note">Side-by-side needs a wider screen — showing the unified diff.</p>}
@@ -515,7 +560,10 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
         // handled block — the last one settled, or a delegated block reached
         // with the keyboard — and hiding the code under the reviewer's own
         // cursor reads as a broken pane rather than as a saved read.
-        const collapsed = handled !== null && !active && !unfolded.has(hunk.range);
+        const collapsed = (handled !== null || fileCollapsed) && !active && !unfolded.has(hunk.range);
+        // A settled change says why it is folded; one the reviewer folded says so.
+        const foldLabel = handled ?? 'Collapsed';
+        const anchor = hunkAnchor(hunk.range);
         const peeking = peekDecisionId === decisionId;
         const marker = active ? null : markers.get(decisionId) ?? null;
         const ordinal = decision?.ordinal ?? null;
@@ -569,12 +617,15 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
             {marker && <span className="diff-review-diff-block-link-marker" aria-hidden="true">{marker.direction === 'upstream' ? <ArrowDownRight size={10} /> : <ArrowUpRight size={10} />}{activeOrdinal}</span>}
           </div>
           <div className="diff-review-diff-block-main">
-          <button type="button" className="diff-review-diff-block-header" onClick={() => onSelect(decisionId)} aria-label={`Select the decision at ${hunk.location} in ${filePath}`}>
-            <code>{hunk.range}</code>
-            {awaiting && <em className="diff-review-diff-block-delegating"><LoaderCircle className="spin" size={10} aria-hidden="true" />Delegated review running</em>}
-            {handled && <em className="diff-review-diff-block-handled">{handled}</em>}
-            <small><b>+{hunk.additions}</b> <i>−{hunk.deletions}</i></small>
-          </button>
+          <div className="diff-review-diff-block-headline">
+            <button type="button" className="diff-review-diff-block-header" onClick={() => onSelect(decisionId)} aria-label={`Select the decision at ${hunk.location} in ${filePath}`}>
+              <code>{hunk.range}</code>
+              {awaiting && <em className="diff-review-diff-block-delegating"><LoaderCircle className="spin" size={10} aria-hidden="true" />Delegated review running</em>}
+              {handled && <em className="diff-review-diff-block-handled">{handled}</em>}
+              <small><b>+{hunk.additions}</b> <i>−{hunk.deletions}</i></small>
+            </button>
+            {onCopyLink && <button type="button" className="diff-review-diff-block-link" aria-label={`Copy link to ${hunk.location} in ${filePath}`} title="Copy link to this hunk" onClick={() => onCopyLink({ filePath, hunk: anchor, line: null })}><Link2 size={12} aria-hidden="true" /></button>}
+          </div>
           {showDetail && renderDetail?.(decisionId)}
           {showLens && summary && <>
             <button
@@ -603,10 +654,10 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
                 type="button"
                 className="diff-review-diff-block-unfold"
                 aria-expanded={false}
-                aria-label={`Show the diff for ${hunk.location} in ${filePath} — ${handled}`}
+                aria-label={`Show the diff for ${hunk.location} in ${filePath} — ${foldLabel}`}
                 onClick={() => setUnfolded((open) => new Set(open).add(hunk.range))}
               >
-                <span>{handled} · {hunk.lines.length} {hunk.lines.length === 1 ? 'line' : 'lines'} hidden</span>
+                <span>{foldLabel} · {hunk.lines.length} {hunk.lines.length === 1 ? 'line' : 'lines'} hidden</span>
                 <span>Show diff</span>
               </button>
             : whitespaceOnly
@@ -625,7 +676,7 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
                   data-line-key={keyed ? line.key : undefined}
                   data-decision-id={keyed ? decisionId : undefined}
                 >
-                  <span>{(side === 'left' ? line?.oldLine : line?.newLine) ?? ''}</span>
+                  <span><LineNumber line={line} column={side === 'left' ? 'old' : 'new'} filePath={filePath} hunk={anchor} onCopyLink={onCopyLink} /></span>
                   <span>{line && <SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" />}</span>
                 </div>;
               })}
@@ -652,17 +703,17 @@ export const DiffReviewFileDiffPane = memo(function DiffReviewFileDiffPane({ fil
                     <span>{row.lines.length} {row.lines.length === 1 ? 'line' : 'lines'} removed</span>
                   </button>
                   {openRemovals.has(row.key) && row.lines.map((removed) => <div key={removed.key} className="diff-line final was-removed" data-line-key={removed.key} data-decision-id={decisionId}>
-                    <span>{removed.oldLine ?? ''}</span>
+                    <span><LineNumber line={removed} column="old" filePath={filePath} hunk={anchor} onCopyLink={onCopyLink} /></span>
                     <span><SyntaxHighlight code={removed.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
                   </div>)}
                 </div>
                 : <div key={row.line.key} className={`diff-line final ${row.line.kind}${row.line.key === searchHit ? ' search-hit' : ''}`} data-line-key={row.line.key} data-decision-id={decisionId}>
-                  <span>{row.line.newLine ?? ''}</span>
+                  <span><LineNumber line={row.line} column="new" filePath={filePath} hunk={anchor} onCopyLink={onCopyLink} /></span>
                   <span><SyntaxHighlight code={row.line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
                 </div>)
               : hunk.lines.map((line) => <div key={line.key} className={`diff-line ${line.kind}${line.key === searchHit ? ' search-hit' : ''}`} data-line-key={line.key} data-decision-id={decisionId}>
-                <span>{line.oldLine ?? ''}</span>
-                <span>{line.newLine ?? ''}</span>
+                <span><LineNumber line={line} column="old" filePath={filePath} hunk={anchor} onCopyLink={onCopyLink} /></span>
+                <span><LineNumber line={line} column="new" filePath={filePath} hunk={anchor} onCopyLink={onCopyLink} /></span>
                 <span><span className="diff-line-marker">{line.text.slice(0, 1) || ' '}</span><SyntaxHighlight code={line.text.slice(1) || ' '} language={language} className="diff-line-code" /></span>
               </div>)}
           </div>

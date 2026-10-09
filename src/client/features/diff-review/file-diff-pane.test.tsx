@@ -596,3 +596,71 @@ describe('diff display preferences', () => {
     expect(onToggleIgnoreWhitespace).toHaveBeenCalledOnce();
   });
 });
+
+describe('review file diff pane permalinks and folding', () => {
+  it('copies a link for a hunk, a file and a line from the controls that name them', () => {
+    const onCopyLink = vi.fn();
+    render(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId={hunks[0].decisionId} onSelect={() => {}} onCopyLink={onCopyLink} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link to src/example.ts' }));
+    expect(onCopyLink).toHaveBeenLastCalledWith({ filePath: 'src/example.ts', hunk: null, line: null });
+    fireEvent.click(screen.getByRole('button', { name: /^Copy link to Lines 1.4 in src\/example\.ts$/ }));
+    expect(onCopyLink).toHaveBeenLastCalledWith({ filePath: 'src/example.ts', hunk: '1,1', line: null });
+    // The added line is addressed by its new number, the deleted line by its old one.
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link to line 3' }));
+    expect(onCopyLink).toHaveBeenLastCalledWith({ filePath: 'src/example.ts', hunk: '1,1', line: { side: 'new', number: 3 } });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link to line 3 before the change' }));
+    expect(onCopyLink).toHaveBeenLastCalledWith({ filePath: 'src/example.ts', hunk: '1,1', line: { side: 'old', number: 3 } });
+  });
+
+  it('draws line numbers as plain text, and no link controls, when nothing can copy a link', () => {
+    render(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId={hunks[0].decisionId} onSelect={() => {}} />);
+    expect(screen.queryByRole('button', { name: /copy link/i })).not.toBeInTheDocument();
+  });
+
+  it('copies line links in split reading too, from the column that carries the address', () => {
+    stubPhoneWidth(false);
+    const onCopyLink = vi.fn();
+    render(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId={hunks[0].decisionId} readingMode="split" onSelect={() => {}} onCopyLink={onCopyLink} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link to line 3' }));
+    expect(onCopyLink).toHaveBeenLastCalledWith({ filePath: 'src/example.ts', hunk: '1,1', line: { side: 'new', number: 3 } });
+    expect(screen.getAllByRole('button', { name: /^Copy link to line 3 before the change$/ })).toHaveLength(1);
+  });
+
+  it('copies line links in final reading', () => {
+    const onCopyLink = vi.fn();
+    render(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId={hunks[0].decisionId} readingMode="final" onSelect={() => {}} onCopyLink={onCopyLink} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link to line 3' }));
+    expect(onCopyLink).toHaveBeenLastCalledWith({ filePath: 'src/example.ts', hunk: '1,1', line: { side: 'new', number: 3 } });
+  });
+
+  it('folds every unselected block when the file is collapsed, and opens one by hand', () => {
+    const { container, rerender } = render(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId="other-decision" collapsed onToggleCollapsed={() => {}} onSelect={() => {}} />);
+    expect(container.querySelector('.diff-line')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Show the diff for .* — Collapsed/ }));
+    expect(container.querySelector('.diff-line')).not.toBeNull();
+    // Collapsing again starts over, so the block opened by hand folds with the rest.
+    rerender(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId="other-decision" collapsed={false} onToggleCollapsed={() => {}} onSelect={() => {}} />);
+    rerender(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId="other-decision" collapsed onToggleCollapsed={() => {}} onSelect={() => {}} />);
+    expect(container.querySelector('.diff-line')).toBeNull();
+  });
+
+  it('never folds the selected change, even in a collapsed file', () => {
+    const { container } = render(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId={hunks[0].decisionId} collapsed onSelect={() => {}} />);
+    expect(container.querySelector('.diff-line')).not.toBeNull();
+  });
+
+  it('offers per-file and all-files fold controls only when they are wired', () => {
+    const onToggleCollapsed = vi.fn();
+    const onCollapseAll = vi.fn();
+    const onExpandAll = vi.fn();
+    const { rerender } = render(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId="x" onSelect={() => {}} />);
+    expect(screen.queryByRole('button', { name: /collapse|expand/i })).not.toBeInTheDocument();
+    rerender(<DiffReviewFileDiffPane filePath="src/example.ts" editorUrl={null} hunks={hunks} decisions={[decision(null)]} activeDecisionId="x" onSelect={() => {}} onToggleCollapsed={onToggleCollapsed} onCollapseAll={onCollapseAll} onExpandAll={onExpandAll} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse hunks' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+    expect(onCollapseAll).toHaveBeenCalledTimes(1);
+    expect(onExpandAll).toHaveBeenCalledTimes(1);
+  });
+});

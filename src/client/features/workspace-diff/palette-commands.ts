@@ -18,6 +18,10 @@ interface ReviewPaletteInput {
   onSelect: (decisionId: string) => void;
   onMarkReviewed: () => void;
   onToggleReadingMode: () => void;
+  onCollapseAll?: () => void;
+  onExpandAll?: () => void;
+  /** Copies a link to the file being read. */
+  onCopyLink?: () => void;
 }
 
 /**
@@ -26,7 +30,7 @@ interface ReviewPaletteInput {
  * already expose. Both go through the same selection path as the Changes
  * controls, so the palette cannot disagree with them.
  */
-export function reviewPaletteCommands({ files, decisions, activeId, activeFilePath, canMarkReviewed, onSelect, onMarkReviewed, onToggleReadingMode }: ReviewPaletteInput): PaletteCommand[] {
+export function reviewPaletteCommands({ files, decisions, activeId, activeFilePath, canMarkReviewed, onSelect, onMarkReviewed, onToggleReadingMode, onCollapseAll, onExpandAll, onCopyLink }: ReviewPaletteInput): PaletteCommand[] {
   const filePaths = files.map((file) => file.path);
   const fileCommands = files.flatMap((file): PaletteCommand[] => {
     const decisionId = decisionIdForFile(decisions, file.path);
@@ -52,6 +56,9 @@ export function reviewPaletteCommands({ files, decisions, activeId, activeFilePa
     ...(previousFile ? [{ id: 'review:previous-file', group: 'Review' as const, label: 'Previous changed file', shortcut: '[', run: stepTo(previousFile) }] : []),
     ...(canMarkReviewed ? [{ id: 'review:mark-reviewed', group: 'Review' as const, label: 'Mark current decision reviewed', shortcut: 'R', run: onMarkReviewed }] : []),
     { id: 'review:reading-mode', group: 'Review', label: 'Change diff reading mode', keywords: 'split unified final whole file', shortcut: 'D', run: onToggleReadingMode },
+    ...(onCollapseAll ? [{ id: 'review:collapse-all', group: 'Review' as const, label: 'Collapse all hunks', keywords: 'fold files', run: onCollapseAll }] : []),
+    ...(onExpandAll ? [{ id: 'review:expand-all', group: 'Review' as const, label: 'Expand all hunks', keywords: 'unfold files', run: onExpandAll }] : []),
+    ...(onCopyLink ? [{ id: 'review:copy-link', group: 'Review' as const, label: 'Copy link to this file', keywords: 'permalink share url', run: onCopyLink }] : []),
   ];
   return [...actions, ...fileCommands];
 }

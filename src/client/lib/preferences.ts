@@ -321,12 +321,20 @@ export type ReviewStackDiffPreferences = {
   readingMode: ReviewStackReadingMode | null;
   wrapLongLines: boolean;
   ignoreWhitespace: boolean;
+  /** Files whose hunks the reviewer folded to their headers. A path in here
+   * stays folded across reloads; a hunk can still be opened by hand. */
+  collapsedFiles: string[];
 };
+
+/** A changeset can name thousands of files; the remembered list is bounded so
+ * one huge diff cannot grow a localStorage entry without limit. */
+const MAX_COLLAPSED_FILES = 2000;
 
 const DEFAULT_REVIEW_STACK_DIFF_PREFERENCES: ReviewStackDiffPreferences = {
   readingMode: null,
   wrapLongLines: false,
   ignoreWhitespace: false,
+  collapsedFiles: [],
 };
 
 function isReviewStackReadingMode(value: unknown): value is ReviewStackReadingMode {
@@ -344,6 +352,9 @@ export function readReviewStackDiffPreferences(): ReviewStackDiffPreferences {
       readingMode: isReviewStackReadingMode(value.readingMode) ? value.readingMode : null,
       wrapLongLines: value.wrapLongLines === true,
       ignoreWhitespace: value.ignoreWhitespace === true,
+      collapsedFiles: Array.isArray(value.collapsedFiles)
+        ? value.collapsedFiles.filter((path): path is string => typeof path === 'string' && path !== '').slice(0, MAX_COLLAPSED_FILES)
+        : [],
     };
   } catch {
     return DEFAULT_REVIEW_STACK_DIFF_PREFERENCES;
@@ -352,7 +363,7 @@ export function readReviewStackDiffPreferences(): ReviewStackDiffPreferences {
 
 export function writeReviewStackDiffPreferences(preferences: ReviewStackDiffPreferences): void {
   try {
-    window.localStorage.setItem(reviewStackDiffPreferencesStorageKey, JSON.stringify(preferences));
+    window.localStorage.setItem(reviewStackDiffPreferencesStorageKey, JSON.stringify({ ...preferences, collapsedFiles: preferences.collapsedFiles.slice(0, MAX_COLLAPSED_FILES) }));
   } catch {
     // The choices still apply until the page is reloaded.
   }

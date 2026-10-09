@@ -2542,9 +2542,23 @@ button.diff-line.final.removed:not(.is-open) > span:last-child::after { content:
 .diff-split-cell.empty { background: #181816; }
 .diff-review-split-note { margin: 0; padding: 4px 10px; font-size: 11px; }
 .diff-line.search-hit, .diff-split-cell.search-hit { outline: 1px solid var(--acid); outline-offset: -1px; box-shadow: inset 3px 0 0 var(--acid); }
+/* Permalinks and folding. The hunk link sits beside its header rather than in
+ * it, because the header is itself a button and buttons do not nest. */
+.diff-review-diff-block-headline { display: flex; align-items: stretch; border-top: 1px solid #242421; }
+.diff-review-diff-block:first-child .diff-review-diff-block-headline { border-top: 0; }
+.diff-review-diff-block-headline .diff-review-diff-block-header { flex: 1 1 auto; min-width: 0; width: auto; border-top: 0; }
+.diff-review-diff-block-link { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; min-width: 32px; padding: 0 8px; color: #85847d; border: 0; background: #1b1b18; cursor: pointer; }
+.diff-review-diff-block-link:hover, .diff-review-diff-block-link:focus-visible { color: var(--acid); background: #262620; outline: 0; }
+.diff-review-fold-toggle, .diff-review-link-button { display: inline-flex; align-items: center; gap: 5px; }
+.diff-line-permalink { width: 100%; padding: 0; color: inherit; border: 0; background: none; font: inherit; text-align: right; cursor: pointer; }
+.diff-line-permalink:hover, .diff-line-permalink:focus-visible { color: var(--acid); text-decoration: underline; outline: 0; }
+button.review-full-file-number.diff-line-permalink { width: auto; }
+.review-full-file-row.linked { outline: 1px solid var(--acid); outline-offset: -1px; box-shadow: inset 3px 0 0 var(--acid); }
 @media (max-width: 720px) {
   .diff-review-file-diff > header { flex-wrap: wrap; }
   .diff-review-display-toggle { min-height: 44px; padding: 0 12px; }
+  .diff-review-fold-toggle, .diff-review-link-button { min-width: 44px; }
+  .diff-review-diff-block-link { min-width: 44px; min-height: 44px; }
   .diff-review-search-toggle { min-height: 44px; padding: 0 14px; }
   .diff-review-search-bar { flex-wrap: wrap; }
   .diff-review-search-bar input { flex-basis: 100%; min-height: 44px; font-size: 16px; }
