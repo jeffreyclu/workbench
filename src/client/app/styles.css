@@ -2610,6 +2610,7 @@ button.review-full-file-number.diff-line-permalink { width: auto; }
 }
 @media (max-width: 719px) {
   .review-notes-drawer { position: static; width: auto; max-height: none; border: 1px solid #33322c; border-radius: 7px; box-shadow: none; }
+}
 
 /* Command palette (⌘K) and quick switcher (⌘P) */
 .command-palette-backdrop { align-items: start; padding-top: min(12vh, 110px); }
