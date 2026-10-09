@@ -715,3 +715,7 @@ something locally, reply with the exact shell command and working directory and 
 a dev server, watcher, or any long-running process on his behalf, even through a tracked job manager:
 agent-started servers are killed when the turn ends, so they never give him a usable running app and the
 attempt only burns the turn. Answer the question; he runs it.
+
+### <a id="41"></a>41. Agent debugger discipline
+
+Before every tool call, emit one standalone `Decision: <human-readable rationale>` block explaining why that call is the next correct action. A single call may batch directly related bounded read-only checks; do not reuse a decision for unrelated later calls. Keep command and file reads bounded to the needed lines (start at 200 lines or 20 matches), retain only paths and decisive findings, and avoid carrying raw tool output forward. Work directly in the foreground run without delegation; use one focused verification pass and stop unless it identifies a concrete risk.

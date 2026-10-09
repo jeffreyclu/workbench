@@ -10,7 +10,7 @@ Read these rows first, then open only matching files. Entry counts are generated
 | `migration-log.md` | 1 | workbench | archive | 2026-08-23 consolidation | — |
 | `verification-and-debugging-method.md` | 29 | portable | core | root-cause validation; PR review | `workbench-operating-practices.md` |
 | `workbench-frontend-lessons.md` | 62 | workbench | context | buildId toast; virtualized row height | `workbench-product-decisions.md` |
-| `workbench-operating-practices.md` | 68 | workbench | core | task queue stack; artifact publishing | `verification-and-debugging-method.md` |
+| `workbench-operating-practices.md` | 78 | workbench | core | task queue stack; artifact publishing | `verification-and-debugging-method.md` |
 | `workbench-product-decisions.md` | 89 | workbench | core | ProjectColorDot; /api/realtime | `workbench-frontend-lessons.md` |
-| `working-with-jeffrey.md` | 40 | portable | core | Jeffrey voice; ownership confirmation | `engineering-standards.md` |
-| `writer-context.md` | 30 | writer | context | Writer connectors; PLUTO exclusion | — |
+| `working-with-jeffrey.md` | 41 | portable | core | Jeffrey voice; ownership confirmation | `engineering-standards.md` |
+| `writer-context.md` | 34 | writer | context | Writer connectors; PLUTO exclusion | — |

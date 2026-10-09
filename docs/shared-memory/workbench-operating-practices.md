@@ -825,3 +825,63 @@ Session hosts are detached and outlive a runtime promotion, so a resumed run mus
 Observed 2026-10-08: integrate commit 1f7afb0 (run 25921002) was titled "1 conflicting file(s) left in the run worktree". The review dispatch listed src/server/shared-room.test.ts as changed, but the commit did not contain it, so the ticket's required chat-linked promotion test never landed on main. Rule: when reviewing an integrated run, compare the dispatch's changed-files list with `git show --stat <commit>`. Report any file that was left behind as a delivery gap, not as reviewed code.
 
 *Provenance: 3b3fb87f-e84b-4775-9e97-bb22d53e6c53*
+
+### <a id="69"></a>69. "No streaming in session mode" was a misread: check message provenance before assuming a transport bug
+
+Task 523b55a0 (2026-10-09). Replies with zero agent_stream_events were not dropped session events. The claude examples were tool-less 1-second turns (text deltas did land in events.jsonl within ~1s). The codex examples had no agent_runs row and no agent_sessions row: they are terminal-synced messages written by terminal-session-sync.ts, whose body ends "_N tool calls in the terminal session._" and which post only at completion. Session streaming itself works: createSessionTurnReader -> sink.onEvents/onProgress -> addLiveAgentStreamEvents/updateLiveSharedBody, in both shared-room.ts and the agent-runner.ts task-run branch. Verified live (41 events and a growing body mid-turn) and on a throwaway preview server (scripts/preview-api.ts with DATABASE_PATH, PORT and WORKBENCH_AGENT_SESSIONS_DIR set; poll GET /api/shared/messages?conversationId=... and /api/shared/conversations/:id/agent-events). Check agent_runs/agent_sessions for the message before debugging transport. A second session turn on files already read in that session emits no tool events. Separately, the test 'falls back to a per-run process when the session turn cannot run' in shared-room.test.ts is order/timing-sensitive: the host respawn delay races endSharedSession, so it counted 2 spawns instead of 3 after an earlier session test ran. Keep new session tests after it. Real gap left: terminal-synced replies do not stream.
+
+*Provenance: 523b55a0-53d0-4e7a-b419-d3f1ce143246*
+
+### <a id="70"></a>70. Validate routed isolated worktrees before code changes
+
+A work-item route can name an isolated worktree that has already been removed. Before editing, verify the exact path and `git worktree list`; if it is absent, do not fall back to the main checkout, especially when it has unrelated changes.
+
+*Provenance: 100fb3b7-c231-4a61-ad95-6f972c9e3809*
+
+### <a id="71"></a>71. Resume decisions read the session host's turn log, not its busy state
+
+A host's idle state cannot tell "turn never sent" from "turn finished while no runtime was reading", so resuming on busy state re-sends finished turns (double side effects). Decide from events.jsonl via resolveSessionTurnFromLog (agent-session.ts): finished -> adopt the logged result, active -> reattach, unsent -> the only case that sends. Apply it only to runs resumed after a promotion (waitingReason runtime-promoted); a deliberate retry of the same message id must still send, because turn ids are messageId#attempt and the in-memory attempt counter resets on restart. The fixed 15 s resume delay was replaced by awaitHostSocket (poll the host socket up to 10 s) because the retiring scheduler is already stopped before interruptOwnedWork runs. Separately: an assigned run worktree directory can vanish mid-run; recreate it with git worktree add at the same path rather than editing a primary checkout.
+
+*Provenance: 45ad34dc-5850-4569-b121-7bbc7ec3a8bd*
+
+### <a id="72"></a>72. Tmux attachment must own a session output window
+
+`session:attach` must not select the agent host's ancestor pane: that pane can be the Workbench server and shows logs. When invoked inside tmux, it should open or select a conversation-named window whose command clears `TMUX` and reruns `session:attach`, preserving the normal events.jsonl tail renderer.
+
+*Provenance: 100fb3b7-c231-4a61-ad95-6f972c9e3809*
+
+### <a id="73"></a>73. Terminal transcript sync preserves live reply identity
+
+Terminal transcript import must create one running assistant message at the first reasoning or tool record, append redacted `agent_stream_events` to that message, and replace its body when the final assistant message arrives. The existing byte-offset import ledger is the idempotency boundary across restarts. `WORKBENCH_CLAUDE_PROJECTS_ROOT` and `WORKBENCH_CODEX_SESSIONS_ROOT` make isolated runtime validation possible.
+
+*Provenance: 0bb9bbfc-20e2-4129-9043-75eb924dfd19*
+
+### <a id="74"></a>74. Terminal hook events bind to replies by prompt
+
+Claude terminal hooks can be delivered out of order because PostToolUse is a detached hand-off. Bind each reply to `(provider, session_id, prompt_id)` in `terminal_hook_replies`; keep the completed reply binding for ten minutes after Stop so late tool events append to the correct completed reply. Do not resolve tool activity solely through the current running reply. A tool hook received before UserPromptSubmit creates the pending reply binding.
+
+*Provenance: b6dc6186-5f5c-400c-ae8b-ed027435d3cd*
+
+### <a id="75"></a>75. A new link table must fall back to the old lookup for rows made before the upgrade
+
+Review of 6e2eedf (2026-10-09). Migration 099 added terminal_hook_replies, which links (provider, session_id, prompt_id) to a reply, and hookReplyForPrompt replaced activeHookReply. A turn already running during the deploy has a pending reply but no link row, so its Stop creates a second reply and the first stays "working…". When a new link table replaces a "latest running row" lookup, keep the old lookup as the fallback when no link row exists. Related point: hook-created messages sort by created_at, so a reply created by an early tool hook shows above the prompt that arrives after it.
+
+*Provenance: b6dc6186-5f5c-400c-ae8b-ed027435d3cd*
+
+### <a id="76"></a>76. Run-worktree janitor must check terminal run state and age
+
+Observed 2026-10-09 while investigating deleted queued and active run worktrees. A newly-created detached run worktree is clean at a commit already reachable from the source branch, so Git-only cleanup misclassifies it as integrated. `cleanupIntegratedRunWorktrees` must resolve the directory name to the exact agent-run row and only remove terminal (`completed`, `failed`, or `canceled`) runs whose `completedAt` is older than the retention window. Both scheduler and promotion cleanup must supply this lookup. Integration must resolve `git` from the stable server executable PATH before spawning it: Node can report `spawn git ENOENT` when its inherited PATH is restricted even if the child env carries a usable PATH.
+
+*Provenance: 86203257-6bd9-4078-9d52-20a1b3e7874b*
+
+### <a id="77"></a>77. Session turn log: any logged turn is started; hand-appended events need a dead host
+
+The session host writes turn_started on submit, before any provider event. So "logged turn never falls back to per-run" also blocks fallback when the provider exits right after submit or the provider session expires early. Three older tests asserted that fallback and had to be rewritten to expect a failed run. last_event_offset is now saved only at turn boundaries (submitTurn saves the start, awaitTurn saves the terminal offset), so boot recovery scans from the latest turn. Testing tip: to fake a logged turn with no provider event, kill the host first and then append turn_started/turn_terminal lines to events.jsonl; appending under a live host hung awaitTurn for 30s because its in-memory event offset was stale.
+
+*Provenance: 79ac5752-6c8b-4b81-95fa-9eb4253281d3*
+
+### <a id="78"></a>78. "spawn git ENOENT" can mean the working directory is missing, not git
+
+Node's child_process raises ENOENT with the message "spawn <cmd> ENOENT" when the `cwd` directory does not exist, as well as when the executable is not on PATH. In run 06455dde, integration reported "spawn git ENOENT" because the run worktree had been deleted. Commit 75fcb95 resolves git via the server PATH but does not check that the worktree exists, so a missing worktree would still report "spawn /usr/bin/git ENOENT". Before blaming PATH, check existsSync(cwd). Integration should return a plain "run worktree missing" outcome before it spawns git.
+
+*Provenance: 86203257-6bd9-4078-9d52-20a1b3e7874b*

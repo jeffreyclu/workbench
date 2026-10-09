@@ -223,6 +223,8 @@ Adversarial review of 318a26d (2026-10-08). replyInSharedRoom recomputes dispatc
 
 *Provenance: 1671c6cc-6ab7-4bf6-8911-29d418dfb44c*
 
-### <a id="15"></a>15. Interactive Claude sessions can have no transcript while `claude -p` does (2026-10-09)
+### <a id="15"></a>15. Terminal tool hook retries share the existing two-slot hook ledger
 
-Jeffrey's interactive Claude Code 2.1.295 session in `/Users/jeffrey.lu/dev/workbench` had a child-session environment variable but wrote no transcript under `~/.claude/projects`, including after prompts on 2026-10-09. A `claude -p` probe does write a transcript. The reason for that difference is open; do not rely on transcript tailing for interactive partial output. The terminal hook bridge is the active delivery path for prompts, tool activity, and final replies.
+Claude PreToolUse and PostToolUse expose one tool_use_id. The terminal hook bridge can make each phase idempotent without a schema change by storing the start and result markers in the existing terminal_hook_events prompt and stop slots for that tool_use_id; their message_id is the pending assistant reply that owns the stream events.
+
+*Provenance: fd407d24-b44a-4494-bc98-824303ceab02*
