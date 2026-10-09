@@ -557,6 +557,63 @@ export function findTurnStart(key: AgentSessionKey, turnId: string | null, fromO
   return null;
 }
 
+/** What the host's events.jsonl says about one turn of a run being resumed. */
+export type SessionTurnLogState =
+  | { kind: 'finished'; turnId: string; startOffset: number; terminal: AgentSessionEvent }
+  | { kind: 'active'; turnId: string; startOffset: number }
+  | { kind: 'unsent' };
+
+/**
+ * The one decision a resumed run makes: read the log for its latest turn
+ * (`matches` selects which turn ids belong to it), never the host's busy flag,
+ * which is idle for a turn that finished while no runtime was reading.
+ * finished: adopt the logged result, send nothing. active: reattach.
+ * unsent: no event at all for the turn, the only case that sends it.
+ */
+export function resolveSessionTurnFromLog(key: AgentSessionKey, matches: (turnId: string) => boolean, fromOffset: number): SessionTurnLogState {
+  for (const origin of fromOffset > 0 ? [fromOffset, 0] : [0]) {
+    let started: AgentSessionEvent | null = null;
+    const terminals = new Map<string, AgentSessionEvent>();
+    let offset = origin;
+    for (;;) {
+      const batch = readSessionEventsFromFile(key, offset);
+      for (const event of batch.events) {
+        if (event.source !== 'host' || !event.turnId || !matches(event.turnId)) continue;
+        if (event.type === 'turn_started') started = event;
+        else if (event.type === 'turn_terminal') terminals.set(event.turnId, event);
+      }
+      if (batch.nextOffset <= offset) break;
+      offset = batch.nextOffset;
+    }
+    if (!started?.turnId) continue;
+    const terminal = terminals.get(started.turnId);
+    return terminal
+      ? { kind: 'finished', turnId: started.turnId, startOffset: started.offset, terminal }
+      : { kind: 'active', turnId: started.turnId, startOffset: started.offset };
+  }
+  return { kind: 'unsent' };
+}
+
+/**
+ * Waits for a session's host socket to answer, polling for at most `timeoutMs`.
+ * Resolves false for a host that is gone or never answers; a resume must not
+ * ask ensureSession to judge a host that is merely still starting to listen.
+ */
+export async function awaitHostSocket(key: AgentSessionKey, timeoutMs = 10_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const status = readAgentSessionStatus(key);
+    if (!status || status.state === 'stopped' || !processAlive(status.hostPid)) return false;
+    try {
+      await hostRequest<AgentSessionStatus>(status.socketPath, { type: 'status' }, 1_000);
+      return true;
+    } catch {
+      if (Date.now() >= deadline) return false;
+      await new Promise((wait) => setTimeout(wait, 100));
+    }
+  }
+}
+
 /** Read-only view of the session log for the terminal panel and attach script: never touches the host. */
 export function readSessionEventsFromFile(key: AgentSessionKey, offset: number): { events: AgentSessionEvent[]; nextOffset: number } {
   return readEventsFromFile(pathsFor(key).eventsPath, offset);

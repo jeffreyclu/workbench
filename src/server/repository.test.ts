@@ -378,14 +378,14 @@ describe('WorkItemRepository', () => {
     expect(repository.getRun(run.id)?.waitingReason).toBeNull();
   });
 
-  it('delays the resume so the retiring runtime cannot re-claim the run', () => {
+  it('makes an interrupted run resumable at once, without a fixed delay', () => {
     const item = repository.create({ title: 'Delay resume', description: '', priority: 1, status: 'ready', projectName: null, workspacePath: null, dueDate: null });
     const run = repository.createRun(item.id, 'execute', 'claude', 'claude', 'Implement it.');
     repository.claimRun(run.id, 'runtime-a', 60_000);
 
     repository.interruptOwnedWork('runtime-a', 'Runtime promoted.', { workspaceMissing: () => false });
 
-    expect(repository.dueWork().runIds).not.toContain(run.id);
+    expect(repository.dueWork().runIds).toContain(run.id);
   });
 
   it('fails an interrupted run with runtime_promoted when its worktree is gone', () => {

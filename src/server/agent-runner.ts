@@ -2175,7 +2175,8 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
   repository.updateRun(run.id, { startedAt });
   repository.update(item.id, { status: 'in_progress' }, false, { actor: 'system', source: 'agent_runner' });
   repository.moveForAttention(item.id, 'bottom', `${run.agent} started ${run.kind}.`);
-  repository.addActivity(item.id, run.agent, 'progress', run.waitingReason === RUNTIME_PROMOTED_WAITING_REASON
+  const resumedAfterPromotion = run.waitingReason === RUNTIME_PROMOTED_WAITING_REASON;
+  repository.addActivity(item.id, run.agent, 'progress', resumedAfterPromotion
     ? `Resumed ${run.kind} after the runtime promotion in the same worktree.`
     : `Started ${run.kind}.`);
   // The request that kicked off this run already returned (executeAgentRun
@@ -2385,7 +2386,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     const room = run.conversationId && run.agent !== 'palmyra' ? await import('./shared-room.js') : null;
     const sessionAgent = run.agent === 'claude' || run.agent === 'codex' ? run.agent : null;
     let taskSession = Boolean(room && sessionAgent && room.usesTaskRunSession(sessionAgent, run.kind, room.isFanOutReply(repository, run.messageId)));
-    const taskSessionTurn = async (message: string, options: { fresh?: boolean; followUp?: boolean } = {}): Promise<AgentCommandResult> => {
+    const taskSessionTurn = async (message: string, options: { fresh?: boolean; followUp?: boolean; resume?: boolean } = {}): Promise<AgentCommandResult> => {
       if (!room || !sessionAgent || !run.conversationId) throw new Error('A task session turn needs a conversation and a CLI agent.');
       const turn = await room.runSharedSessionTurn({
         repository,
@@ -2401,6 +2402,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
         authorization: externalAuthorization,
         signal: controller.signal,
         fresh: options.fresh,
+        resume: options.resume,
         onRefusal: onExternalActionRefusal,
         sink: {
           onProgress: (partial) => {
@@ -2427,7 +2429,9 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
       observedRunEvents.push(...room.observedEventsFromSessionLog({ conversationId: run.conversationId, agent: sessionAgent }, sessionAgent, turn.startOffset, turn.endOffset));
       // The provider session and PID repeating across runs is the observable proof that no process was spawned.
       repository.addAgentRunDiagnostic(run.id, run.messageId ?? null, sessionAgent, 'usage', { providerSessionId: turn.sessionId, providerPid: turn.pid, sessionHostPid: turn.hostPid, sessionReused: turn.reused, sessionTurnId: turn.turnId, sessionReattached: turn.reattached });
-      if (turn.reattached) repository.addActivity(item.id, run.agent, 'progress', `Reattached to the ${run.kind} turn still running on its session after the runtime promotion; no new turn was sent.`);
+      if (turn.reattached) repository.addActivity(item.id, run.agent, 'progress', turn.finishedBeforeResume
+        ? `The ${run.kind} turn finished on its session during the runtime promotion; its result was read from the session log and no new turn was sent.`
+        : `Reattached to the ${run.kind} turn still running on its session after the runtime promotion; no new turn was sent.`);
       if (!options.followUp) {
         const sessionStartup = !turn.reused;
         if (promptSize.sessionStartup !== sessionStartup || promptSize.sessionMode !== 'persistent') {
@@ -2455,7 +2459,7 @@ export async function executeAgentRun(repository: WorkItemRepository, run: Agent
     let sessionTurnResult: (AgentCommandResult & { agent: CliAgent; fallbackFrom: null; fallbackReason: null }) | null = null;
     if (taskSession && room && sessionAgent && run.conversationId) {
       try {
-        const turn = await taskSessionTurn(taskSessionMessage(), { fresh: run.agent === 'claude' && Boolean(storedClaudeSessionId && !resumeSessionId) });
+        const turn = await taskSessionTurn(taskSessionMessage(), { fresh: run.agent === 'claude' && Boolean(storedClaudeSessionId && !resumeSessionId), resume: resumedAfterPromotion });
         sessionTurnResult = { ...turn, agent: run.agent as CliAgent, fallbackFrom: null, fallbackReason: null };
       } catch (sessionError) {
         if (controller.signal.aborted || !room.canFallBackToPerRun(sessionError)) throw sessionError;

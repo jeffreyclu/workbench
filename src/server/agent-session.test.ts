@@ -11,6 +11,7 @@ import {
   interrupt,
   readAgentSessionStatus,
   reattachAll,
+  resolveSessionTurnFromLog,
   sendTurn,
   submitTurn,
   type AgentSessionEvent,
@@ -227,6 +228,24 @@ describe('agent session host', () => {
     expect(new Set(delivered.map((event) => event.offset)).size).toBe(delivered.length);
     expect(delivered.at(-1)).toMatchObject({ type: 'turn_terminal', status: 'completed' });
     expect(row('conversation-c').last_event_offset).toBe(result.nextOffset);
+  }, 30_000);
+
+  it('reads a turn as finished, active, or unsent from the log rather than from the host busy state', async () => {
+    const handle = await session('conversation-log');
+    const key = { conversationId: 'conversation-log', agent: 'claude' as const };
+    const ours = (turnId: string) => turnId.startsWith('mine#');
+    expect(resolveSessionTurnFromLog(key, ours, 0)).toEqual({ kind: 'unsent' });
+
+    // Finished while nobody was reading: the host is idle, the log still has the terminal.
+    const done = await sendTurn(database, handle, { prompt: 'one', turnId: 'mine#1' });
+    expect(readAgentSessionStatus(key)?.state).toBe('idle');
+    expect(resolveSessionTurnFromLog(key, ours, done.nextOffset)).toMatchObject({ kind: 'finished', turnId: 'mine#1', terminal: { type: 'turn_terminal', status: 'completed' } });
+    expect(resolveSessionTurnFromLog(key, (turnId) => turnId === 'other#1', 0)).toEqual({ kind: 'unsent' });
+
+    const accepted = await submitTurn(database, handle, { prompt: 'slow two', turnId: 'mine#2' });
+    expect(resolveSessionTurnFromLog(key, ours, 0)).toEqual({ kind: 'active', turnId: 'mine#2', startOffset: accepted.startOffset });
+    await awaitTurn(database, handle, { fromOffset: accepted.startOffset, turnId: 'mine#2' });
+    expect(resolveSessionTurnFromLog(key, ours, 0)).toMatchObject({ kind: 'finished', turnId: 'mine#2' });
   }, 30_000);
 
   it('respawns a crashed CLI with --resume and keeps serving turns', async () => {

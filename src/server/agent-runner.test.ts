@@ -1969,6 +1969,54 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     expect(readAgentSessionStatus({ conversationId: conversation.id, agent: 'claude' })?.state).not.toBe('stopped');
   }, 30_000);
 
+  const turnLifecycle = (conversationId: string) => readFileSync(join(root, 'agent-sessions', conversationId, 'claude', 'events.jsonl'), 'utf8').split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line) as { source?: string; type?: string; turnId?: string })
+    .filter((event) => event.source === 'host' && (event.type === 'turn_started' || event.type === 'turn_terminal' || event.type === 'turn_rejected'))
+    .map((event) => `${event.type}:${event.turnId}`);
+
+  it('completes a run from the host log when its turn finished while the runtime was down, sending nothing again', async () => {
+    const conversation = repository.createConversation('Task');
+    const directory = workspace('tree-a');
+    const task = repository.create({ title: 'Finish during promotion', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Implement the change.', conversation.id);
+    repository.claimRun(run.id, 'previous-runtime', 60_000);
+    const session = await ensureSession(database, { conversationId: conversation.id, agent: 'claude', cwd: directory });
+    await submitTurn(database, session, { prompt: 'Implement the change.', turnId: `${run.id}#1` });
+    // The turn completes before any runtime reads it: the host is idle when the resume starts.
+    const deadline = Date.now() + 10_000;
+    while (!turnLifecycle(conversation.id).includes(`turn_terminal:${run.id}#1`)) {
+      if (Date.now() > deadline) throw new Error('The turn never finished.');
+      await new Promise((wait) => setTimeout(wait, 25));
+    }
+    expect(readAgentSessionStatus({ conversationId: conversation.id, agent: 'claude' })?.state).toBe('idle');
+    repository.interruptOwnedWork('previous-runtime', 'Runtime promoted.', { workspaceMissing: () => false });
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'queued', waitingReason: 'runtime promoted; resuming' });
+
+    await executeAgentRun(repository, repository.getRun(run.id)!, 'next-runtime', 60_000);
+
+    const finished = repository.getRun(run.id)!;
+    expect(finished).toMatchObject({ status: 'completed' });
+    expect(finished.output).toContain(`Finished in ${spawns()[0].pid}`);
+    expect(spawns()).toHaveLength(1);
+    expect(turnLifecycle(conversation.id)).toEqual([`turn_started:${run.id}#1`, `turn_terminal:${run.id}#1`]);
+    expect(repository.listActivity(task.id).some((entry) => entry.body.includes('finished on its session during the runtime promotion'))).toBe(true);
+  }, 30_000);
+
+  it('sends the turn once when a resumed run has no event in the host log', async () => {
+    const conversation = repository.createConversation('Task');
+    const directory = workspace('tree-a');
+    const task = repository.create({ title: 'Never sent', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: directory, dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Implement the change.', conversation.id);
+    repository.claimRun(run.id, 'previous-runtime', 60_000);
+    await ensureSession(database, { conversationId: conversation.id, agent: 'claude', cwd: directory });
+    repository.interruptOwnedWork('previous-runtime', 'Runtime promoted.', { workspaceMissing: () => false });
+
+    await executeAgentRun(repository, repository.getRun(run.id)!, 'next-runtime', 60_000);
+
+    expect(repository.getRun(run.id)).toMatchObject({ status: 'completed' });
+    expect(turnLifecycle(conversation.id)).toEqual([`turn_started:${run.id}#1`, `turn_terminal:${run.id}#1`]);
+  }, 30_000);
+
   it('keeps review runs, runs without a conversation, and other kinds off the shared session', () => {
     expect(usesTaskRunSession('claude', 'execute')).toBe(true);
     expect(usesTaskRunSession('codex', 'bugfix')).toBe(true);

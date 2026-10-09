@@ -193,8 +193,9 @@ export class ExecutionService {
    *
    * A per-run process (no linked chat message) is not a failure: it is
    * re-queued as "runtime promoted; resuming" and the next runtime's scheduler
-   * starts a fresh attempt in the same run worktree. The restart is delayed
-   * past this process's exit so the retiring scheduler cannot re-claim it.
+   * starts a fresh attempt in the same run worktree. The retiring scheduler is
+   * already stopped, so the run is resumable at once: the resume reads the
+   * session host's turn log and waits for its socket instead of a fixed delay.
    * Only a run whose isolated worktree is gone fails, with an explicit kind.
    *
    * A reply whose session turn is still running on its detached host
@@ -212,7 +213,7 @@ export class ExecutionService {
     const hasLiveSessionTurn = options.hasLiveSessionTurn ?? (() => false);
     return this.unitOfWork.transaction(() => {
       const now = new Date().toISOString();
-      const resumeAt = new Date(Date.now() + (options.resumeDelayMs ?? 15_000)).toISOString();
+      const resumeAt = new Date(Date.now() + (options.resumeDelayMs ?? 0)).toISOString();
       const runs = this.database.prepare(`SELECT id, message_id, resolved_workspace FROM agent_runs WHERE status = 'running' AND owner_id = ?`)
         .all(ownerId) as Array<{ id: string; message_id: string | null; resolved_workspace: string | null }>;
       const runningMessageIds = (this.database.prepare(`SELECT id FROM shared_messages
