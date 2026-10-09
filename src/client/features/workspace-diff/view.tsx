@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { ClipboardCheck, ExternalLink, FileDiff, FolderSearch, GitBranch, GitCommitHorizontal, GitPullRequest, History, RefreshCw, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ModalDialog } from '../../components/dialogs/modal-dialog.js';
@@ -54,6 +54,65 @@ interface ReviewSourceDiff {
 }
 
 type ReviewSourceKind = 'workspace' | 'history' | 'pull-request' | 'repository' | 'branch';
+
+type ReviewSourceToolbarProps = {
+  activeSource: ReviewSourceKind;
+  hasSnapshots: boolean;
+  onSelectWorkspace: () => void;
+  onSelectHistory: () => void;
+  onSelectBranch: () => void;
+  onSelectRepository: () => void;
+  onSelectPullRequest: () => void;
+};
+
+/** The toolbar moves focus without changing the selected review source. */
+function ReviewSourceToolbar({ activeSource, hasSnapshots, onSelectWorkspace, onSelectHistory, onSelectBranch, onSelectRepository, onSelectPullRequest }: ReviewSourceToolbarProps) {
+  const [focusedSource, setFocusedSource] = useState<ReviewSourceKind>(activeSource);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const sources: Array<{ source: ReviewSourceKind; label: string; disabled?: boolean; onSelect: () => void; icon: ReactNode }> = [
+    { source: 'workspace', label: 'Workspace', onSelect: onSelectWorkspace, icon: <FileDiff size={13} /> },
+    { source: 'history', label: 'History', disabled: !hasSnapshots, onSelect: onSelectHistory, icon: <History size={13} /> },
+    { source: 'branch', label: 'Branch', onSelect: onSelectBranch, icon: <GitBranch size={13} /> },
+    { source: 'repository', label: 'Repository', onSelect: onSelectRepository, icon: <GitCommitHorizontal size={13} /> },
+    { source: 'pull-request', label: 'GitHub PR', onSelect: onSelectPullRequest, icon: <GitPullRequest size={13} /> },
+  ];
+
+  useEffect(() => setFocusedSource(activeSource), [activeSource]);
+
+  const moveFocus = (source: ReviewSourceKind, key: string) => {
+    const enabledSources = sources.filter((entry) => !entry.disabled);
+    const currentIndex = enabledSources.findIndex((entry) => entry.source === source);
+    let nextIndex = currentIndex;
+    if (key === 'ArrowRight' || key === 'ArrowDown') nextIndex = (currentIndex + 1) % enabledSources.length;
+    else if (key === 'ArrowLeft' || key === 'ArrowUp') nextIndex = (currentIndex - 1 + enabledSources.length) % enabledSources.length;
+    else if (key === 'Home') nextIndex = 0;
+    else if (key === 'End') nextIndex = enabledSources.length - 1;
+    else return;
+
+    const nextSource = enabledSources[nextIndex].source;
+    setFocusedSource(nextSource);
+    toolbarRef.current?.querySelector<HTMLButtonElement>(`[data-review-source="${nextSource}"]`)?.focus();
+  };
+
+  return <div ref={toolbarRef} className="workspace-review-source" role="toolbar" aria-label="Review source">
+    {sources.map(({ source, label, disabled, onSelect, icon }) => <button
+      key={source}
+      type="button"
+      data-review-source={source}
+      aria-pressed={activeSource === source}
+      tabIndex={focusedSource === source && !disabled ? 0 : -1}
+      disabled={disabled}
+      onFocus={() => setFocusedSource(source)}
+      onKeyDown={(event) => {
+        const handled = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key);
+        if (!handled) return;
+        event.preventDefault();
+        moveFocus(source, event.key);
+      }}
+      onClick={onSelect}
+    >{icon}{label}</button>)}
+  </div>;
+}
 
 /** One tooltip for the one key that cycles all three readings, so the button
  * never claims a two-way toggle. */
@@ -802,13 +861,15 @@ export const WorkspaceDiffView = memo(function WorkspaceDiffView({ scope, isRunn
           </nav>
         : <p className="muted">This conversation produced no changes.</p>}
       {isSourceBrowserOpen && <div className="workspace-diff-source-browser" aria-label="Other changes">
-        <div className="workspace-review-source" role="group" aria-label="Review source">
-          <button type="button" aria-pressed={reviewSource === 'workspace'} onClick={selectWorkspaceSource}><FileDiff size={13} />Workspace</button>
-          <button type="button" aria-pressed={reviewSource === 'history'} onClick={selectHistorySource} disabled={snapshots.length === 0}><History size={13} />History</button>
-          <button type="button" aria-pressed={isBranchSource} onClick={selectBranchSource}><GitBranch size={13} />Branch</button>
-          <button type="button" aria-pressed={isRepositorySource} onClick={selectRepositorySource}><GitCommitHorizontal size={13} />Repository</button>
-          <button type="button" aria-pressed={reviewSource === 'pull-request'} onClick={() => { setReviewSource('pull-request'); setSelectedPullRequestUrl((current) => current ?? availablePullRequests[0] ?? null); }}><GitPullRequest size={13} />GitHub PR</button>
-        </div>
+        <ReviewSourceToolbar
+          activeSource={reviewSource}
+          hasSnapshots={snapshots.length > 0}
+          onSelectWorkspace={selectWorkspaceSource}
+          onSelectHistory={selectHistorySource}
+          onSelectBranch={selectBranchSource}
+          onSelectRepository={selectRepositorySource}
+          onSelectPullRequest={() => { setReviewSource('pull-request'); setSelectedPullRequestUrl((current) => current ?? availablePullRequests[0] ?? null); }}
+        />
         {(conversationId || workItemId) && workspaces.length > 0 && <WorkspaceContextSwitcher selectedPath={explorer.data?.selectedPath ?? null} options={workspaces} onSelect={selectWorkspaceContext} label="All repositories" ariaLabel="All repositories" />}
         {isBranchSource && <label className="workspace-repository-commit"><GitBranch size={13} /><span className="visually-hidden">Branch</span><select value={selectedBranchName} onChange={(event) => { setSelectedBranchName(event.target.value); setSelectedDecisionId(null); }} disabled={refsQuery.isPending || branches.length === 0}><option value="" disabled>{refsQuery.isPending ? 'Reading branches' : 'Select a branch'}</option>{branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}{branch.ahead ? ` · ${branch.ahead} commit${branch.ahead === 1 ? '' : 's'}` : ''}</option>)}</select></label>}
         {isRepositorySource && <label className="workspace-repository-commit"><GitCommitHorizontal size={13} /><span className="visually-hidden">Commit</span><select value={selectedCommitSha} onChange={(event) => { setSelectedCommitSha(event.target.value); setSelectedDecisionId(null); }} disabled={commitsQuery.isPending || commits.length === 0}><option value="" disabled>{commitsQuery.isPending ? 'Reading repository' : 'Select a commit'}</option>{commits.map((commit) => <option key={commit.sha} value={commit.sha}>{commit.shortSha} · {commit.title}</option>)}</select></label>}

@@ -108,14 +108,51 @@ describe('WorkspaceDiffView decision queue', () => {
     const changeSets = screen.getByRole('navigation', { name: 'Conversation change sets' });
     expect(within(changeSets).getByRole('button', { name: 'frontend-feature · current · 1 file' })).toHaveAttribute('aria-current', 'true');
     expect(within(changeSets).getByRole('button', { name: 'backend-feature · saved · 1 file' })).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'Review source' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('toolbar', { name: 'Review source' })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/workspace-diff/ref/commits'))).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'Browse other changes' }));
-    expect(screen.getByRole('group', { name: 'Review source' })).toBeInTheDocument();
+    expect(screen.getByRole('toolbar', { name: 'Review source' })).toBeInTheDocument();
     const allRepositories = screen.getByLabelText('All repositories');
     expect(within(allRepositories).getAllByRole('option')).toHaveLength(9);
     expect(within(allRepositories).getByRole('option', { name: 'unrelated-5' })).toBeInTheDocument();
+  });
+
+  it('uses a roving Tab stop to navigate review sources without changing the active source', async () => {
+    const file: WorkspaceDiffFile = { path: 'src/local.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, isBinary: false, patch: '@@ -1 +1 @@ localChange\n-before\n+after' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/workspaces')) return json({ selectedPath: '/tmp/workbench', workspaces: [{ path: '/tmp/workbench', label: 'workbench' }] });
+      if (url.endsWith('/workspace-diff/snapshots')) return json({ snapshots: [] });
+      if (url.endsWith('/workspace-diff')) return json({ diff: workspaceDiff([file]) });
+      if (url.includes('/workspace-diff/hunk-reviews?')) return json({ reviews: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView(fetchMock);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse other changes' }));
+    const toolbar = screen.getByRole('toolbar', { name: 'Review source' });
+    const workspace = within(toolbar).getByRole('button', { name: 'Workspace' });
+    const history = within(toolbar).getByRole('button', { name: 'History' });
+    const branch = within(toolbar).getByRole('button', { name: 'Branch' });
+    const pullRequest = within(toolbar).getByRole('button', { name: 'GitHub PR' });
+
+    expect(workspace).toHaveAttribute('tabindex', '0');
+    expect(history).toBeDisabled();
+    expect(within(toolbar).getAllByRole('button').filter((button) => button.tabIndex === 0)).toHaveLength(1);
+
+    workspace.focus();
+    fireEvent.keyDown(workspace, { key: 'ArrowRight' });
+    expect(branch).toHaveFocus();
+    expect(workspace).toHaveAttribute('aria-pressed', 'true');
+    expect(branch).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.keyDown(branch, { key: 'End' });
+    expect(pullRequest).toHaveFocus();
+    fireEvent.keyDown(pullRequest, { key: 'ArrowRight' });
+    expect(workspace).toHaveFocus();
+    fireEvent.keyDown(workspace, { key: 'Home' });
+    expect(workspace).toHaveFocus();
   });
 
   it('reports the full diff size as files, additions and deletions', async () => {
