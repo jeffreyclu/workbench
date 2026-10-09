@@ -6,10 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ArtifactLibraryView } from './view';
 import { versionUrl } from './artifact-url';
 import { getToasts, toast } from '../../state/toast-store';
+import { requestBlob } from '../../data/request';
+
+vi.mock('../../data/request', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../data/request')>()), requestBlob: vi.fn() }));
 
 const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, 'execCommand');
 
 afterEach(() => {
+  vi.mocked(requestBlob).mockReset();
   cleanup();
   toast.clear();
   vi.unstubAllGlobals();
@@ -225,5 +229,60 @@ describe('artifact library requests', () => {
     const favorites = within(tablist).getByRole('tab', { name: /favorites/i });
     fireEvent.click(favorites);
     await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts?view=favorites')).toBe(true));
+  });
+
+  describe('inline preview', () => {
+    function previewable(sourcePath: string, content: BlobPart, type: string) {
+      // jsdom's Blob has no text(); real browsers do.
+      const blob = new Blob([content], { type });
+      Object.defineProperty(blob, 'text', { value: async () => String(content) });
+      vi.mocked(requestBlob).mockResolvedValue(blob);
+      stubApi({ artifacts: [{ ...artifact, sourcePath }] });
+    }
+
+    it('renders markdown inline and keeps the external link', async () => {
+      previewable('/notes/rollout.md', '# Rollout plan\n\nShip it.', 'text/markdown');
+      renderLibrary();
+      fireEvent.click(await screen.findByRole('button', { name: /^preview$/i }));
+      expect(await screen.findByRole('heading', { name: 'Rollout plan' })).toBeTruthy();
+      expect(vi.mocked(requestBlob).mock.calls[0]![0]).toContain('/api/artifacts/raw?path=%2Fnotes%2Frollout.md');
+      expect(screen.getAllByRole('link', { name: /open/i }).some((link) => link.getAttribute('href') === artifact.url)).toBe(true);
+    });
+
+    it('renders JSON and code as monospace text', async () => {
+      previewable('/notes/data.json', '{"a": 1}', 'application/json');
+      renderLibrary();
+      fireEvent.click(await screen.findByRole('button', { name: /^preview$/i }));
+      const text = await screen.findByText('{"a": 1}');
+      expect(text.tagName).toBe('PRE');
+    });
+
+    it('renders images', async () => {
+      vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:preview', revokeObjectURL: () => undefined }));
+      previewable('/notes/shot.png', 'png', 'image/png');
+      renderLibrary();
+      fireEvent.click(await screen.findByRole('button', { name: /^preview$/i }));
+      expect(await screen.findByRole('img', { name: 'Connector rollout' })).toHaveProperty('src', 'blob:preview');
+    });
+
+    it('falls back to opening externally for unsupported types', async () => {
+      previewable('/notes/report.pdf', 'x', 'application/pdf');
+      renderLibrary();
+      fireEvent.click(await screen.findByRole('button', { name: /^preview$/i }));
+      const pane = screen.getByRole('complementary', { name: /preview of connector rollout/i });
+      expect(within(pane).getByText(/isn't available/i)).toBeTruthy();
+      expect(within(pane).getByRole('link', { name: /open externally/i })).toHaveProperty('href', artifact.url);
+      expect(requestBlob).not.toHaveBeenCalled();
+    });
+
+    it('offers the external link when the source cannot be loaded, and closes', async () => {
+      vi.mocked(requestBlob).mockRejectedValue(new Error('gone'));
+      stubApi();
+      renderLibrary();
+      fireEvent.click(await screen.findByRole('button', { name: /^preview$/i }));
+      expect(await screen.findByRole('link', { name: /open externally/i })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: /close preview/i }));
+      expect(screen.queryByRole('complementary')).toBeNull();
+    });
   });
 });

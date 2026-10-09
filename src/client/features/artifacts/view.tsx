@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUpRight, Ban, Check, Copy, FileText, History, LoaderCircle, MessageSquare, RefreshCw, Star } from 'lucide-react';
+import { ArrowUpRight, Ban, Check, Copy, Eye, FileText, History, LoaderCircle, MessageSquare, RefreshCw, Star } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../data/api';
 import { versionUrl } from './artifact-url';
+import { ArtifactPreviewPane } from './preview-pane';
 import { copyText } from '../../lib/clipboard';
 import { ConfirmationDialog } from '../../components/dialogs/confirmation-dialog';
 import { toast, toastError } from '../../state/toast-store';
@@ -136,8 +137,10 @@ function ArtifactDetailPanel({ artifact }: { artifact: ArtifactSummary }) {
   );
 }
 
-function ArtifactCard({ artifact, onOpenTask, onOpenConversation }: {
+function ArtifactCard({ artifact, previewing, onTogglePreview, onOpenTask, onOpenConversation }: {
   artifact: ArtifactSummary;
+  previewing: boolean;
+  onTogglePreview: () => void;
   onOpenTask: (taskId: string) => void;
   onOpenConversation: (conversationId: string) => void;
 }) {
@@ -165,7 +168,7 @@ function ArtifactCard({ artifact, onOpenTask, onOpenConversation }: {
     onError: (error) => toastError('Could not update favorite.', error),
   });
   return (
-    <article className={`artifact-card ${artifact.revokedAt ? 'revoked' : ''}`}>
+    <article className={`artifact-card ${artifact.revokedAt ? 'revoked' : ''} ${previewing ? 'previewing' : ''}`}>
       <header>
         <FileText size={14} />
         <h3>{artifact.title}</h3>
@@ -192,6 +195,7 @@ function ArtifactCard({ artifact, onOpenTask, onOpenConversation }: {
         {artifact.conversationId && <button className="relationship-item" onClick={() => onOpenConversation(artifact.conversationId!)}><span>{artifact.conversationTitle ?? 'Linked conversation'}</span></button>}
       </div>
       <div className="artifact-actions">
+        <button className="button secondary compact" aria-pressed={previewing} onClick={onTogglePreview}><Eye size={13} /> {previewing ? 'Hide preview' : 'Preview'}</button>
         {!artifact.revokedAt && <a className="button secondary compact" href={artifact.url} target="_blank" rel="noreferrer"><ArrowUpRight size={13} /> Open</a>}
         {!artifact.revokedAt && <CopyLink url={artifact.url} />}
         <button className="button secondary compact" disabled={republish.isPending} onClick={() => republish.mutate()}>
@@ -221,6 +225,8 @@ export function ArtifactLibraryView({ onOpenTask, onOpenConversation }: {
   const [view, setView] = useState<LibraryView>('published');
   const library = useQuery({ queryKey: ['artifacts', view], queryFn: () => api.listArtifacts(view) });
   const counts = library.data?.counts;
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const previewArtifact = library.data?.artifacts.find((entry) => entry.id === previewId) ?? null;
 
   return (
     <section className="artifact-workspace">
@@ -237,6 +243,7 @@ export function ArtifactLibraryView({ onOpenTask, onOpenConversation }: {
         { value: 'revoked', label: <>Revoked <span>{counts?.revoked ?? '…'}</span></> },
         { value: 'all', label: 'All' },
       ]}>
+      <div className={`artifact-layout ${previewArtifact ? 'with-preview' : ''}`}>
       <div className="artifact-list">
         {library.isLoading && <ArtifactCardSkeleton count={6} />}
         {library.isError && <div className="list-state error-message">Could not load the artifact library. <button className="button secondary compact" onClick={() => library.refetch()}>Retry</button></div>}
@@ -248,8 +255,10 @@ export function ArtifactLibraryView({ onOpenTask, onOpenConversation }: {
           </div>
         )}
         {library.data?.artifacts.map((artifact) => (
-          <ArtifactCard key={artifact.id} artifact={artifact} onOpenTask={onOpenTask} onOpenConversation={onOpenConversation} />
+          <ArtifactCard key={artifact.id} artifact={artifact} previewing={artifact.id === previewId} onTogglePreview={() => setPreviewId((current) => current === artifact.id ? null : artifact.id)} onOpenTask={onOpenTask} onOpenConversation={onOpenConversation} />
         ))}
+      </div>
+      {previewArtifact && <ArtifactPreviewPane artifact={previewArtifact} onClose={() => setPreviewId(null)} />}
       </div>
       </Tabs>
     </section>
