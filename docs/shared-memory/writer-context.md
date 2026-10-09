@@ -1,5 +1,7 @@
 tier: writer
-## <a id="15"></a>15. Writer context
+## <a id="15"></a>15. REMOVED -> discard-log.md 2026-10-09
+
+Full text: [discard-log.md#11]
 
 ### <a id="1"></a>1. Never run a full test suite locally in a Writer repository **(always)**
 

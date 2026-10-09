@@ -1,5 +1,7 @@
 tier: portable
-## <a id="25"></a>25. Working with Jeffrey
+## <a id="25"></a>25. REMOVED -> discard-log.md 2026-10-09
+
+Full text: [discard-log.md#10]
 
 ### <a id="1"></a>1. Background and preferences (self-reported, from a separate Claude surface's memory export)
 

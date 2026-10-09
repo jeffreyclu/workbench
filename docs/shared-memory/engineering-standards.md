@@ -1,5 +1,7 @@
 tier: workbench
-## <a id="22"></a>22. Engineering standards
+## <a id="22"></a>22. REMOVED -> discard-log.md 2026-10-09
+
+Full text: [discard-log.md#1]
 
 ### <a id="1"></a>1. Loading states must be skeletons, not spinners or late-arriving content
 

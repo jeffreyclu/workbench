@@ -1,5 +1,7 @@
 tier: workbench
-## <a id="62"></a>62. Workbench frontend lessons
+## <a id="62"></a>62. REMOVED -> discard-log.md 2026-10-09
+
+Full text: [discard-log.md#6]
 
 ### <a id="1"></a>1. Conversation freshness stays off the review toggle
 
@@ -472,7 +474,9 @@ Keep the old success-sentence fallback only for legacy records that predate the
 promotion dispatch target. A failed task-completion request must leave the
 prompt visible with an inline retry path.
 
-## <a id="35"></a>35. Stale responsive overrides survive UI convention changes — check media queries when a "fixed" style regresses
+## <a id="35"></a>35. REMOVED -> discard-log.md 2026-10-09
+
+Full text: [discard-log.md#7]
 
 ### <a id="36"></a>36. Mobile-only controls must be hidden in the base stylesheet
 
@@ -963,3 +967,15 @@ In src/client tests, `request()` is routed through the test adapter in src/clien
 Confirmed 2026-10-09. The source selector under Changes → Browse other changes is a WAI-ARIA toolbar, not a tablist: it retains one roving Tab stop, skips disabled History, and Arrow keys plus Home/End move focus without changing the current review source. Selection remains a click/activation action handled by `WorkspaceDiffView`; keep this distinction when adding a source.
 
 *Provenance: 8a6544e4-b19e-4410-a17d-a30f49ac8029*
+
+### <a id="72"></a>72. Review ledger verdicts and fix requests leave different traces on the client
+
+In the Changes view, an agent review ledger is not delivered to the client as a ledger: the harness stores each verdict as an ordinary decision state (blocking = needs_changes, non-blocking = commented) with a note starting AGENT_REVIEW_NOTE_PREFIX ('Agent review', src/shared/review-harness.ts). Derive "latest ledger verdicts" from decisions by that note prefix instead of wiring run.reviewLenses into WorkspaceDiffView. A Fix handoff (fixRequestPrompt via onFixRequest) records no verdict, so "fix requests sent" can only be a session-local count in the view. The notes drawer test calls getByRole('status') within the drawer, so any panel added inside it must not use role="status".
+
+*Provenance: bff0a085-c260-4146-be4e-b0c7ba775df5*
+
+### <a id="73"></a>73. Adding a file list to Changes duplicates filename text; tests that findByText a path break
+
+Any new element in the Changes view that prints a file path or a "N of M reviewed" string will collide with existing getByText/findByText assertions in workspace-diff/view.test.tsx (queue progress text, diff pane headers). Scope those lookups to the diff pane with findByLabelText('Full diff for <path>') instead of text. Also: the keyboard-help overlay's Changes section is rendered from workspace-diff/shortcuts.ts (CHANGES_SHORTCUTS); add new Changes bindings there, and shortcuts.test.tsx fails if a listed bare key stops being handled by use-keyboard-navigation. App.test.tsx "opens a linked GitHub pull-request diff" already fails on baseline cfe9c94 (Copy-link buttons), so don't attribute it to new work.
+
+*Provenance: c6f5691e-47de-4296-b0d2-4987bbd057fc*

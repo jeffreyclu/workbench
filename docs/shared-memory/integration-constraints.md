@@ -1,5 +1,7 @@
 tier: workbench
-## <a id="8"></a>8. Integration constraints
+## <a id="8"></a>8. REMOVED -> discard-log.md 2026-10-09
+
+Full text: [discard-log.md#4]
 
 ### <a id="1"></a>1. One integration mechanism no tunnels
 

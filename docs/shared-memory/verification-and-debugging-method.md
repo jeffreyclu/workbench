@@ -1,5 +1,7 @@
 tier: portable
-## <a id="20"></a>20. Verification and debugging method
+## <a id="20"></a>20. REMOVED -> discard-log.md 2026-10-09
+
+Full text: [discard-log.md#5]
 
 ### <a id="1"></a>1. Status questions never resume older work **(always)**
 

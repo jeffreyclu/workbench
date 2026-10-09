@@ -1,5 +1,7 @@
 tier: workbench
-## <a id="33"></a>33. Workbench operating practices
+## <a id="33"></a>33. REMOVED -> discard-log.md 2026-10-09
+
+Full text: [discard-log.md#8]
 
 ### <a id="1"></a>1. Code changes always use worktrees under ~/dev **(always)**
 
@@ -931,3 +933,27 @@ Under Node 26, jsdom client tests that use window.localStorage (preferences.test
 Automatic review dispatch and the independent failure-mode lens use Codex. If a legacy or manual Claude review receives a provider safeguard refusal, retry that review once on Codex, show only the neutral system status in the shared conversation, and retain the provider diagnostic on the run for inspection.
 
 *Provenance: ec2649e9-e644-4176-aa29-c468cb89c509*
+
+### <a id="87"></a>87. Node 26 shadows jsdom localStorage in client tests
+
+On Node 26 the built-in `localStorage` global shadows jsdom's and is undefined without a backing file. Client tests that call `window.localStorage.clear()` (e.g. workspace-diff/view.test.tsx, search.test.tsx) fail identically on main: 37 failures in view.test.tsx before any change. Do not read these as regressions; compare against the primary checkout first. New client tests that need storage should install an in-memory Storage with Object.defineProperty(window, 'localStorage', ...), as review-notes/notes-view.test.tsx does. Production storage code should wrap access in try/catch so missing storage degrades instead of throwing.
+
+*Provenance: 6c765bae-435c-42d4-bce7-2f87ca18a986*
+
+### <a id="88"></a>88. Diff permalinks address lines by side and number, in the URL fragment
+
+Diff-pane permalinks (src/client/features/diff-review/permalink.ts) ride in the URL fragment (`#diff=<file>&hunk=<oldStart,newStart>&line=n42|o17`), not in the query or pathname, so the router (which reads only pathname) is untouched. A line is named by file line number and side (n = new, o = old, deletions only), never by the pane's `hunkRange:index` row key, because that key indexes one rendering of one patch. The link does not carry the review source (workspace/PR/branch), so it resolves against the opener's default source. Folding state lives in the shared diff preference store (`collapsedFiles` in workbench:review-stack-reading-mode); the selected change is never folded. Toasts need a mounted Toaster, so tests assert via getToasts() from state/toast-store.
+
+*Provenance: ac59b84f-2a08-4419-94a2-05ece4636c75*
+
+### <a id="89"></a>89. Review decision queue can list uncommitted docs, not the commit's code
+
+The automatic review for the permalink commit (cfe9c94) built its Review Director queue (D2, D8, D10) only from uncommitted docs/shared-memory edits sitting in the shared primary checkout. None of the 13 committed client files appeared as decisions. Reviewers should still read the commit's code for task fulfilment (git show --stat <commit>) and treat the docs hunks as a separate, unrelated memory cleanup to commit apart from the ticket. Review-source quirk, not a code defect.
+
+*Provenance: ac59b84f-2a08-4419-94a2-05ece4636c75*
+
+### <a id="90"></a>90. Style-test invariants read the LAST media block; server tests fail inside worktrees
+
+styles.test.ts reads `styles.slice(styles.lastIndexOf('@media (max-width: 640px)'))`, so any new 640px block appended after the dialog rules silently breaks the phone-dialog invariant; new 640px rules must go in the last block or the dialog rules must stay in it. The diff-line invariant is wrap ON by default (`white-space: pre-wrap`); the wrap toggle must switch to no-wrap via `:not(.wrap-lines)`, with `wrapLongLines` defaulting to true. Query cache policy test forbids staleTime/gcTime/refetch* overrides in src/client; key new queries under existing invalidated roots (`work-items`, `shared-conversations`) instead. Six server tests (app.test.ts dedup guard x4, work-item-router, workspace-diff push) fail when run inside a ~/dev/.workbench-worktrees checkout or sandbox (git push permission denied, repo path resolves to tmp); treat as environmental, not regressions, unless they also fail on a clean primary checkout.
+
+*Provenance: 2c2e0988-6efa-436e-91d8-f88f8102cdc3*
