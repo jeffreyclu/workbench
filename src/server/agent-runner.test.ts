@@ -1875,6 +1875,61 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     expect(second.promptSize!.totalChars).toBeLessThan(first.promptSize!.totalChars);
   }, 30_000);
 
+  it('writes tool rows and growing partial text to the linked reply while a task run turn is still running', async () => {
+    const streaming = join(root, 'streaming-claude.mjs');
+    writeFileSync(streaming, `
+import { writeSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+if (!process.argv.includes('--input-format')) { console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '{}' })); process.exit(0); }
+const emit = (event) => writeSync(1, JSON.stringify({ ...event, session_id: 'streaming-session' }) + '\\n');
+const delta = (text) => emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
+const tool = (id, path) => emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: path } }] } });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+createInterface({ input: process.stdin }).on('line', async (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') { emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } }); return; }
+  emit({ type: 'stream_event', event: { type: 'message_start' } });
+  emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
+  tool('one', '/tmp/one.txt');
+  await sleep(350);
+  delta('First ');
+  await sleep(350);
+  tool('two', '/tmp/two.txt');
+  await sleep(350);
+  delta('second ');
+  await sleep(350);
+  delta('third.');
+  await sleep(350);
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'First second third.' }] } });
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'First second third.' });
+});
+`);
+    const fakeDirectory = sharedFakeAgentDirectory('exit 1', `exec "${process.execPath}" "${streaming}" "$@"`).directory;
+    temporaryDirectories.push(fakeDirectory);
+    process.env.CLAUDE_BIN = join(fakeDirectory, 'claude');
+    const conversation = repository.createConversation('Task');
+    const request = repository.createSharedMessage('jeffrey', 'read two files', 'completed', conversation.id, [], 'claude');
+    const reply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude', null, null, request.id);
+    const task = repository.create({ title: 'Stream it', description: '', priority: 1, status: 'ready', projectName: 'Workbench', workspacePath: workspace('tree-stream'), dueDate: null });
+    const run = repository.createRun(task.id, 'execute', 'claude', 'claude', 'Read two files.', conversation.id, reply.id);
+    const midTurn: Array<{ body: string; tools: number }> = [];
+    const sample = setInterval(() => {
+      const current = repository.getSharedMessageById(reply.id)!;
+      if (repository.getRun(run.id)?.status === 'running') midTurn.push({ body: current.body, tools: repository.listAgentStreamEvents(conversation.id).filter((event) => event.messageId === reply.id && (event.kind === 'tool' || event.kind === 'file_read')).length });
+    }, 50);
+    try {
+      await executeAgentRun(repository, run, 'test-owner', 60_000);
+    } finally {
+      clearInterval(sample);
+    }
+    const finished = repository.getRun(run.id)!;
+    expect(finished.status).toBe('completed');
+    expect(midTurn.some((sampled) => sampled.tools === 2 && sampled.body.length > 0)).toBe(true);
+    expect(midTurn.some((sampled) => sampled.tools >= 1 && !sampled.body.includes('First'))).toBe(true);
+    const partials = new Set(midTurn.map((sampled) => sampled.body).filter((body) => body && body !== finished.output));
+    expect(partials.size).toBeGreaterThanOrEqual(2);
+  }, 60_000);
+
   it('respawns with --resume when the next run uses a different worktree', async () => {
     const conversation = repository.createConversation('Task');
     await runIn(conversation.id, workspace('tree-a'), 'Implement the first change.');

@@ -1995,6 +1995,81 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       else process.env.WORKBENCH_PERSISTENT_SESSIONS = saved;
     }
   }, 30_000);
+
+  describe('live streaming', () => {
+    let streamingDirectory: string;
+    let savedSessions: string | undefined;
+    beforeEach(() => {
+      const streaming = join(root, 'streaming-claude.mjs');
+      // One turn emits a tool call, a text delta, a second tool call, two more
+      // deltas, then the result, each 350 ms apart, so the provider is
+      // observably mid-turn between events.
+      writeFileSync(streaming, `
+import { writeSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+if (!process.argv.includes('--input-format')) { console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '{}' })); process.exit(0); }
+const args = process.argv.slice(2);
+const flag = (name) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
+const sessionId = flag('--session-id') ?? flag('--resume');
+const emit = (event) => writeSync(1, JSON.stringify({ ...event, session_id: sessionId }) + '\\n');
+const delta = (text) => emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
+const tool = (id, path) => emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: path } }] } });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+createInterface({ input: process.stdin }).on('line', async (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') { emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } }); return; }
+  emit({ type: 'stream_event', event: { type: 'message_start' } });
+  emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
+  tool('one', '/tmp/one.txt');
+  await sleep(350);
+  delta('First ');
+  await sleep(350);
+  tool('two', '/tmp/two.txt');
+  await sleep(350);
+  delta('second ');
+  await sleep(350);
+  delta('third.');
+  await sleep(350);
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'First second third.' }] } });
+  emit({ type: 'result', subtype: 'success', is_error: false, result: 'First second third.' });
+});
+`);
+      streamingDirectory = fakeAgentDirectory('exit 1', `exec "${process.execPath}" "${streaming}" "$@"`).directory;
+      process.env.CLAUDE_BIN = join(streamingDirectory, 'claude');
+      savedSessions = process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+    });
+    afterEach(() => {
+      rmSync(streamingDirectory, { recursive: true, force: true });
+      if (savedSessions === undefined) delete process.env.WORKBENCH_PERSISTENT_SESSIONS;
+      else process.env.WORKBENCH_PERSISTENT_SESSIONS = savedSessions;
+    });
+
+    it('writes tool rows and growing partial text to the reply while the session turn is still running', async () => {
+      const conversation = repository.createConversation('Room');
+      repository.createSharedMessage('jeffrey', 'please read two files', 'completed', conversation.id, [], 'claude');
+      const reply = repository.createSharedMessage('claude', '', 'running', conversation.id, [], 'claude');
+      const midTurn: Array<{ body: string; tools: number }> = [];
+      const sample = setInterval(() => {
+        const current = repository.getSharedMessageById(reply.id)!;
+        if (current.status === 'running') midTurn.push({ body: current.body, tools: repository.listAgentStreamEvents(conversation.id).filter((event) => event.messageId === reply.id && (event.kind === 'tool' || event.kind === 'file_read')).length });
+      }, 50);
+      try {
+        await replyInSharedRoom(repository, 'claude', reply.id);
+      } finally {
+        clearInterval(sample);
+      }
+      const finished = repository.getSharedMessageById(reply.id)!;
+      expect(finished.status).toBe('completed');
+      expect(finished.body).toContain('First second third.');
+      // Both tool calls were stored before the turn completed, the first before any text.
+      expect(midTurn.some((sampled) => sampled.tools === 2 && sampled.body.length > 0)).toBe(true);
+      expect(midTurn.some((sampled) => sampled.tools >= 1 && !sampled.body.includes('First'))).toBe(true);
+      // The body took at least two distinct partial values before it was final.
+      const partials = new Set(midTurn.map((sampled) => sampled.body).filter((body) => body && body !== finished.body));
+      expect(partials.size).toBeGreaterThanOrEqual(2);
+    }, 60_000);
+  });
 });
 
 describe('dispatchingMessageForSharedReply', () => {
